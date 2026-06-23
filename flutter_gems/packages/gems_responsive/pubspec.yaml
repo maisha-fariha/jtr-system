@@ -1,0 +1,26 @@
+name: gems_responsive
+description: A professional responsive helper class for Flutter apps. Provides consistent sizing across devices with smart tablet support using flutter_screenutil.
+version: 0.1.0
+homepage: https://github.com/md-adnan-ullah/flutter_gems
+
+author: Md. Adnan Ullah <saadnanullah@gmail.com>
+repository: https://github.com/md-adnan-ullah/flutter_gems
+
+environment:
+  sdk: ^3.0.0
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_screenutil: ^5.9.0
+  get: ^4.6.6
+  get_it: ^7.7.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # No assets or fonts needed for this package

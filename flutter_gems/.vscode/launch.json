@@ -1,0 +1,65 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "flutter_gems",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "flutter_gems (profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "flutter_gems (release mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "gems_data_layer",
+            "cwd": "packages\\gems_data_layer",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "gems_data_layer (profile mode)",
+            "cwd": "packages\\gems_data_layer",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "gems_data_layer (release mode)",
+            "cwd": "packages\\gems_data_layer",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "gems_responsive",
+            "cwd": "packages\\gems_responsive",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "gems_responsive (profile mode)",
+            "cwd": "packages\\gems_responsive",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "gems_responsive (release mode)",
+            "cwd": "packages\\gems_responsive",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}

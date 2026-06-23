@@ -1,0 +1,49 @@
+name: gems_data_layer
+description: Minimal & essential data layer for Flutter - REST API, CRUD, Auth, GetX, Cache, and offline sync. Quick to integrate, easy to extend.
+version: 0.1.0
+homepage: https://github.com/md-adnan-ullah/flutter_gems
+
+author: Md. Adnan Ullah <saadnanullah@gmail.com>
+repository: https://github.com/md-adnan-ullah/flutter_gems
+
+environment:
+  sdk: ^3.0.0
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # State Management
+  get: ^4.6.6
+  
+  # Dependency Injection
+  get_it: ^7.7.0
+  
+  # HTTP & Networking
+  http: ^1.2.0
+  dio: ^5.4.0
+  
+  # Connectivity
+  connectivity_plus: ^5.0.2
+  
+  # Storage & Cache
+  shared_preferences: ^2.2.2
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  
+  # Code Generation
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.8.1
+  
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.7
+  freezed: ^2.4.7
+  json_serializable: ^6.7.1
+  hive_generator: ^2.0.1
+
+flutter:

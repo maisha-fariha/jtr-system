@@ -1,0 +1,39 @@
+name: gems_core
+description: Core utilities for Flutter apps - Result types, error handling, environment configuration, and input validation.
+version: 0.1.0
+homepage: https://github.com/md-adnan-ullah/flutter_gems
+repository: https://github.com/md-adnan-ullah/flutter_gems
+publish_to: 'none'
+
+environment:
+  sdk: ^3.0.0
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Dependency Injection
+  get_it: ^7.7.0
+  
+  # Functional Programming (Result types)
+  dartz: ^0.10.1
+  
+  # Package Info
+  package_info_plus: ^5.0.1
+  
+  # State Management (for controller mixin)
+  get: ^4.6.6
+  
+  # Data Layer (for BaseListController)
+  gems_data_layer:
+    path: ../gems_data_layer
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # No assets or fonts needed for this package
+

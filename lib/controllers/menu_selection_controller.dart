@@ -174,6 +174,11 @@ class MenuSelectionController extends GetxController {
         menus.indexWhere((menu) => menu.number == result.menu.number);
   }
 
+  /// Returns to the preset-menu list without leaving this screen.
+  void dismissActiveSelection() {
+    activeSelection.value = null;
+  }
+
   void finalizeActiveSelection() {
     final selection = activeSelection.value;
     if (selection == null) return;

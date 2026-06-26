@@ -27,7 +27,17 @@ class MenuPage extends GetView<OrderMenuController> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (controller.returnToSelection) {
+          AppNavigation.backToMenuSelection();
+        } else {
+          Get.back();
+        }
+      },
+      child: Scaffold(
       backgroundColor: AppTheme.connectBackground,
       body: SafeArea(
         child: Column(
@@ -60,6 +70,7 @@ class MenuPage extends GetView<OrderMenuController> {
         ),
       ),
       floatingActionButton: const _ConfirmFab(),
+      ),
     );
   }
 }
@@ -104,7 +115,13 @@ class _MenuIconButton extends GetView<OrderMenuController> {
           clipBehavior: Clip.none,
           children: [
             IconButton(
-              onPressed: () => Get.back(),
+              onPressed: () {
+                if (controller.returnToSelection) {
+                  AppNavigation.backToMenuSelection();
+                } else {
+                  Get.back();
+                }
+              },
               padding: EdgeInsets.zero,
               icon: Icon(
                 Icons.menu,
@@ -449,7 +466,7 @@ class _ConfirmFab extends GetView<OrderMenuController> {
 
 // ─── Bottom Nav (Figma: y=820, h=64, 3 buttons) ───────────────────────────────
 
-class _MenuBottomNav extends StatelessWidget {
+class _MenuBottomNav extends GetView<OrderMenuController> {
   const _MenuBottomNav();
 
   @override
@@ -470,7 +487,13 @@ class _MenuBottomNav extends StatelessWidget {
               icon: Icon(Icons.home, color: AppTheme.primary, size: 28),
             ),
             IconButton(
-              onPressed: () => Get.back(),
+              onPressed: () {
+                if (controller.returnToSelection) {
+                  AppNavigation.backToMenuSelection();
+                } else {
+                  Get.back();
+                }
+              },
               icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
             ),
             IconButton(

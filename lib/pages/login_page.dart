@@ -122,7 +122,7 @@ class LoginPage extends GetView<LoginController> {
       width: double.infinity,
       height: 56,
       child: ElevatedButton(
-        onPressed: () => Get.toNamed(AppRoutes.session),
+        onPressed: () => Get.offNamed(AppRoutes.session),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.primary,
           foregroundColor: Colors.white,

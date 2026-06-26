@@ -192,7 +192,7 @@ class ConnectPage extends GetView<ConnectController> {
       width: double.infinity,
       height: 56,
       child: ElevatedButton(
-        onPressed: isEnabled ? () => Get.toNamed(AppRoutes.login) : null,
+        onPressed: isEnabled ? () => Get.offNamed(AppRoutes.login) : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.primary,
           foregroundColor: Colors.white,

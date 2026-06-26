@@ -19,7 +19,17 @@ class MenuSelectionPage extends GetView<MenuSelectionController> {
       ThemeController.to.isDark.value;
       final hasActive = controller.hasActiveSelection;
 
-      return Scaffold(
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          if (controller.hasActiveSelection) {
+            controller.dismissActiveSelection();
+            return;
+          }
+          AppNavigation.backToTableDetails(orderNumber: controller.orderNumber);
+        },
+        child: Scaffold(
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Column(
@@ -62,6 +72,7 @@ class MenuSelectionPage extends GetView<MenuSelectionController> {
             ],
           ),
         ),
+        ),
       );
     });
   }
@@ -103,7 +114,7 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                   clipBehavior: Clip.none,
                   children: [
                     IconButton(
-                      onPressed: () => Get.back(),
+                      onPressed: controller.dismissActiveSelection,
                       padding: EdgeInsets.zero,
                       icon: Icon(Icons.menu, size: 24, color: AppTheme.primary),
                     ),
@@ -186,7 +197,7 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                 color: MenuSelectionController.successGreen,
                 shape: const CircleBorder(),
                 child: InkWell(
-                  onTap: AppNavigation.logout,
+                  onTap: controller.finalizeActiveSelection,
                   customBorder: const CircleBorder(),
                   child: const SizedBox(
                     width: 44,
@@ -490,7 +501,9 @@ class _SelectionHeader extends GetView<MenuSelectionController> {
         child: Row(
           children: [
             IconButton(
-              onPressed: () => Get.back(),
+              onPressed: () => AppNavigation.backToTableDetails(
+                orderNumber: controller.orderNumber,
+              ),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
               icon: Icon(Icons.menu, size: 24, color: AppTheme.primary),
@@ -763,7 +776,7 @@ class _MenuDetailPanel extends GetView<MenuSelectionController> {
   }
 }
 
-class _SelectionBottomNav extends StatelessWidget {
+class _SelectionBottomNav extends GetView<MenuSelectionController> {
   const _SelectionBottomNav();
 
   @override
@@ -777,10 +790,12 @@ class _SelectionBottomNav extends StatelessWidget {
             onPressed: () => Get.offAllNamed(AppRoutes.session),
             icon: Icon(Icons.home, color: AppTheme.primary, size: 28),
           ),
-          IconButton(
-            onPressed: () => Get.back(),
-            icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
-          ),
+            IconButton(
+              onPressed: () => AppNavigation.backToTableDetails(
+                orderNumber: controller.orderNumber,
+              ),
+              icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
+            ),
           IconButton(
             onPressed: AppNavigation.logout,
             icon: const Icon(

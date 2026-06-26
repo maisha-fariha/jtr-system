@@ -6,14 +6,19 @@ import '../utils/app_theme.dart';
 class TableNumberDialog extends StatefulWidget {
   const TableNumberDialog({
     super.key,
+    this.title = 'N° DE TABLE',
     this.onConfirm,
   });
 
+  final String title;
   final ValueChanged<String>? onConfirm;
 
-  static Future<void> show({ValueChanged<String>? onConfirm}) {
+  static Future<void> show({
+    String title = 'N° DE TABLE',
+    ValueChanged<String>? onConfirm,
+  }) {
     return Get.dialog(
-      TableNumberDialog(onConfirm: onConfirm),
+      TableNumberDialog(title: title, onConfirm: onConfirm),
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.45),
     );
@@ -72,7 +77,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  'N° DE TABLE',
+                  widget.title,
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontSize: 17,

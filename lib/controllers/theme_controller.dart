@@ -8,8 +8,16 @@ class ThemeController extends GetxController {
 
   final isDark = false.obs;
 
+  @override
+  void onInit() {
+    super.onInit();
+    isDark.value = Get.isDarkMode;
+  }
+
   void toggle() {
-    isDark.value = !isDark.value;
-    Get.changeThemeMode(isDark.value ? ThemeMode.dark : ThemeMode.light);
+    final dark = !isDark.value;
+    // Keep GetX theme mode in sync before notifying Obx listeners.
+    Get.changeThemeMode(dark ? ThemeMode.dark : ThemeMode.light);
+    isDark.value = dark;
   }
 }

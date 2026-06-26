@@ -6,8 +6,10 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../controllers/login_controller.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
+import '../widgets/table_occupied_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
 
@@ -86,10 +88,10 @@ class SessionController extends GetxController {
       impressionColor: Color(0xFFF1C40F),
       total: '950,00 €',
       products: [
-        OrderProduct(quantity: '2', name: 'PIZZA MARGHERITA', price: '280,00 €'),
-        OrderProduct(quantity: '1', name: 'PASTA CARBONARA', price: '220,00 €'),
-        OrderProduct(quantity: '3', name: 'EAU MINERALE', price: '30,00 €'),
-        OrderProduct(quantity: '2', name: 'TIRAMISU', price: '420,00 €'),
+        OrderProduct(quantity: '1', name: 'SALADE DI MARE', price: '150,00 €'),
+        OrderProduct(quantity: '1', name: 'PIZZA VEGETARIEN', price: '150,00 €'),
+        OrderProduct(quantity: '1', name: 'PIZZA REGINA', price: '150,00 €'),
+        OrderProduct(quantity: '1', name: 'PIZZA PARMA', price: '150,00 €'),
       ],
     ),
   ];
@@ -151,14 +153,83 @@ class SessionController extends GetxController {
 
   void showTableNumberDialog() {
     selectAction(SessionAction.nouvelleCommande);
-    TableNumberDialog.show(
-      onConfirm: (tableNumber) {
-        Get.toNamed(
-          AppRoutes.menu,
-          arguments: {'table': 'T$tableNumber'},
-        );
-      },
+    TableNumberDialog.show(onConfirm: _onTableNumberConfirmed);
+  }
+
+  void openTableDetails(String orderNumber) {
+    Get.toNamed(
+      AppRoutes.tableDetails,
+      arguments: {'orderNumber': orderNumber},
     );
+  }
+
+  void _onTableNumberConfirmed(String tableNumber) {
+    if (isTableOccupied(tableNumber)) {
+      TableOccupiedDialog.show(
+        userName: _currentUserDisplayName,
+        tableNumber: tableNumber,
+      );
+      return;
+    }
+
+    TableNumberDialog.show(
+      title: 'NOMBRE DE COUVERTS',
+      onConfirm: (couverts) => _createTableAndOpenDetails(
+        tableNumber: tableNumber,
+        couverts: couverts,
+      ),
+    );
+  }
+
+  void _createTableAndOpenDetails({
+    required String tableNumber,
+    required String couverts,
+  }) {
+    final orderNumber = 'T$tableNumber';
+
+    orders.add(
+      SessionOrder(
+        number: orderNumber,
+        numberColor: AppTheme.primary,
+        group: '1',
+        poste: 'POC1',
+        profitCenter: 'SUR PLACE',
+        couverts: couverts,
+        impressionCount: 0,
+        impressionColor: const Color(0xFFE74C3C),
+        total: '0,00 €',
+        products: const [],
+      ),
+    );
+
+    openTableDetails(orderNumber);
+  }
+
+  bool isTableOccupied(String tableNumber) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    return orders.any((order) {
+      final orderTable = order.number.replaceFirst(RegExp(r'^T'), '');
+      return orderTable == normalized || order.number == 'T$normalized';
+    });
+  }
+
+  String get _currentUserDisplayName {
+    if (Get.isRegistered<LoginController>()) {
+      final login = Get.find<LoginController>();
+      final selected = login.selectedUser.value;
+      if (selected != null) {
+        return selected.name.split(' ').first;
+      }
+
+      final identifiant = login.identifiantController.text.trim();
+      if (identifiant.isNotEmpty) {
+        return identifiant.split(' ').first.toUpperCase();
+      }
+    }
+
+    return 'ABDALLAH';
   }
 
   void requestNextCourse() {
@@ -197,15 +268,22 @@ class SessionController extends GetxController {
     );
   }
 
-  void addProductsToOrder(String tableNumber, List<MenuItem> items) {
+  void addProductsToOrder(
+    String tableNumber,
+    List<MenuItem> items, {
+    Map<int, String>? messagesByCourse,
+  }) {
     if (items.isEmpty) return;
 
     final newProducts = items
-        .map((item) => OrderProduct(
-              quantity: '1',
-              name: item.name,
-              price: item.formattedPrice,
-            ))
+        .map(
+          (item) => OrderProduct(
+            quantity: '1',
+            name: item.name,
+            price: item.formattedPrice,
+            message: messagesByCourse?[item.courseNumber],
+          ),
+        )
         .toList();
 
     final idx = orders.indexWhere((o) => o.number == tableNumber);
@@ -265,6 +343,164 @@ class SessionController extends GetxController {
   String _formatTotal(double value) {
     final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
     return '$formatted €';
+  }
+
+  void addTableMenuItemToOrder(
+    String orderNumber,
+    String itemName,
+    double unitPrice,
+  ) {
+    final idx = orders.indexWhere((o) => o.number == orderNumber);
+    if (idx < 0) return;
+
+    final existing = orders[idx];
+    final products = List<OrderProduct>.from(existing.products);
+    final normalizedName = itemName.toUpperCase();
+    final productIdx = products.indexWhere(
+      (p) => p.name.toUpperCase() == normalizedName,
+    );
+
+    if (productIdx >= 0) {
+      final current = products[productIdx];
+      final qty = int.tryParse(current.quantity) ?? 1;
+      final lineUnitPrice = _parsePriceString(current.price) / qty;
+      final newQty = qty + 1;
+      products[productIdx] = current.copyWith(
+        quantity: '$newQty',
+        price: _formatTotal(lineUnitPrice * newQty),
+      );
+    } else {
+      products.add(
+        OrderProduct(
+          quantity: '1',
+          name: normalizedName,
+          price: _formatTotal(unitPrice),
+        ),
+      );
+    }
+
+    _replaceOrderProducts(existing, products, idx);
+  }
+
+  void removeTableMenuItemFromOrder(String orderNumber, String itemName) {
+    final idx = orders.indexWhere((o) => o.number == orderNumber);
+    if (idx < 0) return;
+
+    final existing = orders[idx];
+    final products = List<OrderProduct>.from(existing.products);
+    final normalizedName = itemName.toUpperCase();
+    final productIdx = products.indexWhere(
+      (p) => p.name.toUpperCase() == normalizedName,
+    );
+    if (productIdx < 0) return;
+
+    final current = products[productIdx];
+    final qty = int.tryParse(current.quantity) ?? 1;
+    if (qty <= 1) {
+      products.removeAt(productIdx);
+    } else {
+      final lineUnitPrice = _parsePriceString(current.price) / qty;
+      final newQty = qty - 1;
+      products[productIdx] = current.copyWith(
+        quantity: '$newQty',
+        price: _formatTotal(lineUnitPrice * newQty),
+      );
+    }
+
+    _replaceOrderProducts(existing, products, idx);
+  }
+
+  void _replaceOrderProducts(
+    SessionOrder existing,
+    List<OrderProduct> products,
+    int idx,
+  ) {
+    final newTotal = products.fold<double>(
+      0,
+      (sum, product) => sum + _parsePriceString(product.price),
+    );
+
+    orders[idx] = SessionOrder(
+      number: existing.number,
+      numberColor: existing.numberColor,
+      group: existing.group,
+      poste: existing.poste,
+      profitCenter: existing.profitCenter,
+      couverts: existing.couverts,
+      impressionCount: existing.impressionCount,
+      impressionColor: existing.impressionColor,
+      total: _formatTotal(newTotal),
+      products: products,
+    );
+  }
+
+  void adjustOrderProductQuantity(
+    String orderNumber,
+    int productIndex,
+    int delta,
+  ) {
+    final idx = orders.indexWhere((o) => o.number == orderNumber);
+    if (idx < 0) return;
+
+    final products = List<OrderProduct>.from(orders[idx].products);
+    if (productIndex < 0 || productIndex >= products.length) return;
+
+    final current = products[productIndex];
+    final qty = int.tryParse(current.quantity) ?? 1;
+    final unitPrice = _parsePriceString(current.price) / qty;
+    final newQty = qty + delta;
+
+    if (newQty <= 0) {
+      products.removeAt(productIndex);
+    } else {
+      products[productIndex] = current.copyWith(
+        quantity: '$newQty',
+        price: _formatTotal(unitPrice * newQty),
+      );
+    }
+
+    _replaceOrderProducts(orders[idx], products, idx);
+  }
+
+  void applyOfferToOrderProduct(String orderNumber, int productIndex) {
+    final idx = orders.indexWhere((o) => o.number == orderNumber);
+    if (idx < 0) return;
+
+    final products = List<OrderProduct>.from(orders[idx].products);
+    if (productIndex < 0 || productIndex >= products.length) return;
+
+    final current = products[productIndex];
+    products[productIndex] = current.copyWith(price: '0,00 €');
+
+    _replaceOrderProducts(orders[idx], products, idx);
+
+    Get.snackbar(
+      'Offert',
+      '${current.name} a été offert.',
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  void setOrderProductMessage(
+    String orderNumber,
+    int productIndex,
+    String message,
+  ) {
+    final idx = orders.indexWhere((o) => o.number == orderNumber);
+    if (idx < 0) return;
+
+    final products = List<OrderProduct>.from(orders[idx].products);
+    if (productIndex < 0 || productIndex >= products.length) return;
+
+    final trimmed = message.trim();
+    products[productIndex] = products[productIndex].copyWith(
+      message: trimmed.isEmpty ? null : trimmed,
+      clearMessage: trimmed.isEmpty,
+    );
+
+    _replaceOrderProducts(orders[idx], products, idx);
   }
 
   void requestDeleteOrder(String orderNumber) {

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../controllers/connect_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../widgets/themed_asset_image.dart';
 
 class ConnectPage extends GetView<ConnectController> {
   const ConnectPage({super.key});
@@ -18,10 +19,7 @@ class ConnectPage extends GetView<ConnectController> {
           child: Column(
             children: [
               const SizedBox(height: 48),
-              Image.asset(
-                'assets/images/logo_text.png',
-                fit: BoxFit.contain,
-              ),
+              const ThemedAssetImage.logo(),
               const Spacer(),
               _buildProgressCard(),
               const SizedBox(height: 35),

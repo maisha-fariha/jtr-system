@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../controllers/theme_controller.dart';
+import 'app_assets.dart';
+
 /// Central design-system tokens.
 ///
 /// Colors marked with [→] change in dark mode.
@@ -39,15 +42,46 @@ class AppTheme {
   static Color get cardBorder =>
       _dark ? const Color(0xFF2A2A2A) : const Color(0xFFE8E8E8);
 
+  /// → Lighter nested divider (e.g. between product rows)
+  static Color get subtleDivider =>
+      _dark ? const Color(0xFF252525) : const Color(0xFFF0F0F0);
+
+  /// → Inactive button / surface background
+  static Color get inactiveSurface =>
+      _dark ? const Color(0xFF2A2A2A) : const Color(0xFFF3F3F3);
+
+  /// → Inactive action-button icon (session toolbar)
+  static Color get actionIcon =>
+      _dark ? const Color(0xFFF1C40F) : primary;
+
+  /// → Modal dialog background
+  static Color get dialogBackground => _dark ? const Color(0xFF212031) : Colors.white;
+
+  /// → Dialog list-item / header icon button background
+  static Color get dialogItemBackground =>
+      _dark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F6F9);
+
+  /// → Dialog barrier overlay
+  static Color get dialogBarrier =>
+      _dark ? Colors.black.withValues(alpha: 0.55) : Colors.black.withValues(alpha: 0.22);
+
+  /// → Logo image path for the active theme
+  static String get logo => _dark ? AppAssets.logoDark : AppAssets.logoLight;
+
   // ─── Helper ───────────────────────────────────────────────────────────────
 
   static bool get _dark {
     try {
+      if (Get.isRegistered<ThemeController>()) {
+        return ThemeController.to.isDark.value;
+      }
       return Get.isDarkMode;
     } catch (_) {
       return false;
     }
   }
+
+  static bool get isDark => _dark;
 
   // ─── ThemeData ─────────────────────────────────────────────────────────────
 
@@ -63,7 +97,9 @@ class AppTheme {
         scaffoldBackgroundColor: Colors.white,
         appBarTheme: const AppBarTheme(
           backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
           elevation: 0,
+          shadowColor: Colors.transparent,
           centerTitle: false,
           iconTheme: IconThemeData(color: primary),
           titleTextStyle: TextStyle(
@@ -88,8 +124,10 @@ class AppTheme {
         ),
         scaffoldBackgroundColor: const Color(0xFF121212),
         appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF1E1E1E),
+          backgroundColor: Color(0xFF121212),
+          surfaceTintColor: Colors.transparent,
           elevation: 0,
+          shadowColor: Colors.transparent,
           centerTitle: false,
           iconTheme: IconThemeData(color: primary),
           titleTextStyle: TextStyle(

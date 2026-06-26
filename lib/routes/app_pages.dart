@@ -2,14 +2,18 @@ import 'package:get/get.dart';
 
 import '../controllers/connect_controller.dart';
 import '../controllers/login_controller.dart';
+import '../controllers/menu_selection_controller.dart';
 import '../controllers/order_menu_controller.dart';
 import '../controllers/session_controller.dart';
 import '../pages/connect_page.dart';
 import '../pages/home_page.dart';
 import '../pages/login_page.dart';
 import '../pages/menu_page.dart';
+import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
+import '../controllers/table_details_controller.dart';
+import '../pages/table_details_page.dart';
 
 class AppRoutes {
   static const root = '/';
@@ -18,6 +22,8 @@ class AppRoutes {
   static const login = '/login';
   static const session = '/session';
   static const menu = '/menu';
+  static const menuSelection = '/menu-selection';
+  static const tableDetails = '/table-details';
   static const statistics = '/statistics';
 }
 
@@ -59,6 +65,20 @@ class AppPages {
       page: () => const MenuPage(),
       binding: BindingsBuilder(() {
         Get.put(OrderMenuController());
+      }),
+    ),
+    GetPage(
+      name: AppRoutes.menuSelection,
+      page: () => const MenuSelectionPage(),
+      binding: BindingsBuilder(() {
+        Get.put(MenuSelectionController());
+      }),
+    ),
+    GetPage(
+      name: AppRoutes.tableDetails,
+      page: () => const TableDetailsPage(),
+      binding: BindingsBuilder(() {
+        Get.put(TableDetailsController());
       }),
     ),
     GetPage(

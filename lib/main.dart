@@ -16,14 +16,19 @@ class JtrSystemApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GetMaterialApp(
-      title: 'JTR System',
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.light,
-      getPages: AppPages.routes,
-      initialRoute: AppRoutes.home,
-      debugShowCheckedModeBanner: false,
+    final themeController = Get.find<ThemeController>();
+    return Obx(
+      () => GetMaterialApp(
+        title: 'JTR System',
+        theme: AppTheme.lightTheme,
+        darkTheme: AppTheme.darkTheme,
+        themeMode: themeController.isDark.value
+            ? ThemeMode.dark
+            : ThemeMode.light,
+        getPages: AppPages.routes,
+        initialRoute: AppRoutes.home,
+        debugShowCheckedModeBanner: false,
+      ),
     );
   }
 }

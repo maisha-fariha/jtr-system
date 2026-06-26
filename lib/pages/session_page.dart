@@ -4,10 +4,10 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
-import '../controllers/theme_controller.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 
 class SessionPage extends GetView<SessionController> {
@@ -23,7 +23,7 @@ class SessionPage extends GetView<SessionController> {
         child: Column(
           children: [
             _SessionHeader(),
-            const Divider(height: 1, color: Color(0xFFE8E8E8)),
+            Divider(height: 1, color: AppTheme.cardBorder),
             const _TableHeader(),
             Expanded(
               child: SlidableAutoCloseBehavior(
@@ -41,7 +41,7 @@ class SessionPage extends GetView<SessionController> {
               ),
             ),
             const _ActionButtons(),
-            const Divider(height: 1, color: Color(0xFFE8E8E8)),
+            Divider(height: 1, color: AppTheme.cardBorder),
             _BottomNavBar(),
           ],
         ),
@@ -116,19 +116,6 @@ class _SessionHeader extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          // ── Theme toggle ──────────────────────────────────────────────────
-          Obx(() {
-            final dark = ThemeController.to.isDark.value;
-            return GestureDetector(
-              onTap: ThemeController.to.toggle,
-              child: Icon(
-                dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-                color: AppTheme.textSecondary,
-                size: 20,
-              ),
-            );
-          }),
         ],
       ),
     );
@@ -256,11 +243,13 @@ class _OrderRow extends GetView<SessionController> {
               ),
             ],
           ),
-          child: Container(
+          child: GestureDetector(
+            onDoubleTap: () => controller.openTableDetails(order.number),
+            child: Container(
             decoration: BoxDecoration(
               color: AppTheme.background,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE8E8E8)),
+              border: Border.all(color: AppTheme.cardBorder),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.03),
@@ -369,7 +358,7 @@ class _OrderRow extends GetView<SessionController> {
                 ),
               ),
               if (isExpanded) ...[
-                const Divider(height: 1, color: Color(0xFFE8E8E8)),
+                Divider(height: 1, color: AppTheme.cardBorder),
                 for (var i = 0; i < order.products.length; i++) ...[
                   _ProductRow(
                     orderNumber: order.number,
@@ -377,12 +366,13 @@ class _OrderRow extends GetView<SessionController> {
                     product: order.products[i],
                   ),
                   if (i < order.products.length - 1)
-                    const Divider(height: 1, color: Color(0xFFF0F0F0)),
+                    Divider(height: 1, color: AppTheme.subtleDivider),
                 ],
                 const SizedBox(height: 4),
               ],
             ],
             ),
+          ),
           ),
         ),
       );
@@ -604,9 +594,9 @@ class _ActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final backgroundColor =
-        isActive ? AppTheme.primary : const Color(0xFFF3F3F3);
+        isActive ? AppTheme.primary : AppTheme.inactiveSurface;
     final labelColor = isActive ? Colors.white : AppTheme.darkText;
-    final iconColor = isActive ? Colors.white : AppTheme.primary;
+    final iconColor = isActive ? Colors.white : AppTheme.actionIcon;
 
     return GestureDetector(
       onTap: onTap,
@@ -676,7 +666,7 @@ class _BottomNavBar extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           IconButton(
-            onPressed: () => Get.offAllNamed(AppRoutes.home),
+            onPressed: () => Get.offAllNamed(AppRoutes.session),
             icon: const Icon(Icons.home, color: AppTheme.primary, size: 28),
           ),
           IconButton(
@@ -684,7 +674,7 @@ class _BottomNavBar extends StatelessWidget {
             icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
           ),
           IconButton(
-            onPressed: () => Get.offAllNamed(AppRoutes.home),
+            onPressed: AppNavigation.logout,
             icon: const Icon(
               Icons.logout,
               color: Color(0xFF2EC4B6),

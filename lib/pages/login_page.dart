@@ -5,6 +5,7 @@ import '../controllers/login_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../widgets/app_footer.dart';
+import '../widgets/themed_asset_image.dart';
 import '../widgets/user_identifiant_field.dart';
 
 class LoginPage extends GetView<LoginController> {
@@ -54,10 +55,7 @@ class LoginPage extends GetView<LoginController> {
               child: Column(
                 children: [
                   const SizedBox(height: 40),
-                  Image.asset(
-                    'assets/images/logo_text.png',
-                    fit: BoxFit.contain,
-                  ),
+                  const ThemedAssetImage.logo(),
                   const SizedBox(height: 48),
                   UserIdentifiantField(
                     controller: controller.identifiantFieldController,

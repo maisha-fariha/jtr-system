@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/order_menu_controller.dart';
-import '../data/demo_menu.dart';
 import '../models/menu_category.dart';
 import '../models/menu_item.dart';
+import '../routes/app_pages.dart';
+import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 
 /// Figma frame 160:1522 — product-selection screen (CHOIX 1/2/3).
@@ -43,7 +44,7 @@ class MenuPage extends GetView<OrderMenuController> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 24),
-                      for (final category in demoMenuCategories) ...[
+                      for (final category in controller.visibleCategories) ...[
                         _CourseSectionHeader(category: category),
                         const SizedBox(height: 16),
                         _CourseItemsGrid(category: category),
@@ -465,7 +466,7 @@ class _MenuBottomNav extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             IconButton(
-              onPressed: () => Get.until((route) => route.isFirst),
+              onPressed: () => Get.offAllNamed(AppRoutes.session),
               icon: Icon(Icons.home, color: AppTheme.primary, size: 28),
             ),
             IconButton(
@@ -473,7 +474,7 @@ class _MenuBottomNav extends StatelessWidget {
               icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
             ),
             IconButton(
-              onPressed: () => Get.until((route) => route.isFirst),
+              onPressed: AppNavigation.logout,
               icon: const Icon(
                 Icons.logout,
                 color: Color(0xFF2EC4B6),

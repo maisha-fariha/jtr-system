@@ -27,7 +27,7 @@ class LoginPage extends GetView<LoginController> {
         elevation: 3,
         shadowColor: Colors.black.withValues(alpha: 0.1),
         leading: IconButton(
-          icon: const Icon(
+          icon: Icon(
             Icons.arrow_back_ios_new,
             color: AppTheme.darkText,
             size: 20,
@@ -97,7 +97,7 @@ class LoginPage extends GetView<LoginController> {
           controller: controller.passwordController,
           focusNode: controller.passwordFocusNode,
           obscureText: controller.obscurePassword.value,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 15,
             color: AppTheme.darkText,
           ),

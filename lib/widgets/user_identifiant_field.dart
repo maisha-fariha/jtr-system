@@ -33,7 +33,7 @@ class UserIdentifiantField extends StatelessWidget {
               controller: controller.textController,
               focusNode: controller.identifiantFocusNode,
               onTap: controller.onIdentifiantTap,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 color: AppTheme.darkText,
               ),
@@ -280,7 +280,7 @@ class _UserSuggestionTile extends StatelessWidget {
                   children: [
                     Text(
                       user.name,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: AppTheme.darkText,

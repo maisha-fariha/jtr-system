@@ -1,10 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
@@ -75,7 +75,7 @@ class _SessionHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -85,7 +85,7 @@ class _SessionHeader extends StatelessWidget {
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
                     letterSpacing: 0.8,
-                    color: AppTheme.textSecondary,
+                    color: AppTheme.textSecondary, // dynamic getter, not const
                   ),
                 ),
                 SizedBox(height: 2),
@@ -116,6 +116,19 @@ class _SessionHeader extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 8),
+          // ── Theme toggle ──────────────────────────────────────────────────
+          Obx(() {
+            final dark = ThemeController.to.isDark.value;
+            return GestureDetector(
+              onTap: ThemeController.to.toggle,
+              child: Icon(
+                dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                color: AppTheme.textSecondary,
+                size: 20,
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -128,19 +141,19 @@ class _SessionTableLayout {
   static const outerPadding = EdgeInsets.symmetric(horizontal: 12);
   static const innerPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 12);
 
-  static const headerStyle = TextStyle(
-    fontSize: 9,
-    fontWeight: FontWeight.w600,
-    letterSpacing: 0.3,
-    color: AppTheme.textSecondary,
-    height: 1.2,
-  );
+  static TextStyle get headerStyle => TextStyle(
+        fontSize: 9,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.3,
+        color: AppTheme.textSecondary,
+        height: 1.2,
+      );
 
-  static const cellStyle = TextStyle(
-    fontSize: 11,
-    fontWeight: FontWeight.w500,
-    color: AppTheme.darkText,
-  );
+  static TextStyle get cellStyle => TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w500,
+        color: AppTheme.darkText,
+      );
 }
 
 class _SessionTableRow extends StatelessWidget {
@@ -183,7 +196,7 @@ class _TableHeader extends StatelessWidget {
       padding: const EdgeInsets.only(top: 10, bottom: 4),
       child: _SessionTableRow(
         padding: const EdgeInsets.symmetric(horizontal: 12),
-        cells: const [
+        cells: [
           Text('N°', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
           Text('G.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
           Text('POSTE', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
@@ -344,7 +357,7 @@ class _OrderRow extends GetView<SessionController> {
                         child: Text(
                           order.total,
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
                             color: AppTheme.darkText,
@@ -416,7 +429,7 @@ class _ProductRow extends GetView<SessionController> {
 
   @override
   Widget build(BuildContext context) {
-    const productStyle = TextStyle(
+    final productStyle = TextStyle(
       fontSize: 10,
       fontWeight: FontWeight.w500,
       color: AppTheme.textSecondary,
@@ -549,13 +562,18 @@ class _ActionButtons extends GetView<SessionController> {
                   iconSize: _actions[i].iconSize,
                   isActive: controller.selectedAction.value == _actions[i].action,
                   onTap: () {
-                    if (_actions[i].action == SessionAction.ticket) {
+                    final action = _actions[i].action;
+                    if (action == SessionAction.ticket) {
                       controller.printTicket();
-                    } else if (_actions[i].action ==
-                        SessionAction.nouvelleCommande) {
+                    } else if (action == SessionAction.nouvelleCommande) {
                       controller.showTableNumberDialog();
+                    } else if (action == SessionAction.demanderSuite) {
+                      controller.requestNextCourse();
+                    } else if (action == SessionAction.statistics) {
+                      controller.selectAction(action);
+                      Get.toNamed(AppRoutes.statistics);
                     } else {
-                      controller.selectAction(_actions[i].action);
+                      controller.selectAction(action);
                     }
                   },
                 ),
@@ -663,13 +681,10 @@ class _BottomNavBar extends StatelessWidget {
           ),
           IconButton(
             onPressed: () => Get.back(),
-            icon: const Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
+            icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
           ),
           IconButton(
-            onPressed: () {
-              Get.offAllNamed(AppRoutes.home);
-              SystemNavigator.pop();
-            },
+            onPressed: () => Get.offAllNamed(AppRoutes.home),
             icon: const Icon(
               Icons.logout,
               color: Color(0xFF2EC4B6),

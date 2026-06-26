@@ -53,7 +53,7 @@ class ConnectPage extends GetView<ConnectController> {
       ),
       child: Column(
         children: [
-          const Text(
+          Text(
             'Chargement base de données',
             textAlign: TextAlign.center,
             style: TextStyle(

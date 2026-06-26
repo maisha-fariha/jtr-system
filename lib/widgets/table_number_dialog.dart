@@ -71,7 +71,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
+                Text(
                   'N° DE TABLE',
                   textAlign: TextAlign.center,
                   style: TextStyle(

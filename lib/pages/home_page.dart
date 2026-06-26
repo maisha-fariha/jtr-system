@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import '../controllers/theme_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../widgets/app_footer.dart';
@@ -27,6 +28,18 @@ class HomePage extends StatelessWidget {
         centerTitle: false,
         title: const Text('JTR System'),
         actions: [
+          // ── Theme toggle ──────────────────────────────────────────────────
+          Obx(() {
+            final dark = ThemeController.to.isDark.value;
+            return IconButton(
+              tooltip: dark ? 'Mode clair' : 'Mode sombre',
+              onPressed: ThemeController.to.toggle,
+              icon: Icon(
+                dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                color: AppTheme.primary,
+              ),
+            );
+          }),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             color: AppTheme.background,

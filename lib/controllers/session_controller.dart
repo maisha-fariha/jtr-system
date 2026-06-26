@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../models/menu_item.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
+import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -149,7 +151,120 @@ class SessionController extends GetxController {
 
   void showTableNumberDialog() {
     selectAction(SessionAction.nouvelleCommande);
-    TableNumberDialog.show();
+    TableNumberDialog.show(
+      onConfirm: (tableNumber) {
+        Get.toNamed(
+          AppRoutes.menu,
+          arguments: {'table': 'T$tableNumber'},
+        );
+      },
+    );
+  }
+
+  void requestNextCourse() {
+    selectAction(SessionAction.demanderSuite);
+    final selected = tableUiState.value.selectedRow;
+    if (selected == null || selected.productIndex != null) {
+      Get.snackbar(
+        'Sélection requise',
+        'Veuillez sélectionner une table avant de demander la suite.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      );
+      return;
+    }
+    Get.defaultDialog(
+      title: 'Demander la suite',
+      middleText:
+          'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
+      textConfirm: 'Envoyer',
+      textCancel: 'Annuler',
+      confirmTextColor: Colors.white,
+      buttonColor: AppTheme.primary,
+      onConfirm: () {
+        Get.back();
+        Get.snackbar(
+          'Suite demandée',
+          'La suite a été envoyée pour la table ${selected.orderNumber}.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 2),
+          backgroundColor: AppTheme.lightButton,
+          colorText: AppTheme.darkText,
+        );
+      },
+    );
+  }
+
+  void addProductsToOrder(String tableNumber, List<MenuItem> items) {
+    if (items.isEmpty) return;
+
+    final newProducts = items
+        .map((item) => OrderProduct(
+              quantity: '1',
+              name: item.name,
+              price: item.formattedPrice,
+            ))
+        .toList();
+
+    final idx = orders.indexWhere((o) => o.number == tableNumber);
+    if (idx >= 0) {
+      final existing = orders[idx];
+      final newTotal =
+          _parseTotalString(existing.total) + _sumProducts(newProducts);
+      orders[idx] = SessionOrder(
+        number: existing.number,
+        numberColor: existing.numberColor,
+        group: existing.group,
+        poste: existing.poste,
+        profitCenter: existing.profitCenter,
+        couverts: existing.couverts,
+        impressionCount: existing.impressionCount,
+        impressionColor: existing.impressionColor,
+        total: _formatTotal(newTotal),
+        products: [...existing.products, ...newProducts],
+      );
+    } else {
+      final total = _sumProducts(newProducts);
+      orders.add(SessionOrder(
+        number: tableNumber,
+        numberColor: AppTheme.primary,
+        group: '1',
+        poste: 'POC1',
+        profitCenter: 'SUR PLACE',
+        couverts: '0',
+        impressionCount: 0,
+        impressionColor: const Color(0xFFE74C3C),
+        total: _formatTotal(total),
+        products: newProducts,
+      ));
+    }
+  }
+
+  double _sumProducts(List<OrderProduct> products) {
+    return products.fold(0, (sum, p) {
+      return sum + (_parsePriceString(p.price));
+    });
+  }
+
+  double _parseTotalString(String total) {
+    return double.tryParse(
+          total.replaceAll(' €', '').replaceAll(',', '.'),
+        ) ??
+        0;
+  }
+
+  double _parsePriceString(String price) {
+    return double.tryParse(
+          price.replaceAll(' €', '').replaceAll(',', '.'),
+        ) ??
+        0;
+  }
+
+  String _formatTotal(double value) {
+    final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
+    return '$formatted €';
   }
 
   void requestDeleteOrder(String orderNumber) {

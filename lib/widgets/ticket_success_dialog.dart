@@ -50,7 +50,7 @@ class _TicketSuccessDialogState extends State<TicketSuccessDialog> {
             Container(
               width: 56,
               height: 56,
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: AppTheme.lightButton,
                 shape: BoxShape.circle,
               ),
@@ -61,7 +61,7 @@ class _TicketSuccessDialogState extends State<TicketSuccessDialog> {
               ),
             ),
             const SizedBox(height: 20),
-            const Text(
+            Text(
               "L'impression a été effectuée sur l'imprimante principale TICKET.",
               textAlign: TextAlign.center,
               style: TextStyle(

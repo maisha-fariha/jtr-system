@@ -93,7 +93,7 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                         ),
                         child: IconButton(
                           onPressed: () => Get.back(),
-                          icon: const Icon(
+                          icon: Icon(
                             Icons.arrow_back_ios_new,
                             color: AppTheme.darkText,
                             size: 20,
@@ -104,7 +104,7 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                     Text(
                       widget.title,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                         color: AppTheme.darkText,
@@ -123,7 +123,7 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                         controller: _passwordController,
                         focusNode: _passwordFocusNode,
                         obscureText: true,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           color: AppTheme.darkText,
                         ),

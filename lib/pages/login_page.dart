@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/login_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/themed_asset_image.dart';
@@ -14,93 +15,101 @@ class LoginPage extends GetView<LoginController> {
 
   @override
   Widget build(BuildContext context) {
-    final fieldWidth =
-        MediaQuery.sizeOf(context).width - (_horizontalPadding * 2);
+    return Obx(() {
+      if (Get.isRegistered<ThemeController>()) {
+        ThemeController.to.isDark.value;
+      }
 
-    return Scaffold(
-      resizeToAvoidBottomInset: false,
-      backgroundColor: AppTheme.background,
-      appBar: AppBar(
+      final fieldWidth =
+          MediaQuery.sizeOf(context).width - (_horizontalPadding * 2);
+
+      return Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: AppTheme.background,
-        surfaceTintColor: Colors.transparent,
-        centerTitle: true,
-        elevation: 3,
-        shadowColor: Colors.black.withValues(alpha: 0.1),
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back_ios_new,
-            color: AppTheme.darkText,
-            size: 20,
+        appBar: AppBar(
+          backgroundColor: AppTheme.background,
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          elevation: 3,
+          shadowColor: Colors.black.withValues(alpha: 0.1),
+          leading: IconButton(
+            icon: Icon(
+              Icons.arrow_back_ios_new,
+              color: AppTheme.darkText,
+              size: 20,
+            ),
+            onPressed: () => Get.back(),
           ),
-          onPressed: () => Get.back(),
-        ),
-        title: const Text(
-          'CONNEXION',
-          style: TextStyle(
-            color: AppTheme.primary,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1.2,
-          ),
-        ),
-      ),
-      body: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          SafeArea(
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: _horizontalPadding),
-              child: Column(
-                children: [
-                  const SizedBox(height: 40),
-                  const ThemedAssetImage.logo(),
-                  const SizedBox(height: 48),
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      UserIdentifiantField(
-                        controller: controller.identifiantFieldController,
-                        showFieldIcons: true,
-                      ),
-                      Obx(
-                        () => controller.isLoadingUsers.value
-                            ? ColoredBox(
-                                color: AppTheme.background.withValues(alpha: 0.7),
-                                child: const SizedBox(
-                                  width: double.infinity,
-                                  height: UserIdentifiantSuggestionsOverlay.fieldHeight,
-                                  child: Center(
-                                    child: CircularProgressIndicator(
-                                      color: AppTheme.primary,
-                                      strokeWidth: 2.5,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            : const SizedBox.shrink(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  _buildPasswordField(),
-                  const Spacer(),
-                  _buildLoginButton(),
-                  const Spacer(flex: 2),
-                  const AppFooter(),
-                  const SizedBox(height: 24),
-                ],
-              ),
+          title: const Text(
+            'CONNEXION',
+            style: TextStyle(
+              color: AppTheme.primary,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2,
             ),
           ),
-          UserIdentifiantSuggestionsOverlay(
-            controller: controller.identifiantFieldController,
-            fieldWidth: fieldWidth,
-            onUserSelected: controller.selectUser,
-          ),
-        ],
-      ),
-    );
+        ),
+        body: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            SafeArea(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: _horizontalPadding),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 40),
+                    const ThemedAssetImage.logo(),
+                    const SizedBox(height: 48),
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        UserIdentifiantField(
+                          controller: controller.identifiantFieldController,
+                          showFieldIcons: true,
+                        ),
+                        Obx(
+                          () => controller.isLoadingUsers.value
+                              ? ColoredBox(
+                                  color:
+                                      AppTheme.background.withValues(alpha: 0.7),
+                                  child: const SizedBox(
+                                    width: double.infinity,
+                                    height: UserIdentifiantSuggestionsOverlay
+                                        .fieldHeight,
+                                    child: Center(
+                                      child: CircularProgressIndicator(
+                                        color: AppTheme.primary,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _buildPasswordField(),
+                    const Spacer(),
+                    _buildLoginButton(),
+                    const Spacer(flex: 2),
+                    const AppFooter(),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+            UserIdentifiantSuggestionsOverlay(
+              controller: controller.identifiantFieldController,
+              fieldWidth: fieldWidth,
+              onUserSelected: controller.selectUser,
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildPasswordField() {

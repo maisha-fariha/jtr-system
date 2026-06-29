@@ -70,31 +70,20 @@ class SessionRemoteDataSource {
     return DayStatisticsInfo.fromJson(envelope.data!);
   }
 
-  /// Open orders for the session screen ([GET /api/orders], active business day).
-  Future<List<Map<String, dynamic>>> fetchOrdersList({
-    int? dayId,
-    int? salesZoneId,
-  }) async {
+  /// Open orders for the active business day only ([active_day]=true).
+  Future<List<Map<String, dynamic>>> fetchOrdersList() async {
     final allOrders = <Map<String, dynamic>>[];
     var page = 1;
     var lastPage = 1;
 
     while (page <= lastPage && page <= 25) {
-      final queryParameters = <String, dynamic>{
-        'active_day': true,
-        'per_page': 100,
-        'page': page,
-      };
-      if (dayId != null && dayId > 0) {
-        queryParameters['day_id'] = dayId;
-      }
-      if (salesZoneId != null && salesZoneId > 0) {
-        queryParameters['sales_zone_id'] = salesZoneId;
-      }
-
       final response = await _client.get<Map<String, dynamic>>(
         ApiEndpoints.orders,
-        queryParameters: queryParameters,
+        queryParameters: {
+          'active_day': true,
+          'per_page': 100,
+          'page': page,
+        },
       );
       final envelope = ApiEnvelope<dynamic>.fromJson(
         response.data!,

@@ -85,10 +85,14 @@ class OrderMapper {
   ) {
     final sortMillisById = <int, int>{};
     final rows = <SessionOrder>[];
+    final seenOrderIds = <int>{};
 
     for (final order in orders) {
+      if (!isActiveDayOpenOrder(order)) continue;
+
       final orderId = orderIdFromDetail(order);
-      if (orderId <= 0) continue;
+      if (orderId <= 0 || seenOrderIds.contains(orderId)) continue;
+      seenOrderIds.add(orderId);
 
       rows.add(fromOrderDetail(order));
       sortMillisById[orderId] = _orderSortMillis(order);
@@ -99,6 +103,12 @@ class OrderMapper {
           (sortMillisById[b.id] ?? 0).compareTo(sortMillisById[a.id] ?? 0),
     );
     return rows;
+  }
+
+  /// Keeps only open orders for the active business day list.
+  static bool isActiveDayOpenOrder(Map<String, dynamic> order) {
+    final status = order['status']?.toString().toLowerCase();
+    return status != 'closed' && status != 'cancelled';
   }
 
   /// Merges API orders with tables that have an open session but no order yet.

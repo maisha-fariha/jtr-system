@@ -142,45 +142,21 @@ class SessionRepository {
   }
 
   List<SessionOrder> _sessionOrdersFromCache() {
-    final orders = OrderMapper.sessionOrdersFromOrdersList(
+    return OrderMapper.sessionOrdersFromOrdersList(
       _local.readOpenOrdersList(),
     );
-    final tables = _local.readTablesList();
-    if (tables.isEmpty) return orders;
-    return OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
   }
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork() async {
-    final activeDay = await getActiveDay();
-    var orderMaps = await _loadOrderMaps(activeDay);
-
-    if (orderMaps.isEmpty) {
-      final tables = await _remote.fetchTablesList();
-      await _local.saveTablesList(tables);
-      return OrderMapper.sessionOrdersFromTables(tables);
-    }
+    final orderMaps = await _loadOrderMaps();
 
     await _local.saveOpenOrdersList(orderMaps);
-
-    List<Map<String, dynamic>> tables = const [];
-    try {
-      tables = await _remote.fetchTablesList();
-      await _local.saveTablesList(tables);
-    } catch (_) {
-      tables = _local.readTablesList();
-    }
-
-    final orders = OrderMapper.sessionOrdersFromOrdersList(orderMaps);
-    if (tables.isEmpty) return orders;
-    return OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
+    return OrderMapper.sessionOrdersFromOrdersList(orderMaps);
   }
 
-  Future<List<Map<String, dynamic>>> _loadOrderMaps(ActiveDayInfo activeDay) async {
+  Future<List<Map<String, dynamic>>> _loadOrderMaps() async {
     try {
-      final orders = await _remote.fetchOrdersList(
-        dayId: activeDay.id > 0 ? activeDay.id : null,
-        salesZoneId: activeDay.salesZoneId,
-      );
+      final orders = await _remote.fetchOrdersList();
       if (orders.isNotEmpty) return orders;
     } catch (_) {}
 

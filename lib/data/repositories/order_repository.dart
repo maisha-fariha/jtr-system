@@ -197,38 +197,85 @@ class OrderRepository {
     created = _unwrapOrderResponse(created);
     var orderId = (created['id'] as num?)?.toInt();
 
-    if (orderId == null) {
-      final detail = await _findOpenOrderDetailForTable(table.id);
-      if (detail != null) {
-        created = detail;
-        orderId = (created['id'] as num?)?.toInt();
+    if (orderId == null || !_hasOrderShape(created)) {
+      final resolvedId = orderId ?? await _resolveOrderIdForTable(table.id);
+      if (resolvedId != null) {
+        orderId = resolvedId;
+        created = await _remote.fetchOrderDetail(resolvedId);
       }
     }
 
-    if (orderId != null) {
-      await _local.saveOrderDetail(orderId, created);
+    if (orderId == null) {
+      throw ApiException(
+        message:
+            'Commande créée mais introuvable. Tirez pour rafraîchir la liste.',
+      );
     }
 
-    final data = await _remote.fetchOpenOrders();
-    await _local.saveOpenOrders(data.openOrders);
+    await _waitForOrderInOpenList(orderId);
+    created = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, created);
 
-    return OrderMapper.fromOrderDetail(created);
+    final displayNumber = OrderMapper.tableDisplayNumber(tableNumber);
+    return OrderMapper.fromOrderDetail(created).copyWith(number: displayNumber);
+  }
+
+  Future<void> _waitForOrderInOpenList(int orderId) async {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final data = await _remote.fetchOpenOrders();
+      await _local.saveOpenOrders(data.openOrders);
+      if (data.openOrders.any((order) => order.id == orderId)) {
+        return;
+      }
+      if (attempt < 4) {
+        await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+      }
+    }
+
+    throw ApiException(
+      message: 'Commande créée mais absente des commandes ouvertes.',
+    );
+  }
+
+  bool _hasOrderShape(Map<String, dynamic> data) {
+    return data.containsKey('order_number') ||
+        data.containsKey('seat_orders') ||
+        data.containsKey('total_price');
+  }
+
+  Future<int?> _resolveOrderIdForTable(int tableId) async {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(Duration(milliseconds: 350 * attempt));
+      }
+
+      final openOrders = await _remote.fetchOpenOrders();
+      for (final summary in openOrders.openOrders) {
+        if (summary.tableId == tableId) {
+          return summary.id;
+        }
+      }
+    }
+    return null;
   }
 
   Map<String, dynamic> _unwrapOrderResponse(Map<String, dynamic> data) {
     final order = data['order'];
     if (order is Map<String, dynamic>) return order;
-    return data;
-  }
 
-  Future<Map<String, dynamic>?> _findOpenOrderDetailForTable(int tableId) async {
-    final openOrders = await _remote.fetchOpenOrders();
-    for (final summary in openOrders.openOrders) {
-      if (summary.tableId == tableId) {
-        return _remote.fetchOrderDetail(summary.id);
-      }
+    final activeOrder = data['active_order'] ?? data['current_order'];
+    if (activeOrder is Map<String, dynamic>) return activeOrder;
+
+    final orderId = data['order_id'];
+    if (orderId is num) {
+      return {
+        'id': orderId.toInt(),
+        'table_id': data['table_id'],
+        'number_of_guests': data['number_of_guests'],
+      };
     }
-    return null;
+
+    return data;
   }
 
   Future<void> requestNextCourses(int orderId) async {

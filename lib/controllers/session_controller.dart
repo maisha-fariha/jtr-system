@@ -142,7 +142,7 @@ class SessionController extends GetxController {
       final loaded = await _orderRepository.getOpenOrders(
         forceRefresh: forceRefresh,
       );
-      _mergeRemoteOrders(loaded);
+      orders.assignAll(loaded);
       unawaited(_enrichMissingOrderDetails());
     } on ApiException catch (e) {
       ordersError.value = e.message;
@@ -157,12 +157,6 @@ class SessionController extends GetxController {
     } finally {
       isLoadingOrders.value = false;
     }
-  }
-
-  void _mergeRemoteOrders(List<SessionOrder> remoteOrders) {
-    final localOnly =
-        orders.where((order) => order.isLocalOnly).toList(growable: false);
-    orders.assignAll([...remoteOrders, ...localOnly]);
   }
 
   Future<void> _enrichMissingOrderDetails() async {
@@ -316,15 +310,25 @@ class SessionController extends GetxController {
         tables: tables,
       );
 
-      final orderNumber = created.number;
-      final idx = orders.indexWhere((order) => order.id == created.id);
-      if (idx >= 0) {
-        orders[idx] = created.copyWith(number: orderNumber);
-      } else {
-        orders.insert(0, created.copyWith(number: orderNumber));
+      await loadOpenOrders(forceRefresh: true);
+
+      SessionOrder? orderInList;
+      for (final order in orders) {
+        if (order.id == created.id) {
+          orderInList = order;
+          break;
+        }
       }
 
-      openTableDetails(orderNumber);
+      if (orderInList == null) {
+        _showSnack(
+          'Erreur',
+          'Commande créée mais absente de la liste API.',
+        );
+        return;
+      }
+
+      openTableDetails(orderInList.number);
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
     } catch (_) {
@@ -666,9 +670,11 @@ class SessionController extends GetxController {
     try {
       if (!order.isLocalOnly) {
         await _orderRepository.closeOrder(order.id);
+        await loadOpenOrders(forceRefresh: true);
+      } else {
+        orders.removeAt(idx);
       }
 
-      orders.removeAt(idx);
       _clearUiStateForOrder(orderNumber);
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
@@ -714,8 +720,8 @@ class SessionController extends GetxController {
           products: offeredProducts,
         );
       } else {
-        final updated = await _orderRepository.applyTableOffer(order.id);
-        orders[idx] = updated.copyWith(number: order.number);
+        await _orderRepository.applyTableOffer(order.id);
+        await loadOpenOrders(forceRefresh: true);
       }
 
       _showSnack(

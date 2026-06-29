@@ -18,6 +18,9 @@ class ResolvedTable {
 class OrderMapper {
   OrderMapper._();
 
+  static String tableDisplayNumber(String tableNumber) =>
+      'T${tableNumber.trim()}';
+
   static SessionOrder fromOpenOrder(OpenOrderSummary summary) {
     return SessionOrder(
       id: summary.id,

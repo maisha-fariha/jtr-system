@@ -128,12 +128,10 @@ class AuthRepository {
     return session;
   }
 
-  Future<void> restoreSessionToken() async {
-    final token = _local.readToken();
-    if (token != null && token.isNotEmpty) {
-      _apiClient.setAuthToken(token);
-      logAuthToken(token, source: 'restored');
-    }
+  Future<void> clearSessionOnAppStart() async {
+    await _local.clearSession();
+    _apiClient.setAuthToken(null);
+    logAuthTokenCleared(source: 'app_start');
   }
 
   Future<void> logout() async {

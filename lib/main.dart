@@ -12,7 +12,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppBinding().dependencies();
   await Get.find<HiveStorage>().init();
-  await Get.find<AuthRepository>().restoreSessionToken();
+  await Get.find<AuthRepository>().clearSessionOnAppStart();
   runApp(const JtrSystemApp());
 }
 

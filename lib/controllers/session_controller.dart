@@ -141,8 +141,10 @@ class SessionController extends GetxController {
       if (forceRefresh) {
         await loadActiveDay(forceRefresh: true);
       }
-      final loaded = await _sessionRepository.getSessionOrders(
-        forceRefresh: forceRefresh,
+      final loaded = await _mergeThinOrderRows(
+        await _sessionRepository.getSessionOrders(
+          forceRefresh: forceRefresh,
+        ),
       );
       orders.assignAll(loaded);
     } on ApiException catch (e) {
@@ -158,6 +160,36 @@ class SessionController extends GetxController {
     } finally {
       isLoadingOrders.value = false;
     }
+  }
+
+  Future<List<SessionOrder>> _mergeThinOrderRows(
+    List<SessionOrder> summaries,
+  ) async {
+    final merged = <SessionOrder>[];
+
+    for (final summary in summaries) {
+      if (summary.id <= 0) {
+        merged.add(summary);
+        continue;
+      }
+
+      final needsDetail = summary.products.isEmpty ||
+          summary.total == OrderMapper.formatPrice('0');
+
+      if (!needsDetail) {
+        merged.add(summary);
+        continue;
+      }
+
+      try {
+        final detail = await _orderRepository.getOrderDetail(summary.id);
+        merged.add(detail.copyWith(number: summary.number));
+      } catch (_) {
+        merged.add(summary);
+      }
+    }
+
+    return merged;
   }
 
   void _upsertOrderInList(SessionOrder order) {
@@ -350,7 +382,7 @@ class SessionController extends GetxController {
         _showCreateOrderError('Table $tableNumber introuvable.');
         return;
       }
-      if (target.hasActiveOrder) {
+      if (OrderMapper.isTableInUse(tables, tableNumber)) {
         TableOccupiedDialog.show(
           userName: _currentUserDisplayName,
           tableNumber: tableNumber,
@@ -417,7 +449,7 @@ class SessionController extends GetxController {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
 
-    if (OrderMapper.hasExistingActiveOrder(
+    if (OrderMapper.isTableInUse(
       _sessionRepository.cachedTables,
       normalized,
     )) {

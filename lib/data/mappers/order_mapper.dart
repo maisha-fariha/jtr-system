@@ -32,12 +32,15 @@ class OrderMapper {
   static String tableDisplayNumber(String tableNumber) =>
       'T${tableNumber.trim()}';
 
-  /// Builds session rows from [GET /api/tables/list] (`active_order` per table).
+  /// Builds session rows from [GET /api/tables/list]:
+  /// tables with [active_order] and open tables with [session] only.
   static List<SessionOrder> sessionOrdersFromTables(
     List<Map<String, dynamic>> tables,
   ) {
-    final orders = <SessionOrder>[];
+    final byDisplay = <String, SessionOrder>{};
+    final sortMillisByDisplay = <String, int>{};
 
+    // Pass 1: rows with active_order always win (e.g. separated T25 vs parent session).
     for (final table in tables) {
       final activeOrder = table['active_order'];
       if (activeOrder is! Map<String, dynamic>) continue;
@@ -50,31 +53,90 @@ class OrderMapper {
         '${tableNumber ?? tableNumberFromDetail(activeOrder) ?? orderId}',
       );
 
-      orders.add(
-        fromOrderDetail(activeOrder).copyWith(number: displayNumber),
-      );
+      byDisplay[displayNumber] =
+          fromOrderDetail(activeOrder).copyWith(number: displayNumber);
+      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
     }
 
-    orders.sort((a, b) {
-      final aCreated = _orderCreatedAtMillis(a.id, tables);
-      final bCreated = _orderCreatedAtMillis(b.id, tables);
-      return bCreated.compareTo(aCreated);
-    });
+    // Pass 2: session-only tables not already represented by an order.
+    for (final table in tables) {
+      if (!_hasOpenSession(table)) continue;
 
-    return orders;
+      final sessionOrder = fromTableSession(table);
+      final displayNumber = sessionOrder.number;
+      if (byDisplay.containsKey(displayNumber)) continue;
+
+      byDisplay[displayNumber] = sessionOrder;
+      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
+    }
+
+    final displayNumbers = byDisplay.keys.toList()
+      ..sort(
+        (a, b) => (sortMillisByDisplay[b] ?? 0)
+            .compareTo(sortMillisByDisplay[a] ?? 0),
+      );
+
+    return displayNumbers.map((number) => byDisplay[number]!).toList();
   }
 
-  static int _orderCreatedAtMillis(int orderId, List<Map<String, dynamic>> tables) {
-    for (final table in tables) {
-      final activeOrder = table['active_order'];
-      if (activeOrder is! Map<String, dynamic>) continue;
-      if ((activeOrder['id'] as num?)?.toInt() != orderId) continue;
+  static bool _hasOpenSession(Map<String, dynamic> table) {
+    if (_activeOrderId(table) != null) return false;
 
+    if (table['session'] is Map<String, dynamic>) return true;
+    if (table['status'] == 'open') return true;
+    if (table['is_locked'] == true) return true;
+
+    return false;
+  }
+
+  static SessionOrder fromTableSession(Map<String, dynamic> table) {
+    final tableId = (table['id'] as num?)?.toInt() ?? 0;
+    final tableNumber = (table['table_number'] as num?)?.toInt() ?? tableId;
+    final session = table['session'];
+    final sessionMap =
+        session is Map<String, dynamic> ? session : const <String, dynamic>{};
+
+    final waiterName = sessionMap['waiter_name'] as String? ?? '—';
+    final guests = sessionMap['number_of_guests'];
+    final floorName = table['floor_name'] as String? ?? 'SUR PLACE';
+
+    return SessionOrder(
+      id: -tableId,
+      number: tableDisplayNumber('$tableNumber'),
+      numberColor: AppTheme.primary,
+      group: '1',
+      poste: _shortPoste(waiterName),
+      profitCenter: floorName.toUpperCase(),
+      couverts: '${guests ?? 0}',
+      impressionCount: 0,
+      impressionColor: impressionColorFor(0),
+      total: formatPrice('0'),
+      products: const [],
+    );
+  }
+
+  static int _tableSortMillis(Map<String, dynamic> table) {
+    final activeOrder = table['active_order'];
+    if (activeOrder is Map<String, dynamic>) {
       final createdAt = activeOrder['created_at'];
       if (createdAt is String) {
         return DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
       }
     }
+
+    final session = table['session'];
+    if (session is Map<String, dynamic>) {
+      final lockedAt = session['locked_at'];
+      if (lockedAt is String) {
+        return DateTime.tryParse(lockedAt)?.millisecondsSinceEpoch ?? 0;
+      }
+    }
+
+    final tableLockedAt = table['locked_at'];
+    if (tableLockedAt is String) {
+      return DateTime.tryParse(tableLockedAt)?.millisecondsSinceEpoch ?? 0;
+    }
+
     return 0;
   }
 
@@ -82,7 +144,7 @@ class OrderMapper {
     List<Map<String, dynamic>> tables,
     String tableNumber,
   ) {
-    return hasExistingActiveOrder(tables, tableNumber);
+    return isTableInUse(tables, tableNumber);
   }
 
   static bool hasExistingActiveOrder(
@@ -91,6 +153,23 @@ class OrderMapper {
   ) {
     final resolved = resolveTableForNewOrder(tables, tableNumber);
     return resolved?.hasActiveOrder ?? false;
+  }
+
+  /// Table already has an order or an open session (no new table entry).
+  static bool isTableInUse(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    if (hasExistingActiveOrder(tables, tableNumber)) return true;
+
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      if (_hasOpenSession(table)) return true;
+    }
+
+    return false;
   }
 
   /// Picks the table row used for [POST /api/orders] (available seat first).
@@ -136,7 +215,9 @@ class OrderMapper {
       couverts: '${data['number_of_guests'] ?? 0}',
       impressionCount: printCount,
       impressionColor: impressionColorFor(printCount),
-      total: formatPrice('${data['total_price'] ?? '0'}'),
+      total: formatPrice(
+        '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
+      ),
       products: extractProducts(data),
     );
   }

@@ -13,6 +13,7 @@ import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../controllers/table_details_controller.dart';
+import '../data/repositories/auth_repository.dart';
 import '../pages/table_details_page.dart';
 
 class AppRoutes {
@@ -43,14 +44,14 @@ class AppPages {
       name: AppRoutes.connect,
       page: () => const ConnectPage(),
       binding: BindingsBuilder(() {
-        Get.put(ConnectController());
+        Get.put(ConnectController(authRepository: Get.find<AuthRepository>()));
       }),
     ),
     GetPage(
       name: AppRoutes.login,
       page: () => const LoginPage(),
       binding: BindingsBuilder(() {
-        Get.put(LoginController());
+        Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
       }),
     ),
     GetPage(

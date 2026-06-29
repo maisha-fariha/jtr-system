@@ -1,11 +1,17 @@
 import 'package:get/get.dart';
 
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 
 class AppNavigation {
   AppNavigation._();
 
-  static void logout() => Get.offAllNamed(AppRoutes.home);
+  static Future<void> logout() async {
+    if (Get.isRegistered<AuthRepository>()) {
+      await Get.find<AuthRepository>().logout();
+    }
+    Get.offAllNamed(AppRoutes.home);
+  }
 
   static void _closeOverlays() {
     while (Get.isDialogOpen == true || Get.isBottomSheetOpen == true) {

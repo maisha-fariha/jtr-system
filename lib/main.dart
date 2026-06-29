@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import 'bindings/app_binding.dart';
 import 'controllers/theme_controller.dart';
+import 'core/storage/hive_storage.dart';
+import 'data/repositories/auth_repository.dart';
 import 'routes/app_pages.dart';
 import 'utils/app_theme.dart';
 
-void main() {
-  // ThemeController must be available before the first route builds.
-  Get.put(ThemeController());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  AppBinding().dependencies();
+  await Get.find<HiveStorage>().init();
+  await Get.find<AuthRepository>().restoreSessionToken();
   runApp(const JtrSystemApp());
 }
 
@@ -25,6 +30,7 @@ class JtrSystemApp extends StatelessWidget {
         themeMode: themeController.isDark.value
             ? ThemeMode.dark
             : ThemeMode.light,
+        initialBinding: AppBinding(),
         getPages: AppPages.routes,
         initialRoute: AppRoutes.home,
         debugShowCheckedModeBanner: false,

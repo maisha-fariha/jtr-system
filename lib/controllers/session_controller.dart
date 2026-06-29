@@ -6,6 +6,7 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../data/repositories/auth_repository.dart';
 import '../controllers/login_controller.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -216,6 +217,14 @@ class SessionController extends GetxController {
   }
 
   String get _currentUserDisplayName {
+    if (Get.isRegistered<AuthRepository>()) {
+      final session = Get.find<AuthRepository>().cachedSession;
+      final name = session?.user.name;
+      if (name != null && name.isNotEmpty) {
+        return name.split(' ').first;
+      }
+    }
+
     if (Get.isRegistered<LoginController>()) {
       final login = Get.find<LoginController>();
       final selected = login.selectedUser.value;

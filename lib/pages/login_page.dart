@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/login_controller.dart';
-import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/themed_asset_image.dart';
@@ -57,9 +56,31 @@ class LoginPage extends GetView<LoginController> {
                   const SizedBox(height: 40),
                   const ThemedAssetImage.logo(),
                   const SizedBox(height: 48),
-                  UserIdentifiantField(
-                    controller: controller.identifiantFieldController,
-                    showFieldIcons: true,
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      UserIdentifiantField(
+                        controller: controller.identifiantFieldController,
+                        showFieldIcons: true,
+                      ),
+                      Obx(
+                        () => controller.isLoadingUsers.value
+                            ? ColoredBox(
+                                color: AppTheme.background.withValues(alpha: 0.7),
+                                child: const SizedBox(
+                                  width: double.infinity,
+                                  height: UserIdentifiantSuggestionsOverlay.fieldHeight,
+                                  child: Center(
+                                    child: CircularProgressIndicator(
+                                      color: AppTheme.primary,
+                                      strokeWidth: 2.5,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   _buildPasswordField(),
@@ -118,28 +139,44 @@ class LoginPage extends GetView<LoginController> {
   }
 
   Widget _buildLoginButton() {
-    return SizedBox(
-      width: double.infinity,
-      height: 56,
-      child: ElevatedButton(
-        onPressed: () => Get.offNamed(AppRoutes.session),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.primary,
-          foregroundColor: Colors.white,
-          elevation: 4,
-          shadowColor: AppTheme.primary.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+    return Obx(
+      () {
+        final loading = controller.isLoading.value;
+        return SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton(
+            onPressed: loading ? null : controller.login,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor:
+                  AppTheme.primary.withValues(alpha: 0.45),
+              elevation: 4,
+              shadowColor: AppTheme.primary.withValues(alpha: 0.4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+            child: loading
+                ? const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text(
+                    'Se connecter',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
-        ),
-        child: const Text(
-          'Se connecter',
-          style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

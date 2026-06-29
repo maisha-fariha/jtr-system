@@ -1,0 +1,44 @@
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:get/get.dart';
+
+import '../core/network/api_client.dart';
+import '../core/storage/hive_storage.dart';
+import '../data/datasources/auth_local_datasource.dart';
+import '../data/datasources/auth_remote_datasource.dart';
+import '../data/repositories/auth_repository.dart';
+import '../services/connectivity_service.dart';
+import '../controllers/theme_controller.dart';
+
+class AppBinding extends Bindings {
+  @override
+  void dependencies() {
+    if (!Get.isRegistered<ThemeController>()) {
+      Get.put(ThemeController(), permanent: true);
+    }
+
+    Get.lazyPut<Connectivity>(() => Connectivity(), fenix: true);
+    Get.lazyPut<ConnectivityService>(
+      () => ConnectivityService(Get.find<Connectivity>()),
+      fenix: true,
+    );
+    Get.lazyPut<ApiClient>(() => ApiClient(), fenix: true);
+    Get.lazyPut<HiveStorage>(() => HiveStorage(), fenix: true);
+    Get.lazyPut<AuthLocalDataSource>(
+      () => AuthLocalDataSource(Get.find<HiveStorage>()),
+      fenix: true,
+    );
+    Get.lazyPut<AuthRemoteDataSource>(
+      () => AuthRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<AuthRepository>(
+      () => AuthRepository(
+        remote: Get.find<AuthRemoteDataSource>(),
+        local: Get.find<AuthLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+        apiClient: Get.find<ApiClient>(),
+      ),
+      fenix: true,
+    );
+  }
+}

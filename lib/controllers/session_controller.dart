@@ -15,6 +15,7 @@ import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
+import '../widgets/api_debug_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/table_occupied_dialog.dart';
@@ -157,6 +158,22 @@ class SessionController extends GetxController {
     } finally {
       isLoadingOrders.value = false;
     }
+  }
+
+  void _upsertOrderInList(SessionOrder order) {
+    final idx = orders.indexWhere((item) => item.id == order.id);
+    if (idx >= 0) {
+      orders[idx] = order.copyWith(number: orders[idx].number);
+      return;
+    }
+
+    final byNumber = orders.indexWhere((item) => item.number == order.number);
+    if (byNumber >= 0) {
+      orders[byNumber] = order.copyWith(number: orders[byNumber].number);
+      return;
+    }
+
+    orders.insert(0, order);
   }
 
   Future<void> _enrichMissingOrderDetails() async {
@@ -303,33 +320,31 @@ class SessionController extends GetxController {
     isCreatingOrder.value = true;
     try {
       final tables = await _sessionRepository.getTablesList();
-      final created = await _orderRepository.createTableOrder(
+      final result = await _orderRepository.createTableOrder(
         waiterId: waiterId,
         tableNumber: tableNumber,
         numberOfGuests: guests,
         tables: tables,
       );
+      final created = result.order;
 
-      await loadOpenOrders(forceRefresh: true);
+      final loaded = await _orderRepository.refreshOpenOrdersEnsuring(
+        created.id,
+        fallbackTableNumber: int.tryParse(tableNumber.trim()),
+      );
+      orders.assignAll(loaded);
+      _upsertOrderInList(created);
 
-      SessionOrder? orderInList;
-      for (final order in orders) {
-        if (order.id == created.id) {
-          orderInList = order;
-          break;
-        }
-      }
-
-      if (orderInList == null) {
-        _showSnack(
-          'Erreur',
-          'Commande créée mais absente de la liste API.',
-        );
-        return;
-      }
-
-      openTableDetails(orderInList.number);
+      openTableDetails(created.number);
+      unawaited(loadOrderDetails(created.number, forceRefresh: true));
     } on ApiException catch (e) {
+      final log = _orderRepository.lastCreateOrderLog;
+      if (log != null && log.trim().isNotEmpty) {
+        ApiDebugDialog.show(
+          title: 'Erreur création commande — API',
+          body: '$log\n\nMESSAGE: ${e.message}',
+        );
+      }
       _showSnack('Erreur', e.message);
     } catch (_) {
       _showSnack('Erreur', 'Impossible de créer la commande.');

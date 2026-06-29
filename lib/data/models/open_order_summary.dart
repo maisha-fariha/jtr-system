@@ -9,6 +9,7 @@ abstract class OpenOrderSummary with _$OpenOrderSummary {
     required int id,
     @JsonKey(name: 'order_number') required String orderNumber,
     @JsonKey(name: 'table_id') int? tableId,
+    @JsonKey(name: 'table_number') int? tableNumber,
     required String status,
     @JsonKey(name: 'total_price') required String totalPrice,
     @JsonKey(name: 'created_at') String? createdAt,

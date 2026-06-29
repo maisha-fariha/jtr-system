@@ -15,7 +15,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$OpenOrderSummary {
 
- int get id;@JsonKey(name: 'order_number') String get orderNumber;@JsonKey(name: 'table_id') int? get tableId; String get status;@JsonKey(name: 'total_price') String get totalPrice;@JsonKey(name: 'created_at') String? get createdAt;
+ int get id;@JsonKey(name: 'order_number') String get orderNumber;@JsonKey(name: 'table_id') int? get tableId;@JsonKey(name: 'table_number') int? get tableNumber; String get status;@JsonKey(name: 'total_price') String get totalPrice;@JsonKey(name: 'created_at') String? get createdAt;
 /// Create a copy of OpenOrderSummary
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -28,16 +28,16 @@ $OpenOrderSummaryCopyWith<OpenOrderSummary> get copyWith => _$OpenOrderSummaryCo
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is OpenOrderSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.orderNumber, orderNumber) || other.orderNumber == orderNumber)&&(identical(other.tableId, tableId) || other.tableId == tableId)&&(identical(other.status, status) || other.status == status)&&(identical(other.totalPrice, totalPrice) || other.totalPrice == totalPrice)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is OpenOrderSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.orderNumber, orderNumber) || other.orderNumber == orderNumber)&&(identical(other.tableId, tableId) || other.tableId == tableId)&&(identical(other.tableNumber, tableNumber) || other.tableNumber == tableNumber)&&(identical(other.status, status) || other.status == status)&&(identical(other.totalPrice, totalPrice) || other.totalPrice == totalPrice)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,orderNumber,tableId,status,totalPrice,createdAt);
+int get hashCode => Object.hash(runtimeType,id,orderNumber,tableId,tableNumber,status,totalPrice,createdAt);
 
 @override
 String toString() {
-  return 'OpenOrderSummary(id: $id, orderNumber: $orderNumber, tableId: $tableId, status: $status, totalPrice: $totalPrice, createdAt: $createdAt)';
+  return 'OpenOrderSummary(id: $id, orderNumber: $orderNumber, tableId: $tableId, tableNumber: $tableNumber, status: $status, totalPrice: $totalPrice, createdAt: $createdAt)';
 }
 
 
@@ -48,7 +48,7 @@ abstract mixin class $OpenOrderSummaryCopyWith<$Res>  {
   factory $OpenOrderSummaryCopyWith(OpenOrderSummary value, $Res Function(OpenOrderSummary) _then) = _$OpenOrderSummaryCopyWithImpl;
 @useResult
 $Res call({
- int id,@JsonKey(name: 'order_number') String orderNumber,@JsonKey(name: 'table_id') int? tableId, String status,@JsonKey(name: 'total_price') String totalPrice,@JsonKey(name: 'created_at') String? createdAt
+ int id,@JsonKey(name: 'order_number') String orderNumber,@JsonKey(name: 'table_id') int? tableId,@JsonKey(name: 'table_number') int? tableNumber, String status,@JsonKey(name: 'total_price') String totalPrice,@JsonKey(name: 'created_at') String? createdAt
 });
 
 
@@ -65,11 +65,12 @@ class _$OpenOrderSummaryCopyWithImpl<$Res>
 
 /// Create a copy of OpenOrderSummary
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? orderNumber = null,Object? tableId = freezed,Object? status = null,Object? totalPrice = null,Object? createdAt = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? id = null,Object? orderNumber = null,Object? tableId = freezed,Object? tableNumber = freezed,Object? status = null,Object? totalPrice = null,Object? createdAt = freezed,}) {
   return _then(_self.copyWith(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as int,orderNumber: null == orderNumber ? _self.orderNumber : orderNumber // ignore: cast_nullable_to_non_nullable
 as String,tableId: freezed == tableId ? _self.tableId : tableId // ignore: cast_nullable_to_non_nullable
+as int?,tableNumber: freezed == tableNumber ? _self.tableNumber : tableNumber // ignore: cast_nullable_to_non_nullable
 as int?,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as String,totalPrice: null == totalPrice ? _self.totalPrice : totalPrice // ignore: cast_nullable_to_non_nullable
 as String,createdAt: freezed == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable
@@ -158,10 +159,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId, @JsonKey(name: 'table_number')  int? tableNumber,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _OpenOrderSummary() when $default != null:
-return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.totalPrice,_that.createdAt);case _:
+return $default(_that.id,_that.orderNumber,_that.tableId,_that.tableNumber,_that.status,_that.totalPrice,_that.createdAt);case _:
   return orElse();
 
 }
@@ -179,10 +180,10 @@ return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.tota
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId, @JsonKey(name: 'table_number')  int? tableNumber,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)  $default,) {final _that = this;
 switch (_that) {
 case _OpenOrderSummary():
-return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.totalPrice,_that.createdAt);case _:
+return $default(_that.id,_that.orderNumber,_that.tableId,_that.tableNumber,_that.status,_that.totalPrice,_that.createdAt);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -199,10 +200,10 @@ return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.tota
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( int id, @JsonKey(name: 'order_number')  String orderNumber, @JsonKey(name: 'table_id')  int? tableId, @JsonKey(name: 'table_number')  int? tableNumber,  String status, @JsonKey(name: 'total_price')  String totalPrice, @JsonKey(name: 'created_at')  String? createdAt)?  $default,) {final _that = this;
 switch (_that) {
 case _OpenOrderSummary() when $default != null:
-return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.totalPrice,_that.createdAt);case _:
+return $default(_that.id,_that.orderNumber,_that.tableId,_that.tableNumber,_that.status,_that.totalPrice,_that.createdAt);case _:
   return null;
 
 }
@@ -214,12 +215,13 @@ return $default(_that.id,_that.orderNumber,_that.tableId,_that.status,_that.tota
 @JsonSerializable()
 
 class _OpenOrderSummary implements OpenOrderSummary {
-  const _OpenOrderSummary({required this.id, @JsonKey(name: 'order_number') required this.orderNumber, @JsonKey(name: 'table_id') this.tableId, required this.status, @JsonKey(name: 'total_price') required this.totalPrice, @JsonKey(name: 'created_at') this.createdAt});
+  const _OpenOrderSummary({required this.id, @JsonKey(name: 'order_number') required this.orderNumber, @JsonKey(name: 'table_id') this.tableId, @JsonKey(name: 'table_number') this.tableNumber, required this.status, @JsonKey(name: 'total_price') required this.totalPrice, @JsonKey(name: 'created_at') this.createdAt});
   factory _OpenOrderSummary.fromJson(Map<String, dynamic> json) => _$OpenOrderSummaryFromJson(json);
 
 @override final  int id;
 @override@JsonKey(name: 'order_number') final  String orderNumber;
 @override@JsonKey(name: 'table_id') final  int? tableId;
+@override@JsonKey(name: 'table_number') final  int? tableNumber;
 @override final  String status;
 @override@JsonKey(name: 'total_price') final  String totalPrice;
 @override@JsonKey(name: 'created_at') final  String? createdAt;
@@ -237,16 +239,16 @@ Map<String, dynamic> toJson() {
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _OpenOrderSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.orderNumber, orderNumber) || other.orderNumber == orderNumber)&&(identical(other.tableId, tableId) || other.tableId == tableId)&&(identical(other.status, status) || other.status == status)&&(identical(other.totalPrice, totalPrice) || other.totalPrice == totalPrice)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _OpenOrderSummary&&(identical(other.id, id) || other.id == id)&&(identical(other.orderNumber, orderNumber) || other.orderNumber == orderNumber)&&(identical(other.tableId, tableId) || other.tableId == tableId)&&(identical(other.tableNumber, tableNumber) || other.tableNumber == tableNumber)&&(identical(other.status, status) || other.status == status)&&(identical(other.totalPrice, totalPrice) || other.totalPrice == totalPrice)&&(identical(other.createdAt, createdAt) || other.createdAt == createdAt));
 }
 
 @JsonKey(includeFromJson: false, includeToJson: false)
 @override
-int get hashCode => Object.hash(runtimeType,id,orderNumber,tableId,status,totalPrice,createdAt);
+int get hashCode => Object.hash(runtimeType,id,orderNumber,tableId,tableNumber,status,totalPrice,createdAt);
 
 @override
 String toString() {
-  return 'OpenOrderSummary(id: $id, orderNumber: $orderNumber, tableId: $tableId, status: $status, totalPrice: $totalPrice, createdAt: $createdAt)';
+  return 'OpenOrderSummary(id: $id, orderNumber: $orderNumber, tableId: $tableId, tableNumber: $tableNumber, status: $status, totalPrice: $totalPrice, createdAt: $createdAt)';
 }
 
 
@@ -257,7 +259,7 @@ abstract mixin class _$OpenOrderSummaryCopyWith<$Res> implements $OpenOrderSumma
   factory _$OpenOrderSummaryCopyWith(_OpenOrderSummary value, $Res Function(_OpenOrderSummary) _then) = __$OpenOrderSummaryCopyWithImpl;
 @override @useResult
 $Res call({
- int id,@JsonKey(name: 'order_number') String orderNumber,@JsonKey(name: 'table_id') int? tableId, String status,@JsonKey(name: 'total_price') String totalPrice,@JsonKey(name: 'created_at') String? createdAt
+ int id,@JsonKey(name: 'order_number') String orderNumber,@JsonKey(name: 'table_id') int? tableId,@JsonKey(name: 'table_number') int? tableNumber, String status,@JsonKey(name: 'total_price') String totalPrice,@JsonKey(name: 'created_at') String? createdAt
 });
 
 
@@ -274,11 +276,12 @@ class __$OpenOrderSummaryCopyWithImpl<$Res>
 
 /// Create a copy of OpenOrderSummary
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? orderNumber = null,Object? tableId = freezed,Object? status = null,Object? totalPrice = null,Object? createdAt = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? id = null,Object? orderNumber = null,Object? tableId = freezed,Object? tableNumber = freezed,Object? status = null,Object? totalPrice = null,Object? createdAt = freezed,}) {
   return _then(_OpenOrderSummary(
 id: null == id ? _self.id : id // ignore: cast_nullable_to_non_nullable
 as int,orderNumber: null == orderNumber ? _self.orderNumber : orderNumber // ignore: cast_nullable_to_non_nullable
 as String,tableId: freezed == tableId ? _self.tableId : tableId // ignore: cast_nullable_to_non_nullable
+as int?,tableNumber: freezed == tableNumber ? _self.tableNumber : tableNumber // ignore: cast_nullable_to_non_nullable
 as int?,status: null == status ? _self.status : status // ignore: cast_nullable_to_non_nullable
 as String,totalPrice: null == totalPrice ? _self.totalPrice : totalPrice // ignore: cast_nullable_to_non_nullable
 as String,createdAt: freezed == createdAt ? _self.createdAt : createdAt // ignore: cast_nullable_to_non_nullable

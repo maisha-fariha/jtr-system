@@ -20,6 +20,13 @@ class TableDetailsController extends GetxController {
     super.onInit();
     final args = Get.arguments;
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
+
+    if (orderNumber.isNotEmpty && Get.isRegistered<SessionController>()) {
+      Get.find<SessionController>().loadOrderDetails(
+        orderNumber,
+        forceRefresh: true,
+      );
+    }
   }
 
   SessionOrder? get order {

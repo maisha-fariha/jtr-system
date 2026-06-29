@@ -1,10 +1,12 @@
 import '../../core/network/api_exception.dart';
 import '../../models/session_order.dart';
+import '../models/create_table_order_result.dart';
 import '../../services/connectivity_service.dart';
 import '../datasources/order_local_datasource.dart';
 import '../datasources/order_remote_datasource.dart';
 import '../mappers/order_mapper.dart';
 import '../models/open_order_summary.dart';
+import '../../utils/api_log.dart';
 
 class OrderRepository {
   OrderRepository({
@@ -18,6 +20,9 @@ class OrderRepository {
   final OrderRemoteDataSource _remote;
   final OrderLocalDataSource _local;
   final ConnectivityService _connectivity;
+
+  /// Last create-order debug trace (for on-screen error/success dialog).
+  String? lastCreateOrderLog;
 
   List<SessionOrder> get cachedOpenOrders => mergeCachedDetails(
         _local.readOpenOrders().map(OrderMapper.fromOpenOrder).toList(),
@@ -151,6 +156,38 @@ class OrderRepository {
   Future<List<SessionOrder>> refreshOpenOrders() =>
       getOpenOrders(forceRefresh: true);
 
+  /// Refreshes open orders from the API and keeps [ensureOrderId] visible when
+  /// the list endpoint lags behind [POST /api/orders] (detail still from API).
+  Future<List<SessionOrder>> refreshOpenOrdersEnsuring(
+    int ensureOrderId, {
+    int? fallbackTableNumber,
+  }) async {
+    if (!await _connectivity.isOnline) {
+      return cachedOpenOrders;
+    }
+
+    final data = await _remote.fetchOpenOrders();
+    var summaries = List<OpenOrderSummary>.from(data.openOrders);
+
+    if (!summaries.any((order) => order.id == ensureOrderId)) {
+      final detail = _local.readOrderDetail(ensureOrderId) ??
+          await _remote.fetchOrderDetail(ensureOrderId);
+      await _local.saveOrderDetail(ensureOrderId, detail);
+      summaries = [
+        OrderMapper.summaryFromDetail(
+          detail,
+          fallbackTableNumber: fallbackTableNumber,
+        ),
+        ...summaries,
+      ];
+    }
+
+    await _local.saveOpenOrders(summaries);
+    return mergeCachedDetails(
+      summaries.map(OrderMapper.fromOpenOrder).toList(),
+    );
+  }
+
   OpenOrderSummary? findCachedSummary(int orderId) {
     for (final order in _local.readOpenOrders()) {
       if (order.id == orderId) return order;
@@ -158,13 +195,15 @@ class OrderRepository {
     return null;
   }
 
-  Future<SessionOrder> createTableOrder({
+  Future<CreateTableOrderResult> createTableOrder({
     required int waiterId,
     required String tableNumber,
     required int numberOfGuests,
     required List<Map<String, dynamic>> tables,
     int? salesZoneId,
   }) async {
+    final apiLog = StringBuffer();
+
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Création impossible hors ligne. Vérifiez votre réseau.',
@@ -176,87 +215,89 @@ class OrderRepository {
       throw ApiException(message: 'Table $tableNumber introuvable.');
     }
 
-    final sessionPayload = OrderMapper.buildStartTableSessionPayload(
+    apiLog.writeln('Table résolue: id=${table.id}, numéro=$tableNumber');
+
+    final orderPayload = OrderMapper.buildCreateOrderPayload(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: salesZoneId ?? table.salesZoneId,
     );
 
     Map<String, dynamic> created;
+    _remote.lastApiLog = null;
     try {
-      created = await _remote.startTableSession(table.id, sessionPayload);
-    } on ApiException {
-      final orderPayload = OrderMapper.buildCreateOrderPayload(
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        tableId: table.id,
-        salesZoneId: salesZoneId ?? table.salesZoneId,
-      );
       created = await _remote.createOrder(orderPayload);
+    } on ApiException catch (orderError) {
+      apiLog.writeln('── POST /api/orders échoué ──');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      apiLog.writeln('Raison: ${orderError.message}');
+      lastCreateOrderLog = apiLog.toString();
+      rethrow;
+    }
+
+    apiLog.writeln('── Via POST /api/orders ──');
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
     }
 
     created = _unwrapOrderResponse(created);
-    var orderId = (created['id'] as num?)?.toInt();
+    apiLog
+      ..writeln()
+      ..writeln('── Données extraites après création ──')
+      ..writeln(formatApiPayload(created));
 
-    if (orderId == null || !_hasOrderShape(created)) {
-      final resolvedId = orderId ?? await _resolveOrderIdForTable(table.id);
-      if (resolvedId != null) {
-        orderId = resolvedId;
-        created = await _remote.fetchOrderDetail(resolvedId);
+    var orderId = OrderMapper.orderIdFromDetail(created);
+    if (orderId <= 0) {
+      orderId = (await _resolveOrderIdForTable(
+            tableId: table.id,
+            tableNumber: int.tryParse(tableNumber.trim()),
+          )) ??
+          0;
+      if (orderId > 0) {
+        apiLog.writeln('── Order id résolu via open-orders: $orderId ──');
       }
     }
 
-    if (orderId == null) {
+    if (orderId <= 0) {
+      lastCreateOrderLog = apiLog.toString();
       throw ApiException(
         message:
             'Commande créée mais introuvable. Tirez pour rafraîchir la liste.',
       );
     }
 
-    await _waitForOrderInOpenList(orderId);
-    created = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, created);
+    apiLog.writeln('── GET /api/orders/$orderId (seat_orders) ──');
+    final detail = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, detail);
+    apiLog.writeln(formatApiPayload(detail));
+
+    final parsedTableNumber = int.tryParse(tableNumber.trim());
+    await refreshOpenOrdersEnsuring(
+      orderId,
+      fallbackTableNumber: parsedTableNumber,
+    );
+
+    final inOpenList = findCachedSummary(orderId) != null;
+    apiLog.writeln(
+      inOpenList
+          ? 'Présent dans open-orders: oui (id=$orderId)'
+          : 'Présent via détail commande: oui (id=$orderId)',
+    );
 
     final displayNumber = OrderMapper.tableDisplayNumber(tableNumber);
-    return OrderMapper.fromOrderDetail(created).copyWith(number: displayNumber);
-  }
+    final order =
+        OrderMapper.fromOrderDetail(detail).copyWith(number: displayNumber);
 
-  Future<void> _waitForOrderInOpenList(int orderId) async {
-    for (var attempt = 0; attempt < 5; attempt++) {
-      final data = await _remote.fetchOpenOrders();
-      await _local.saveOpenOrders(data.openOrders);
-      if (data.openOrders.any((order) => order.id == orderId)) {
-        return;
-      }
-      if (attempt < 4) {
-        await Future.delayed(Duration(milliseconds: 400 * (attempt + 1)));
-      }
-    }
+    apiLog
+      ..writeln()
+      ..writeln('── Résultat final ──')
+      ..writeln('orderId=${order.id}, affichage=${order.number}');
 
-    throw ApiException(
-      message: 'Commande créée mais absente des commandes ouvertes.',
-    );
-  }
-
-  bool _hasOrderShape(Map<String, dynamic> data) {
-    return data.containsKey('order_number') ||
-        data.containsKey('seat_orders') ||
-        data.containsKey('total_price');
-  }
-
-  Future<int?> _resolveOrderIdForTable(int tableId) async {
-    for (var attempt = 0; attempt < 5; attempt++) {
-      if (attempt > 0) {
-        await Future.delayed(Duration(milliseconds: 350 * attempt));
-      }
-
-      final openOrders = await _remote.fetchOpenOrders();
-      for (final summary in openOrders.openOrders) {
-        if (summary.tableId == tableId) {
-          return summary.id;
-        }
-      }
-    }
-    return null;
+    lastCreateOrderLog = apiLog.toString();
+    return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
   }
 
   Map<String, dynamic> _unwrapOrderResponse(Map<String, dynamic> data) {
@@ -276,6 +317,26 @@ class OrderRepository {
     }
 
     return data;
+  }
+
+  Future<int?> _resolveOrderIdForTable({
+    required int tableId,
+    int? tableNumber,
+  }) async {
+    for (var attempt = 0; attempt < 5; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(Duration(milliseconds: 350 * attempt));
+      }
+
+      final openOrders = await _remote.fetchOpenOrders();
+      for (final summary in openOrders.openOrders) {
+        if (summary.tableId == tableId) return summary.id;
+        if (tableNumber != null && summary.tableNumber == tableNumber) {
+          return summary.id;
+        }
+      }
+    }
+    return null;
   }
 
   Future<void> requestNextCourses(int orderId) async {

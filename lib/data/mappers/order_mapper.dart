@@ -21,12 +21,35 @@ class OrderMapper {
   static String tableDisplayNumber(String tableNumber) =>
       'T${tableNumber.trim()}';
 
+  /// Builds an open-orders row from [GET /api/orders/:id] when the list lags.
+  static OpenOrderSummary summaryFromDetail(
+    Map<String, dynamic> data, {
+    int? fallbackTableNumber,
+  }) {
+    final orderId = (data['id'] as num?)?.toInt() ?? 0;
+    final tableId = (data['table_id'] as num?)?.toInt();
+
+    var tableNumber = tableNumberFromDetail(data);
+    tableNumber ??= fallbackTableNumber;
+
+    return OpenOrderSummary(
+      id: orderId,
+      orderNumber: '${data['order_number'] ?? orderId}',
+      tableId: tableId,
+      tableNumber: tableNumber,
+      status: '${data['status'] ?? 'open'}',
+      totalPrice: '${data['total_price'] ?? '0'}',
+      createdAt: data['created_at'] as String?,
+    );
+  }
+
   static SessionOrder fromOpenOrder(OpenOrderSummary summary) {
     return SessionOrder(
       id: summary.id,
       number: displayKey(
         orderId: summary.id,
         tableId: summary.tableId,
+        tableNumber: summary.tableNumber,
       ),
       numberColor: AppTheme.primary,
       group: '1',
@@ -41,10 +64,10 @@ class OrderMapper {
   }
 
   static SessionOrder fromOrderDetail(Map<String, dynamic> data) {
-    final tableNumber = data['table_number'] as int?;
-    final tableId = data['table_id'] as int?;
-    final orderId = data['id'] as int? ?? 0;
-    final printCount = data['receipt_print_count'] as int? ?? 0;
+    final tableNumber = tableNumberFromDetail(data);
+    final tableId = (data['table_id'] as num?)?.toInt();
+    final orderId = orderIdFromDetail(data);
+    final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
 
     final salesZone = data['sales_zone'];
     final zoneName = salesZone is Map<String, dynamic>
@@ -70,11 +93,26 @@ class OrderMapper {
       impressionCount: printCount,
       impressionColor: impressionColorFor(printCount),
       total: formatPrice('${data['total_price'] ?? '0'}'),
-      products: _extractProducts(data),
+      products: extractProducts(data),
     );
   }
 
-  static List<OrderProduct> _extractProducts(Map<String, dynamic> data) {
+  static int orderIdFromDetail(Map<String, dynamic> data) =>
+      (data['id'] as num?)?.toInt() ?? 0;
+
+  static int? tableNumberFromDetail(Map<String, dynamic> data) {
+    final direct = (data['table_number'] as num?)?.toInt();
+    if (direct != null) return direct;
+
+    final table = data['table'];
+    if (table is Map<String, dynamic>) {
+      return (table['table_number'] as num?)?.toInt() ??
+          (table['number'] as num?)?.toInt();
+    }
+    return null;
+  }
+
+  static List<OrderProduct> extractProducts(Map<String, dynamic> data) {
     final products = <OrderProduct>[];
     final seatOrders = data['seat_orders'];
     if (seatOrders is! List) return products;
@@ -91,6 +129,10 @@ class OrderMapper {
 
         for (final item in items) {
           if (item is! Map<String, dynamic>) continue;
+
+          final status = item['status'] as String?;
+          if (status == 'cancelled') continue;
+
           final product = item['product'];
           final name = product is Map<String, dynamic>
               ? (product['name'] as String? ?? 'Article')
@@ -98,13 +140,17 @@ class OrderMapper {
           final qty = item['qty'] ?? 1;
           final subTotal = item['sub_total']?.toString() ?? '0';
           final isOffer = item['is_offer'] == true;
+          final comment = item['comment'];
+          final message = comment is String && comment.trim().isNotEmpty
+              ? comment.trim()
+              : null;
 
           products.add(
             OrderProduct(
               quantity: '$qty',
               name: name,
               price: isOffer ? '0,00 €' : formatPrice(subTotal),
-              message: item['comment'] as String?,
+              message: message,
             ),
           );
         }
@@ -191,14 +237,22 @@ class OrderMapper {
     required int tableId,
     int? salesZoneId,
   }) {
+    const seatNumber = 1;
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
       'number_of_guests': numberOfGuests,
       'table_id': tableId,
-      // Business flow: table + guests only. Backend requires seat_orders but
-      // not courses/items when opening an empty table.
       'seat_orders': [
-        {'seat_number': 1},
+        {
+          'seat_number': seatNumber,
+          'courses': [
+            {
+              'course_number': 1,
+              'seat_number': seatNumber,
+              'items': <Map<String, dynamic>>[],
+            },
+          ],
+        },
       ],
     };
 
@@ -254,10 +308,13 @@ class OrderMapper {
         if (course is! Map<String, dynamic>) continue;
         final status = course['status'] as String?;
         final courseId = course['id'];
-        if (courseId is! int) continue;
+        final courseIdInt = courseId is int
+            ? courseId
+            : (courseId is num ? courseId.toInt() : null);
+        if (courseIdInt == null) continue;
 
         if (status == 'to_be_continued' || status == 'pending') {
-          ids.add(courseId);
+          ids.add(courseIdInt);
         }
       }
     }
@@ -271,7 +328,10 @@ class OrderMapper {
       for (final course in courses) {
         if (course is! Map<String, dynamic>) continue;
         final courseId = course['id'];
-        if (courseId is int) ids.add(courseId);
+        final courseIdInt = courseId is int
+            ? courseId
+            : (courseId is num ? courseId.toInt() : null);
+        if (courseIdInt != null) ids.add(courseIdInt);
       }
     }
 

@@ -27,7 +27,10 @@ class MenuSelectionPage extends GetView<MenuSelectionController> {
             controller.dismissActiveSelection();
             return;
           }
-          AppNavigation.backToTableDetails(orderNumber: controller.orderNumber);
+          AppNavigation.backToTableDetails(
+            orderNumber: controller.orderNumber,
+            orderId: controller.orderId,
+          );
         },
         child: Scaffold(
         backgroundColor: AppTheme.background,
@@ -187,25 +190,42 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                             ),
                           ],
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(width: 8),
-              Material(
-                color: MenuSelectionController.successGreen,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  onTap: controller.finalizeActiveSelection,
-                  customBorder: const CircleBorder(),
-                  child: const SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Icon(Icons.check, color: Colors.white, size: 24),
+              Obx(() {
+                final saving = controller.isSaving.value;
+                return Material(
+                  color: MenuSelectionController.successGreen,
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    onTap: saving ? null : controller.finalizeActiveSelection,
+                    customBorder: const CircleBorder(),
+                    child: SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: saving
+                          ? const Padding(
+                              padding: EdgeInsets.all(10),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.check,
+                              color: Colors.white,
+                              size: 24,
+                            ),
+                    ),
                   ),
-                ),
-              ),
+                );
+              }),
             ],
           ),
         ),
@@ -288,12 +308,16 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            selection.menu.label,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.darkText,
+                          Expanded(
+                            child: Text(
+                              selection.menu.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.darkText,
+                              ),
                             ),
                           ),
                           Icon(
@@ -341,6 +365,8 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                         children: [
                           Text(
                             '1x ${item.name}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w700,
@@ -353,13 +379,19 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                             const SizedBox(height: 2),
                             Row(
                               children: [
-                                Text(
-                                  selection.messageForCourse(item.courseNumber)!,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.primary,
-                                    letterSpacing: 0.3,
+                                Expanded(
+                                  child: Text(
+                                    selection.messageForCourse(
+                                      item.courseNumber,
+                                    )!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppTheme.primary,
+                                      letterSpacing: 0.3,
+                                    ),
                                   ),
                                 ),
                                 const SizedBox(width: 2),
@@ -503,6 +535,7 @@ class _SelectionHeader extends GetView<MenuSelectionController> {
             IconButton(
               onPressed: () => AppNavigation.backToTableDetails(
                 orderNumber: controller.orderNumber,
+                orderId: controller.orderId,
               ),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
@@ -554,14 +587,18 @@ class _SidebarToolbar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: Row(
         children: [
-          const _SidebarToolButton(icon: Icons.restaurant),
-          const SizedBox(width: 8),
-          _SidebarToolButton(
-            icon: Icons.edit_outlined,
-            onTap: onEditTap,
+          const Expanded(child: _SidebarToolButton(icon: Icons.restaurant)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _SidebarToolButton(
+              icon: Icons.edit_outlined,
+              onTap: onEditTap,
+            ),
           ),
-          const SizedBox(width: 8),
-          const _SidebarToolButton(icon: Icons.keyboard_arrow_down),
+          const SizedBox(width: 6),
+          const Expanded(
+            child: _SidebarToolButton(icon: Icons.keyboard_arrow_down),
+          ),
         ],
       ),
     );
@@ -586,7 +623,7 @@ class _SidebarToolButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(10),
         child: Container(
-          width: 40,
+          width: double.infinity,
           height: 40,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
@@ -610,6 +647,41 @@ class _MenuList extends GetView<MenuSelectionController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      if (controller.isLoadingMenus.value) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final error = controller.menusError.value;
+      if (error != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              error,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+        );
+      }
+
+      if (controller.menus.isEmpty) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Aucun menu composé disponible.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+        );
+      }
+
+      if (controller.isLoadingMenuDetail.value) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
       final selectedIndex = controller.selectedMenuIndex.value;
 
       return ListView.separated(
@@ -700,6 +772,8 @@ class _MenuCard extends StatelessWidget {
                   children: [
                     Text(
                       menu.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -793,6 +867,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             IconButton(
               onPressed: () => AppNavigation.backToTableDetails(
                 orderNumber: controller.orderNumber,
+                orderId: controller.orderId,
               ),
               icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
             ),

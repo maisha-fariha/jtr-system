@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../data/demo_menu.dart';
-import '../data/demo_preset_menus.dart';
 import '../models/menu_active_selection.dart';
 import '../models/menu_category.dart';
 import '../models/menu_item.dart';
 import '../models/preset_menu.dart';
-import 'session_controller.dart';
 
 class OrderMenuController extends GetxController {
   final currentTable = ''.obs;
@@ -18,7 +15,7 @@ class OrderMenuController extends GetxController {
   int choiceNumber = 1;
 
   List<MenuCategory> get visibleCategories =>
-      presetMenu?.categories ?? demoMenuCategories;
+      presetMenu?.categories ?? const [];
 
   @override
   void onInit() {
@@ -30,12 +27,9 @@ class OrderMenuController extends GetxController {
     returnToSelection = args['returnToSelection'] == true;
     choiceNumber = (args['choiceNumber'] as int?) ?? 1;
 
-    final presetMenuNumber = args['presetMenu'] as int?;
-    if (presetMenuNumber != null) {
-      presetMenu = demoPresetMenus.firstWhere(
-        (menu) => menu.number == presetMenuNumber,
-        orElse: () => demoPresetMenus.first,
-      );
+    final menuArg = args['presetMenu'];
+    if (menuArg is PresetMenu) {
+      presetMenu = menuArg;
     }
 
     final initialSelections = args['initialSelections'];
@@ -54,11 +48,21 @@ class OrderMenuController extends GetxController {
   bool isSelected(MenuItem item) => _selected[_key(item)] == true;
 
   void toggleItem(MenuItem item) {
-    final k = _key(item);
-    _selected[k] = !(_selected[k] ?? false);
+    final key = _key(item);
+    final isOn = _selected[key] == true;
+
+    if (!isOn) {
+      for (final other in visibleCategories.expand((category) => category.items)) {
+        if (other.courseNumber == item.courseNumber && other.name != item.name) {
+          _selected.remove(_key(other));
+        }
+      }
+    }
+
+    _selected[key] = !isOn;
   }
 
-  int get selectedCount => _selected.values.where((v) => v).length;
+  int get selectedCount => _selected.values.where((value) => value).length;
 
   List<MenuItem> get selectedItems {
     final result = <MenuItem>[];
@@ -104,17 +108,6 @@ class OrderMenuController extends GetxController {
       return;
     }
 
-    final session = Get.find<SessionController>();
-    session.addProductsToOrder(currentTable.value, selectedItems);
     Get.back();
-  }
-
-  static Color courseColor(int courseNumber) {
-    return demoMenuCategories
-        .firstWhere(
-          (c) => c.number == courseNumber,
-          orElse: () => demoMenuCategories.first,
-        )
-        .color;
   }
 }

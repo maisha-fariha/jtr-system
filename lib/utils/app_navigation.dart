@@ -30,7 +30,10 @@ class AppNavigation {
   static void backToMenuSelection() => popUntilRoute(AppRoutes.menuSelection);
 
   /// From menu selection back to the table details screen.
-  static void backToTableDetails({String? orderNumber}) {
+  static void backToTableDetails({
+    String? orderNumber,
+    int? orderId,
+  }) {
     _closeOverlays();
 
     if (Get.currentRoute == AppRoutes.tableDetails) return;
@@ -47,7 +50,10 @@ class AppNavigation {
         orderNumber.isNotEmpty) {
       Get.offNamed(
         AppRoutes.tableDetails,
-        arguments: {'orderNumber': orderNumber},
+        arguments: {
+          'orderNumber': orderNumber,
+          if (orderId != null) 'orderId': orderId,
+        },
       );
     }
   }

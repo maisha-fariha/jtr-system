@@ -369,52 +369,22 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
-      final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-      final course = OrderMapper.resolveActiveCourse(
-        detail,
-        seatNumber: seatNumber,
-      );
-      final postCourseNumber = OrderMapper.resolvePostCourseNumber(course);
 
-      if (course.id == null) {
-        apiLog.writeln(
-          'ERREUR: aucune suite (course) sur la commande. '
-          'La commande doit avoir au moins un seat_order/course.',
-        );
-        lastAddItemLog = apiLog.toString();
-        throw ApiException(
-          message:
-              'Impossible d\'ajouter: aucune suite active sur cette commande.',
-        );
-      }
-
-      apiLog.writeln(
-        'seat_number=$seatNumber course_id=${course.id} '
-        'post_course_number=$postCourseNumber',
-      );
-
-      final body = OrderMapper.buildAddSeatOrderItemsPayload(
-        courseNumber: postCourseNumber,
+      final body = _buildPostAddBody(
+        detail: detail,
         productId: productId,
         unitPrice: unitPrice,
         qty: qty,
         comment: comment,
+        apiLog: apiLog,
       );
 
-      apiLog.writeln(
-        '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
-      );
-      apiLog.writeln(formatApiPayload(body));
-
-      await _remote.addSeatOrderItems(
+      await _postSeatOrderItems(
         orderId: orderId,
-        seatNumber: seatNumber,
+        detail: detail,
         body: body,
+        apiLog: apiLog,
       );
-
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
 
       apiLog.writeln('── GET /api/orders/$orderId (refresh) ──');
       final refreshed = await _remote.fetchOrderDetail(orderId);
@@ -465,26 +435,123 @@ class OrderRepository {
         },
       );
 
-      final payload = OrderMapper.appendComposedItem(
-        orderDetail: detail,
+      final body = _buildPostAddBody(
+        detail: detail,
         productId: productId,
-        subTotal: basePrice + supplement,
-        menuSelections: menuSelections,
+        unitPrice: basePrice,
+        qty: 1,
         comment: comment,
+        menuSelections: menuSelections,
+        subTotal: basePrice + supplement,
+        apiLog: apiLog,
       );
 
-      apiLog.writeln('── PUT /api/orders/$orderId ──');
-      apiLog.writeln('menu_selections: ${menuSelections.length}');
-      apiLog.writeln(formatApiPayload(payload));
+      await _postSeatOrderItems(
+        orderId: orderId,
+        detail: detail,
+        body: body,
+        apiLog: apiLog,
+      );
 
-      final updated = await _remote.updateOrder(orderId, payload);
-      await _local.saveOrderDetail(orderId, updated);
+      apiLog.writeln('── GET /api/orders/$orderId (refresh) ──');
+      final refreshed = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, refreshed);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return OrderMapper.fromOrderDetail(refreshed);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
       lastAddItemLog = apiLog.toString();
       rethrow;
+    }
+  }
+
+  Map<String, dynamic> _buildPostAddBody({
+    required Map<String, dynamic> detail,
+    required int productId,
+    required double unitPrice,
+    required int qty,
+    required String comment,
+    required StringBuffer apiLog,
+    List<Map<String, dynamic>>? menuSelections,
+    double? subTotal,
+  }) {
+    final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+    final course = OrderMapper.resolveActiveCourse(
+      detail,
+      seatNumber: seatNumber,
+    );
+    final postCourseNumber = OrderMapper.resolvePostCourseNumber(course);
+
+    if (course.id == null) {
+      apiLog.writeln(
+        'ERREUR: aucune suite (course) sur la commande. '
+        'La commande doit avoir au moins un seat_order/course.',
+      );
+      throw ApiException(
+        message:
+            'Impossible d\'ajouter: aucune suite active sur cette commande.',
+      );
+    }
+
+    apiLog.writeln(
+      'seat_number=$seatNumber course_id=${course.id} '
+      'post_course_number=$postCourseNumber',
+    );
+
+    return OrderMapper.buildAddSeatOrderItemsPayload(
+      courseNumber: postCourseNumber,
+      productId: productId,
+      unitPrice: unitPrice,
+      qty: qty,
+      comment: comment,
+      menuSelections: menuSelections,
+      subTotal: subTotal,
+    );
+  }
+
+  Future<void> _postSeatOrderItems({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required Map<String, dynamic> body,
+    required StringBuffer apiLog,
+  }) async {
+    final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+
+    apiLog.writeln(
+      '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
+    );
+    apiLog.writeln(formatApiPayload(body));
+
+    try {
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatNumber,
+        body: body,
+      );
+    } on ApiException catch (firstError) {
+      final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
+        detail,
+        seatNumber: seatNumber,
+      );
+      if (seatRecordId == null || seatRecordId == seatNumber) {
+        rethrow;
+      }
+
+      apiLog.writeln('POST échoué: ${firstError.message}');
+      apiLog.writeln('── Retry POST seat_order.id=$seatRecordId ──');
+
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatRecordId,
+        body: body,
+      );
+    }
+
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
     }
   }
 }

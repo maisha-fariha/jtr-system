@@ -81,7 +81,12 @@ class AppPages {
       name: AppRoutes.menuSelection,
       page: () => const MenuSelectionPage(),
       binding: BindingsBuilder(() {
-        Get.put(MenuSelectionController());
+        Get.put(
+          MenuSelectionController(
+            catalogRepository: Get.find<CatalogRepository>(),
+            orderRepository: Get.find<OrderRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(

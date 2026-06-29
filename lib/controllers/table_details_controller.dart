@@ -85,6 +85,13 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  int? get resolvedOrderId {
+    if (orderId != null && orderId! > 0) return orderId;
+    final current = order;
+    if (current != null && current.id > 0) return current.id;
+    return null;
+  }
+
   List<CatalogProductModel> get currentProducts {
     if (categories.isEmpty) return const [];
     final category = categories[selectedCategoryIndex.value];
@@ -144,9 +151,17 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.restaurant_menu) {
+      final id = resolvedOrderId;
+      if (id == null || id <= 0) {
+        Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+        return;
+      }
       Get.toNamed(
         AppRoutes.menuSelection,
-        arguments: {'orderNumber': orderNumber},
+        arguments: {
+          'orderNumber': orderNumber,
+          'orderId': id,
+        },
       );
       return;
     }
@@ -159,8 +174,8 @@ class TableDetailsController extends GetxController {
   Future<void> onProductTap(CatalogProductModel product) async {
     if (isAddingProduct.value) return;
 
-    final currentOrder = order;
-    if (currentOrder == null || currentOrder.id <= 0) {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
@@ -172,19 +187,19 @@ class TableDetailsController extends GetxController {
         await ComposedProductPickerSheet.show(
           product: detail,
           onConfirm: (selections) => _addComposedProduct(
-            orderId: currentOrder.id,
+            orderId: id,
             product: detail,
             menuSelections: selections,
-            displayNumber: currentOrder.number,
+            displayNumber: orderNumber,
           ),
         );
       } else {
         final updated = await _orderRepository.addSimpleProductToOrder(
-          orderId: currentOrder.id,
+          orderId: id,
           productId: product.id,
           unitPrice: product.unitPrice,
         );
-        _syncOrderInSession(updated, currentOrder.number);
+        _syncOrderInSession(updated, orderNumber);
       }
     } on ApiException catch (e) {
       ApiDebugDialog.show(

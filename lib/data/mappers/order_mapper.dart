@@ -626,6 +626,25 @@ class OrderMapper {
     return 1;
   }
 
+  /// Seat order row id (POST URL fallback when [seat_number] fails).
+  static int? resolveSeatOrderRecordId(
+    Map<String, dynamic> detail, {
+    int? seatNumber,
+  }) {
+    final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final seatNo = (seat['seat_number'] as num?)?.toInt();
+      if (seatNo == targetSeat) {
+        return (seat['id'] as num?)?.toInt();
+      }
+    }
+    return null;
+  }
+
   /// Active course on the target seat.
   static ({int? id, int number}) resolveActiveCourse(
     Map<String, dynamic> detail, {
@@ -686,17 +705,22 @@ class OrderMapper {
     required double unitPrice,
     int qty = 1,
     String comment = '',
+    List<Map<String, dynamic>>? menuSelections,
+    double? subTotal,
   }) {
+    final item = <String, dynamic>{
+      'product_id': productId,
+      'qty': qty,
+      'sub_total': subTotal ?? unitPrice * qty,
+      'comment': comment,
+    };
+    if (menuSelections != null && menuSelections.isNotEmpty) {
+      item['menu_selections'] = menuSelections;
+    }
+
     return {
       'course_number': courseNumber,
-      'items': [
-        {
-          'product_id': productId,
-          'qty': qty,
-          'sub_total': unitPrice * qty,
-          'comment': comment,
-        },
-      ],
+      'items': [item],
     };
   }
 

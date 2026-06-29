@@ -7,15 +7,20 @@ class PresetMenu {
     required this.priceValue,
     required this.description,
     required this.categories,
-  });
+    int? badgeNumber,
+  }) : badgeNumber = badgeNumber ?? number;
 
+  /// Composed product id ([GET /api/products/:id]).
   final int number;
+  final int badgeNumber;
   final String label;
   final double priceValue;
   final String description;
   final List<MenuCategory> categories;
 
-  String get badgeLabel => 'M $number';
+  int get productId => number;
+
+  String get badgeLabel => 'M $badgeNumber';
 
   String get formattedPrice =>
       '${priceValue.toStringAsFixed(2).replaceAll('.', ',')} €';

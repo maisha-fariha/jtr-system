@@ -5,7 +5,6 @@ class ApiEndpoints {
   static const loginRoles = '/api/auth/login-roles';
   static const login = '/api/auth/login';
 
-  static const openOrders = '/api/days/open-orders';
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';
   static const createOrder = '/api/orders';

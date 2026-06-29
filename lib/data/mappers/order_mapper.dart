@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
 import '../../utils/app_theme.dart';
-import '../models/open_order_summary.dart';
 
 class ResolvedTable {
   const ResolvedTable({
@@ -33,46 +32,79 @@ class OrderMapper {
   static String tableDisplayNumber(String tableNumber) =>
       'T${tableNumber.trim()}';
 
-  /// Builds an open-orders row from [GET /api/orders/:id] when the list lags.
-  static OpenOrderSummary summaryFromDetail(
-    Map<String, dynamic> data, {
-    int? fallbackTableNumber,
-  }) {
-    final orderId = (data['id'] as num?)?.toInt() ?? 0;
-    final tableId = (data['table_id'] as num?)?.toInt();
+  /// Builds session rows from [GET /api/tables/list] (`active_order` per table).
+  static List<SessionOrder> sessionOrdersFromTables(
+    List<Map<String, dynamic>> tables,
+  ) {
+    final orders = <SessionOrder>[];
 
-    var tableNumber = tableNumberFromDetail(data);
-    tableNumber ??= fallbackTableNumber;
+    for (final table in tables) {
+      final activeOrder = table['active_order'];
+      if (activeOrder is! Map<String, dynamic>) continue;
 
-    return OpenOrderSummary(
-      id: orderId,
-      orderNumber: '${data['order_number'] ?? orderId}',
-      tableId: tableId,
-      tableNumber: tableNumber,
-      status: '${data['status'] ?? 'open'}',
-      totalPrice: '${data['total_price'] ?? '0'}',
-      createdAt: data['created_at'] as String?,
-    );
+      final orderId = (activeOrder['id'] as num?)?.toInt();
+      if (orderId == null || orderId <= 0) continue;
+
+      final tableNumber = (table['table_number'] as num?)?.toInt();
+      final displayNumber = tableDisplayNumber(
+        '${tableNumber ?? tableNumberFromDetail(activeOrder) ?? orderId}',
+      );
+
+      orders.add(
+        fromOrderDetail(activeOrder).copyWith(number: displayNumber),
+      );
+    }
+
+    orders.sort((a, b) {
+      final aCreated = _orderCreatedAtMillis(a.id, tables);
+      final bCreated = _orderCreatedAtMillis(b.id, tables);
+      return bCreated.compareTo(aCreated);
+    });
+
+    return orders;
   }
 
-  static SessionOrder fromOpenOrder(OpenOrderSummary summary) {
-    return SessionOrder(
-      id: summary.id,
-      number: displayKey(
-        orderId: summary.id,
-        tableId: summary.tableId,
-        tableNumber: summary.tableNumber,
-      ),
-      numberColor: AppTheme.primary,
-      group: '1',
-      poste: '—',
-      profitCenter: 'SUR PLACE',
-      couverts: '0',
-      impressionCount: 0,
-      impressionColor: impressionColorFor(0),
-      total: formatPrice(summary.totalPrice),
-      products: const [],
-    );
+  static int _orderCreatedAtMillis(int orderId, List<Map<String, dynamic>> tables) {
+    for (final table in tables) {
+      final activeOrder = table['active_order'];
+      if (activeOrder is! Map<String, dynamic>) continue;
+      if ((activeOrder['id'] as num?)?.toInt() != orderId) continue;
+
+      final createdAt = activeOrder['created_at'];
+      if (createdAt is String) {
+        return DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
+      }
+    }
+    return 0;
+  }
+
+  static bool isTableOccupied(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    return hasExistingActiveOrder(tables, tableNumber);
+  }
+
+  static bool hasExistingActiveOrder(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final resolved = resolveTableForNewOrder(tables, tableNumber);
+    return resolved?.hasActiveOrder ?? false;
+  }
+
+  /// Picks the table row used for [POST /api/orders] (available seat first).
+  static ResolvedTable? resolveTableForNewOrder(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    final matches = _tablesMatchingNumber(tables, normalized);
+    if (matches.isEmpty) return null;
+
+    return _toResolvedTable(_pickTableForNewOrder(matches));
   }
 
   static SessionOrder fromOrderDetail(Map<String, dynamic> data) {
@@ -358,10 +390,41 @@ class OrderMapper {
     final direct = table['sales_zone_id'];
     if (direct is num) return direct.toInt();
 
+    final zone = table['sales_zone'];
+    if (zone is Map<String, dynamic>) {
+      final zoneId = zone['id'];
+      if (zoneId is num) return zoneId.toInt();
+    }
+
     final activeOrder = table['active_order'];
     if (activeOrder is Map<String, dynamic>) {
       final fromOrder = activeOrder['sales_zone_id'];
       if (fromOrder is num) return fromOrder.toInt();
+
+      final orderZone = activeOrder['sales_zone'];
+      if (orderZone is Map<String, dynamic>) {
+        final zoneId = orderZone['id'];
+        if (zoneId is num) return zoneId.toInt();
+      }
+    }
+
+    return null;
+  }
+
+  /// Resolves sales zone from active day, target table, or any table in the list.
+  static int? inferSalesZoneId(
+    List<Map<String, dynamic>> tables, {
+    int? preferred,
+    ResolvedTable? table,
+  }) {
+    if (preferred != null && preferred > 0) return preferred;
+    if (table?.salesZoneId != null && table!.salesZoneId! > 0) {
+      return table.salesZoneId;
+    }
+
+    for (final entry in tables) {
+      final id = _salesZoneIdFromTable(entry);
+      if (id != null && id > 0) return id;
     }
 
     return null;
@@ -389,6 +452,17 @@ class OrderMapper {
     String tableNumber,
   ) {
     return resolveTable(tables, tableNumber)?.existingOrderId;
+  }
+
+  static int? activeOrderIdForTableId(
+    List<Map<String, dynamic>> tables,
+    int tableId,
+  ) {
+    for (final table in tables) {
+      if ((table['id'] as num?)?.toInt() != tableId) continue;
+      return _activeOrderId(table);
+    }
+    return null;
   }
 
   static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {

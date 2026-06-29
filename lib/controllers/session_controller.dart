@@ -92,7 +92,7 @@ class SessionController extends GetxController {
   void onInit() {
     super.onInit();
     loadActiveDay();
-    loadOpenOrders();
+    loadSessionOrders();
     _prefetchTables();
   }
 
@@ -133,7 +133,7 @@ class SessionController extends GetxController {
     await Get.toNamed(AppRoutes.statistics);
   }
 
-  Future<void> loadOpenOrders({bool forceRefresh = false}) async {
+  Future<void> loadSessionOrders({bool forceRefresh = false}) async {
     isLoadingOrders.value = true;
     ordersError.value = null;
 
@@ -141,11 +141,10 @@ class SessionController extends GetxController {
       if (forceRefresh) {
         await loadActiveDay(forceRefresh: true);
       }
-      final loaded = await _orderRepository.getOpenOrders(
+      final loaded = await _sessionRepository.getSessionOrders(
         forceRefresh: forceRefresh,
       );
       orders.assignAll(loaded);
-      unawaited(_enrichMissingOrderDetails());
     } on ApiException catch (e) {
       ordersError.value = e.message;
       if (orders.isEmpty) {
@@ -208,14 +207,6 @@ class SessionController extends GetxController {
     }
 
     return null;
-  }
-
-  Future<void> _enrichMissingOrderDetails() async {
-    await _orderRepository.enrichMissingOrderDetails((enriched) {
-      final idx = orders.indexWhere((order) => order.id == enriched.id);
-      if (idx < 0) return;
-      orders[idx] = enriched.copyWith(number: orders[idx].number);
-    });
   }
 
   void selectAction(SessionAction action) {
@@ -328,42 +319,15 @@ class SessionController extends GetxController {
   }
 
   void _onTableNumberConfirmed(String tableNumber) {
-    unawaited(_onTableNumberConfirmedAsync(tableNumber));
-  }
-
-  Future<void> _onTableNumberConfirmedAsync(String tableNumber) async {
-    try {
-      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
-      final existingOrderId =
-          OrderMapper.activeOrderIdForTableNumber(tables, tableNumber);
-      if (existingOrderId != null || isTableOccupied(tableNumber)) {
-        TableOccupiedDialog.show(
-          userName: _currentUserDisplayName,
+    TableNumberDialog.show(
+      title: 'NOMBRE DE COUVERTS',
+      onConfirm: (couverts) {
+        unawaited(_createTableAndOpenDetails(
           tableNumber: tableNumber,
-        );
-        return;
-      }
-    } catch (_) {
-      if (isTableOccupied(tableNumber)) {
-        TableOccupiedDialog.show(
-          userName: _currentUserDisplayName,
-          tableNumber: tableNumber,
-        );
-        return;
-      }
-    }
-
-    Future.microtask(() {
-      TableNumberDialog.show(
-        title: 'NOMBRE DE COUVERTS',
-        onConfirm: (couverts) {
-          unawaited(_createTableAndOpenDetails(
-            tableNumber: tableNumber,
-            couverts: couverts,
-          ));
-        },
-      );
-    });
+          couverts: couverts,
+        ));
+      },
+    );
   }
 
   Future<void> _createTableAndOpenDetails({
@@ -381,21 +345,36 @@ class SessionController extends GetxController {
     try {
       await loadActiveDay(forceRefresh: true);
       final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      if (target == null) {
+        _showCreateOrderError('Table $tableNumber introuvable.');
+        return;
+      }
+      if (target.hasActiveOrder) {
+        TableOccupiedDialog.show(
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+        return;
+      }
+
+      final salesZoneId = OrderMapper.inferSalesZoneId(
+        tables,
+        preferred: activeDay.value.salesZoneId,
+        table: target,
+      );
+
       final result = await _orderRepository.createTableOrder(
         waiterId: waiterId,
         tableNumber: tableNumber,
         numberOfGuests: guests,
         tables: tables,
-        salesZoneId: activeDay.value.salesZoneId,
+        salesZoneId: salesZoneId,
       );
       final created = result.order;
       final orderToShow = created;
 
-      final loaded = await _orderRepository.refreshOpenOrdersEnsuring(
-        created.id,
-        fallbackTableNumber: int.tryParse(tableNumber.trim()),
-      );
-      orders.assignAll(loaded);
+      await loadSessionOrders(forceRefresh: true);
       _upsertOrderInList(orderToShow);
 
       openTableDetails(orderToShow.number, orderId: created.id);
@@ -437,6 +416,13 @@ class SessionController extends GetxController {
   bool isTableOccupied(String tableNumber) {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
+
+    if (OrderMapper.hasExistingActiveOrder(
+      _sessionRepository.cachedTables,
+      normalized,
+    )) {
+      return true;
+    }
 
     return orders.any((order) {
       final orderTable = order.number.replaceFirst(RegExp(r'^T'), '');
@@ -766,7 +752,7 @@ class SessionController extends GetxController {
     try {
       if (!order.isLocalOnly) {
         await _orderRepository.closeOrder(order.id);
-        await loadOpenOrders(forceRefresh: true);
+        await loadSessionOrders(forceRefresh: true);
       } else {
         orders.removeAt(idx);
       }
@@ -817,7 +803,7 @@ class SessionController extends GetxController {
         );
       } else {
         await _orderRepository.applyTableOffer(order.id);
-        await loadOpenOrders(forceRefresh: true);
+        await loadSessionOrders(forceRefresh: true);
       }
 
       _showSnack(

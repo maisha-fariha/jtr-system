@@ -72,10 +72,33 @@ class SessionRemoteDataSource {
 
   Future<List<Map<String, dynamic>>> fetchTablesList() async {
     try {
-      return await _fetchPaginatedTables();
+      return await _fetchTablesListEndpoint();
     } catch (_) {
-      return _fetchLegacyTablesList();
+      return await _fetchPaginatedTables();
     }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchTablesListEndpoint() async {
+    final response =
+        await _client.get<Map<String, dynamic>>(ApiEndpoints.tablesList);
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load tables.',
+        statusCode: envelope.status,
+      );
+    }
+
+    final tables = _extractTablesFromPayload(envelope.data);
+    if (tables.isEmpty) {
+      throw ApiException(message: 'Aucune table disponible.');
+    }
+
+    return tables;
   }
 
   Future<List<Map<String, dynamic>>> _fetchPaginatedTables() async {
@@ -115,41 +138,27 @@ class SessionRemoteDataSource {
     return allTables;
   }
 
-  Future<List<Map<String, dynamic>>> _fetchLegacyTablesList() async {
-    final response =
-        await _client.get<Map<String, dynamic>>(ApiEndpoints.tablesList);
-    final envelope = ApiEnvelope<dynamic>.fromJson(
-      response.data!,
-      (json) => json,
-    );
-
-    if (!envelope.success) {
-      throw ApiException(
-        message: envelope.message ?? 'Failed to load tables.',
-        statusCode: envelope.status,
-      );
-    }
-
-    final tables = _extractTablesFromPayload(envelope.data);
-    return tables;
-  }
-
   List<Map<String, dynamic>> _extractTablesFromPayload(dynamic data) {
     if (data is List) {
-      return data.whereType<Map<String, dynamic>>().toList();
+      return _flattenTablesList(data);
     }
 
     if (data is! Map<String, dynamic>) return const [];
 
     final direct = data['data'];
     if (direct is List) {
-      return direct.whereType<Map<String, dynamic>>().toList();
+      return _flattenTablesList(direct);
     }
 
     if (direct is Map<String, dynamic>) {
       final nested = direct['data'];
       if (nested is List) {
-        return nested.whereType<Map<String, dynamic>>().toList();
+        return _flattenTablesList(nested);
+      }
+
+      final floorTables = direct['tables'];
+      if (floorTables is List) {
+        return floorTables.whereType<Map<String, dynamic>>().toList();
       }
     }
 
@@ -159,6 +168,28 @@ class SessionRemoteDataSource {
     }
 
     return const [];
+  }
+
+  List<Map<String, dynamic>> _flattenTablesList(List<dynamic> list) {
+    final flat = <Map<String, dynamic>>[];
+
+    for (final entry in list) {
+      if (entry is! Map<String, dynamic>) continue;
+
+      final nestedTables = entry['tables'];
+      if (nestedTables is List && nestedTables.isNotEmpty) {
+        flat.addAll(nestedTables.whereType<Map<String, dynamic>>());
+        continue;
+      }
+
+      if (entry.containsKey('table_number') || entry.containsKey('id')) {
+        flat.add(entry);
+      }
+    }
+
+    if (flat.isNotEmpty) return flat;
+
+    return list.whereType<Map<String, dynamic>>().toList();
   }
 
   int _readLastPage(dynamic data) {

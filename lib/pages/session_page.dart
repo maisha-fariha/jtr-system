@@ -40,7 +40,7 @@ class SessionPage extends GetView<SessionController> {
                   if (controller.orders.isEmpty) {
                     return RefreshIndicator(
                       color: AppTheme.primary,
-                      onRefresh: () => controller.loadOpenOrders(
+                      onRefresh: () => controller.loadSessionOrders(
                         forceRefresh: true,
                       ),
                       child: ListView(
@@ -67,7 +67,7 @@ class SessionPage extends GetView<SessionController> {
 
                   return RefreshIndicator(
                     color: AppTheme.primary,
-                    onRefresh: () => controller.loadOpenOrders(
+                    onRefresh: () => controller.loadSessionOrders(
                       forceRefresh: true,
                     ),
                     child: ListView.separated(

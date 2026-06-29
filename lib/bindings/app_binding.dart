@@ -57,6 +57,7 @@ class AppBinding extends Bindings {
       () => OrderRepository(
         remote: Get.find<OrderRemoteDataSource>(),
         local: Get.find<OrderLocalDataSource>(),
+        sessionRemote: Get.find<SessionRemoteDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

@@ -1,6 +1,8 @@
 import '../../core/network/api_exception.dart';
+import '../../models/session_order.dart';
 import '../../services/connectivity_service.dart';
 import '../datasources/session_datasource.dart';
+import '../mappers/order_mapper.dart';
 import '../models/active_day_info.dart';
 import '../models/day_statistics_info.dart';
 
@@ -19,6 +21,7 @@ class SessionRepository {
 
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
+  List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
 
   Future<ActiveDayInfo> getActiveDay({bool forceRefresh = false}) async {
     if (!forceRefresh) {
@@ -116,5 +119,27 @@ class SessionRepository {
       final tables = await _remote.fetchTablesList();
       await _local.saveTablesList(tables);
     } catch (_) {}
+  }
+
+  /// Open tables/orders for the session screen from [GET /api/tables/list].
+  Future<List<SessionOrder>> getSessionOrders({bool forceRefresh = false}) async {
+    if (!forceRefresh && _local.readTablesList().isNotEmpty) {
+      _refreshTablesInBackground();
+      return OrderMapper.sessionOrdersFromTables(_local.readTablesList());
+    }
+
+    if (!await _connectivity.isOnline) {
+      final cached = _local.readTablesList();
+      if (cached.isEmpty) {
+        throw ApiException(
+          message: 'Liste des tables indisponible hors ligne.',
+        );
+      }
+      return OrderMapper.sessionOrdersFromTables(cached);
+    }
+
+    final tables = await _remote.fetchTablesList();
+    await _local.saveTablesList(tables);
+    return OrderMapper.sessionOrdersFromTables(tables);
   }
 }

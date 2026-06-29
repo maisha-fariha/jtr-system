@@ -10,6 +10,9 @@ import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/repositories/session_repository.dart';
+import '../data/models/active_day_info.dart';
+import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
 import '../widgets/cancel_table_dialog.dart';
@@ -59,10 +62,17 @@ class SessionTableUiState {
 }
 
 class SessionController extends GetxController {
-  SessionController({required OrderRepository orderRepository})
-      : _orderRepository = orderRepository;
+  SessionController({
+    required OrderRepository orderRepository,
+    required SessionRepository sessionRepository,
+    required AuthRepository authRepository,
+  })  : _orderRepository = orderRepository,
+        _sessionRepository = sessionRepository,
+        _authRepository = authRepository;
 
   final OrderRepository _orderRepository;
+  final SessionRepository _sessionRepository;
+  final AuthRepository _authRepository;
 
   final selectedAction = SessionAction.nouvelleCommande.obs;
   final tableUiState = const SessionTableUiState().obs;
@@ -70,11 +80,55 @@ class SessionController extends GetxController {
   final isLoadingOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
+  final activeDay = ActiveDayInfo.fallback().obs;
+  final dayStatistics = Rxn<DayStatisticsInfo>();
+  final isLoadingStatistics = false.obs;
+  final isCreatingOrder = false.obs;
+  final isPrintingTicket = false.obs;
 
   @override
   void onInit() {
     super.onInit();
+    loadActiveDay();
     loadOpenOrders();
+    _prefetchTables();
+  }
+
+  Future<void> loadActiveDay({bool forceRefresh = false}) async {
+    try {
+      activeDay.value =
+          await _sessionRepository.getActiveDay(forceRefresh: forceRefresh);
+    } catch (_) {
+      activeDay.value =
+          _sessionRepository.cachedActiveDay ?? ActiveDayInfo.fallback();
+    }
+  }
+
+  Future<void> _prefetchTables() async {
+    try {
+      await _sessionRepository.getTablesList();
+    } catch (_) {}
+  }
+
+  Future<void> loadDayStatistics({bool forceRefresh = false}) async {
+    isLoadingStatistics.value = true;
+    try {
+      dayStatistics.value = await _sessionRepository.getDayStatistics(
+        forceRefresh: forceRefresh,
+      );
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      dayStatistics.value = _sessionRepository.cachedDayStatistics;
+    } finally {
+      isLoadingStatistics.value = false;
+    }
+  }
+
+  Future<void> openStatistics() async {
+    selectAction(SessionAction.statistics);
+    await loadDayStatistics();
+    await Get.toNamed(AppRoutes.statistics);
   }
 
   Future<void> loadOpenOrders({bool forceRefresh = false}) async {
@@ -82,6 +136,9 @@ class SessionController extends GetxController {
     ordersError.value = null;
 
     try {
+      if (forceRefresh) {
+        await loadActiveDay(forceRefresh: true);
+      }
       final loaded = await _orderRepository.getOpenOrders(
         forceRefresh: forceRefresh,
       );
@@ -238,29 +295,43 @@ class SessionController extends GetxController {
     );
   }
 
-  void _createTableAndOpenDetails({
+  Future<void> _createTableAndOpenDetails({
     required String tableNumber,
     required String couverts,
-  }) {
-    final orderNumber = 'T$tableNumber';
+  }) async {
+    final guests = int.tryParse(couverts.trim()) ?? 1;
+    final waiterId = _currentWaiterId;
+    if (waiterId <= 0) {
+      _showSnack('Erreur', 'Utilisateur non connecté.');
+      return;
+    }
 
-    orders.add(
-      SessionOrder(
-        id: 0,
-        number: orderNumber,
-        numberColor: AppTheme.primary,
-        group: '1',
-        poste: 'POC1',
-        profitCenter: 'SUR PLACE',
-        couverts: couverts,
-        impressionCount: 0,
-        impressionColor: const Color(0xFFE74C3C),
-        total: '0,00 €',
-        products: const [],
-      ),
-    );
+    isCreatingOrder.value = true;
+    try {
+      final tables = await _sessionRepository.getTablesList();
+      final created = await _orderRepository.createTableOrder(
+        waiterId: waiterId,
+        tableNumber: tableNumber,
+        numberOfGuests: guests,
+        tables: tables,
+      );
 
-    openTableDetails(orderNumber);
+      final orderNumber = created.number;
+      final idx = orders.indexWhere((order) => order.id == created.id);
+      if (idx >= 0) {
+        orders[idx] = created.copyWith(number: orderNumber);
+      } else {
+        orders.insert(0, created.copyWith(number: orderNumber));
+      }
+
+      openTableDetails(orderNumber);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible de créer la commande.');
+    } finally {
+      isCreatingOrder.value = false;
+    }
   }
 
   bool isTableOccupied(String tableNumber) {
@@ -295,10 +366,23 @@ class SessionController extends GetxController {
       }
     }
 
-    return 'ABDALLAH';
+    return 'Utilisateur';
   }
 
-  void requestNextCourse() {
+  int get _currentWaiterId {
+    final session = _authRepository.cachedSession;
+    if (session != null) return session.user.id;
+    return 0;
+  }
+
+  SessionOrder? _orderByNumber(String orderNumber) {
+    for (final order in orders) {
+      if (order.number == orderNumber) return order;
+    }
+    return null;
+  }
+
+  Future<void> requestNextCourse() async {
     selectAction(SessionAction.demanderSuite);
     final selected = tableUiState.value.selectedRow;
     if (selected == null || selected.productIndex != null) {
@@ -311,6 +395,13 @@ class SessionController extends GetxController {
       );
       return;
     }
+
+    final order = _orderByNumber(selected.orderNumber);
+    if (order == null || order.isLocalOnly) {
+      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
     Get.defaultDialog(
       title: 'Demander la suite',
       middleText:
@@ -319,17 +410,19 @@ class SessionController extends GetxController {
       textCancel: 'Annuler',
       confirmTextColor: Colors.white,
       buttonColor: AppTheme.primary,
-      onConfirm: () {
+      onConfirm: () async {
         Get.back();
-        Get.snackbar(
-          'Suite demandée',
-          'La suite a été envoyée pour la table ${selected.orderNumber}.',
-          snackPosition: SnackPosition.BOTTOM,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 2),
-          backgroundColor: AppTheme.lightButton,
-          colorText: AppTheme.darkText,
-        );
+        try {
+          await _orderRepository.requestNextCourses(order.id);
+          _showSnack(
+            'Suite demandée',
+            'La suite a été envoyée pour la table ${selected.orderNumber}.',
+          );
+        } on ApiException catch (e) {
+          _showSnack('Erreur', e.message);
+        } catch (_) {
+          _showSnack('Erreur', 'Impossible d\'envoyer la demande de suite.');
+        }
       },
     );
   }
@@ -648,7 +741,15 @@ class SessionController extends GetxController {
       return;
     }
 
+    final selected = tableUiState.value.selectedRow!;
+    final order = _orderByNumber(selected.orderNumber);
+    if (order == null || order.isLocalOnly) {
+      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
     selectAction(SessionAction.ticket);
+    isPrintingTicket.value = true;
 
     Get.dialog(
       const TicketLoadingDialog(),
@@ -656,17 +757,35 @@ class SessionController extends GetxController {
       barrierColor: Colors.black.withValues(alpha: 0.45),
     );
 
-    await Future.delayed(const Duration(seconds: 2));
+    try {
+      final updated = await _orderRepository.markOrderPrinted(order.id);
+      final idx = orders.indexWhere((item) => item.id == order.id);
+      if (idx >= 0) {
+        orders[idx] = updated.copyWith(number: order.number);
+      }
 
-    if (Get.isDialogOpen ?? false) {
-      Get.back();
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+
+      await Get.dialog(
+        const TicketSuccessDialog(),
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.45),
+      );
+    } on ApiException catch (e) {
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+      _showSnack('Erreur', 'Impossible d\'imprimer le ticket.');
+    } finally {
+      isPrintingTicket.value = false;
     }
-
-    await Get.dialog(
-      const TicketSuccessDialog(),
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-    );
   }
 
   void _showSnack(String title, String message) {

@@ -5,6 +5,16 @@ import '../../models/session_order.dart';
 import '../../utils/app_theme.dart';
 import '../models/open_order_summary.dart';
 
+class ResolvedTable {
+  const ResolvedTable({
+    required this.id,
+    this.salesZoneId,
+  });
+
+  final int id;
+  final int? salesZoneId;
+}
+
 class OrderMapper {
   OrderMapper._();
 
@@ -170,5 +180,127 @@ class OrderMapper {
     copy['total_price'] = '0.00';
     copy['remaining_amount'] = '0.00';
     return copy;
+  }
+
+  static Map<String, dynamic> buildCreateOrderPayload({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+  }) {
+    final payload = <String, dynamic>{
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+      'table_id': tableId,
+      // Business flow: table + guests only. Backend requires seat_orders but
+      // not courses/items when opening an empty table.
+      'seat_orders': [
+        {'seat_number': 1},
+      ],
+    };
+
+    if (salesZoneId != null) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
+
+    return payload;
+  }
+
+  static Map<String, dynamic> buildStartTableSessionPayload({
+    required int waiterId,
+    required int numberOfGuests,
+  }) {
+    return {
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+    };
+  }
+
+  static ResolvedTable? resolveTable(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final id = resolveTableId(tables, tableNumber);
+    if (id == null) return null;
+
+    for (final table in tables) {
+      final tableId = table['id'];
+      if (tableId != id) continue;
+
+      final zoneId = table['sales_zone_id'];
+      return ResolvedTable(
+        id: id,
+        salesZoneId: zoneId is int ? zoneId : (zoneId as num?)?.toInt(),
+      );
+    }
+
+    return ResolvedTable(id: id);
+  }
+
+  static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {
+    final ids = <int>[];
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return ids;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final status = course['status'] as String?;
+        final courseId = course['id'];
+        if (courseId is! int) continue;
+
+        if (status == 'to_be_continued' || status == 'pending') {
+          ids.add(courseId);
+        }
+      }
+    }
+
+    if (ids.isNotEmpty) return ids;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseId = course['id'];
+        if (courseId is int) ids.add(courseId);
+      }
+    }
+
+    return ids;
+  }
+
+  static int? resolveTableId(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    for (final table in tables) {
+      final number = table['table_number']?.toString() ??
+          table['number']?.toString() ??
+          table['name']?.toString();
+      if (number == normalized) {
+        final id = table['id'];
+        if (id is int) return id;
+      }
+    }
+
+    final parsed = int.tryParse(normalized);
+    if (parsed != null) {
+      for (final table in tables) {
+        final id = table['id'];
+        if (id == parsed) return parsed;
+      }
+      return parsed;
+    }
+
+    return null;
   }
 }

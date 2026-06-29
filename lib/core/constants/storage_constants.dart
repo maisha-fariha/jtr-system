@@ -8,4 +8,7 @@ class StorageConstants {
   static const authTokenKey = 'auth_token';
   static const openOrdersKey = 'open_orders';
   static const orderDetailsPrefix = 'order_detail_';
+  static const activeDayKey = 'active_day';
+  static const dayStatisticsKey = 'day_statistics';
+  static const tablesListKey = 'tables_list';
 }

@@ -157,4 +157,107 @@ class OrderRepository {
     }
     return null;
   }
+
+  Future<SessionOrder> createTableOrder({
+    required int waiterId,
+    required String tableNumber,
+    required int numberOfGuests,
+    required List<Map<String, dynamic>> tables,
+    int? salesZoneId,
+  }) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Création impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final table = OrderMapper.resolveTable(tables, tableNumber);
+    if (table == null) {
+      throw ApiException(message: 'Table $tableNumber introuvable.');
+    }
+
+    final sessionPayload = OrderMapper.buildStartTableSessionPayload(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+    );
+
+    Map<String, dynamic> created;
+    try {
+      created = await _remote.startTableSession(table.id, sessionPayload);
+    } on ApiException {
+      final orderPayload = OrderMapper.buildCreateOrderPayload(
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        tableId: table.id,
+        salesZoneId: salesZoneId ?? table.salesZoneId,
+      );
+      created = await _remote.createOrder(orderPayload);
+    }
+
+    created = _unwrapOrderResponse(created);
+    var orderId = (created['id'] as num?)?.toInt();
+
+    if (orderId == null) {
+      final detail = await _findOpenOrderDetailForTable(table.id);
+      if (detail != null) {
+        created = detail;
+        orderId = (created['id'] as num?)?.toInt();
+      }
+    }
+
+    if (orderId != null) {
+      await _local.saveOrderDetail(orderId, created);
+    }
+
+    final data = await _remote.fetchOpenOrders();
+    await _local.saveOpenOrders(data.openOrders);
+
+    return OrderMapper.fromOrderDetail(created);
+  }
+
+  Map<String, dynamic> _unwrapOrderResponse(Map<String, dynamic> data) {
+    final order = data['order'];
+    if (order is Map<String, dynamic>) return order;
+    return data;
+  }
+
+  Future<Map<String, dynamic>?> _findOpenOrderDetailForTable(int tableId) async {
+    final openOrders = await _remote.fetchOpenOrders();
+    for (final summary in openOrders.openOrders) {
+      if (summary.tableId == tableId) {
+        return _remote.fetchOrderDetail(summary.id);
+      }
+    }
+    return null;
+  }
+
+  Future<void> requestNextCourses(int orderId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractRequestableCourseIds(detail);
+    if (courseIds.isEmpty) {
+      throw ApiException(message: 'Aucune suite à demander pour cette table.');
+    }
+
+    await _remote.requestCourses(orderId, courseIds);
+    await _local.saveOrderDetail(orderId, detail);
+  }
+
+  Future<SessionOrder> markOrderPrinted(int orderId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Impression impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    await _remote.markOrderPrinted(orderId);
+    final detail = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, detail);
+    return OrderMapper.fromOrderDetail(detail);
+  }
 }

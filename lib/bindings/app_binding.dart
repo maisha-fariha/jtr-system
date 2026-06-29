@@ -9,6 +9,8 @@ import '../data/datasources/order_local_datasource.dart';
 import '../data/datasources/order_remote_datasource.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/datasources/session_datasource.dart';
+import '../data/repositories/session_repository.dart';
 import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
 
@@ -55,6 +57,22 @@ class AppBinding extends Bindings {
       () => OrderRepository(
         remote: Get.find<OrderRemoteDataSource>(),
         local: Get.find<OrderLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<SessionRemoteDataSource>(
+      () => SessionRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<SessionLocalDataSource>(
+      () => SessionLocalDataSource(Get.find<HiveStorage>()),
+      fenix: true,
+    );
+    Get.lazyPut<SessionRepository>(
+      () => SessionRepository(
+        remote: Get.find<SessionRemoteDataSource>(),
+        local: Get.find<SessionLocalDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

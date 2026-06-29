@@ -20,7 +20,9 @@ class SessionPage extends GetView<SessionController> {
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
-        child: Column(
+        child: Stack(
+          children: [
+            Column(
           children: [
             _SessionHeader(),
             Divider(height: 1, color: AppTheme.cardBorder),
@@ -36,27 +38,48 @@ class SessionPage extends GetView<SessionController> {
                   }
 
                   if (controller.orders.isEmpty) {
-                    return Center(
-                      child: Text(
-                        controller.ordersError.value ??
-                            'Aucune commande ouverte',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppTheme.textSecondary,
-                        ),
+                    return RefreshIndicator(
+                      color: AppTheme.primary,
+                      onRefresh: () => controller.loadOpenOrders(
+                        forceRefresh: true,
+                      ),
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          SizedBox(
+                            height: MediaQuery.of(context).size.height * 0.35,
+                            child: Center(
+                              child: Text(
+                                controller.ordersError.value ??
+                                    'Aucune commande ouverte',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   }
 
-                  return ListView.separated(
-                    padding: const EdgeInsets.only(top: 8, bottom: 8),
-                    itemCount: controller.orders.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      return _OrderRow(order: controller.orders[index]);
-                    },
+                  return RefreshIndicator(
+                    color: AppTheme.primary,
+                    onRefresh: () => controller.loadOpenOrders(
+                      forceRefresh: true,
+                    ),
+                    child: ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      itemCount: controller.orders.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        return _OrderRow(order: controller.orders[index]);
+                      },
+                    ),
                   );
                 }),
               ),
@@ -66,80 +89,97 @@ class SessionPage extends GetView<SessionController> {
             _BottomNavBar(),
           ],
         ),
+            Obx(() {
+              if (!controller.isCreatingOrder.value) {
+                return const SizedBox.shrink();
+              }
+              return const ColoredBox(
+                color: Color(0x33000000),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppTheme.primary),
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _SessionHeader extends StatelessWidget {
+class _SessionHeader extends GetView<SessionController> {
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Row(
-        children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: const BoxDecoration(
-              color: AppTheme.primary,
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: const Text(
-              '1',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'SESSION ACTIVE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.8,
-                    color: AppTheme.textSecondary, // dynamic getter, not const
-                  ),
-                ),
-                SizedBox(height: 2),
-                Text(
-                  'Vendredi 12 Juin 2026',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.darkText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: AppTheme.lightButton,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Text(
-              'SUR PLACE',
-              style: TextStyle(
+    return Obx(() {
+      final day = controller.activeDay.value;
+
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: const BoxDecoration(
                 color: AppTheme.primary,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                day.sessionNumber ?? '${day.id}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-    );
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'SESSION ACTIVE',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.8,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    day.displayDate,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.darkText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.lightButton,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                day.salesZoneLabel,
+                style: const TextStyle(
+                  color: AppTheme.primary,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -608,8 +648,7 @@ class _ActionButtons extends GetView<SessionController> {
                     } else if (action == SessionAction.demanderSuite) {
                       controller.requestNextCourse();
                     } else if (action == SessionAction.statistics) {
-                      controller.selectAction(action);
-                      Get.toNamed(AppRoutes.statistics);
+                      controller.openStatistics();
                     } else {
                       controller.selectAction(action);
                     }

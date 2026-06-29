@@ -498,7 +498,7 @@ class OrderRepository {
 
     apiLog.writeln(
       'seat_number=$seatNumber course_id=${course.id} '
-      'post_course_number=$postCourseNumber',
+      'course_sequence=$postCourseNumber',
     );
 
     return OrderMapper.buildAddSeatOrderItemsPayload(
@@ -519,39 +519,46 @@ class OrderRepository {
     required StringBuffer apiLog,
   }) async {
     final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-
-    apiLog.writeln(
-      '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
+    final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
+      detail,
+      seatNumber: seatNumber,
     );
-    apiLog.writeln(formatApiPayload(body));
 
-    try {
-      await _remote.addSeatOrderItems(
-        orderId: orderId,
-        seatNumber: seatNumber,
-        body: body,
+    final seatKeys = <int>{
+      if (seatRecordId != null && seatRecordId > 0) seatRecordId,
+      seatNumber,
+    }.toList();
+
+    ApiException? lastError;
+    for (var i = 0; i < seatKeys.length; i++) {
+      final seatKey = seatKeys[i];
+
+      apiLog.writeln(
+        '── POST /api/orders/$orderId/seat-orders/$seatKey/items ──',
       );
-    } on ApiException catch (firstError) {
-      final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
-        detail,
-        seatNumber: seatNumber,
-      );
-      if (seatRecordId == null || seatRecordId == seatNumber) {
-        rethrow;
+      if (i == 0) apiLog.writeln(formatApiPayload(body));
+
+      try {
+        await _remote.addSeatOrderItems(
+          orderId: orderId,
+          seatNumber: seatKey,
+          body: body,
+        );
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        return;
+      } on ApiException catch (error) {
+        lastError = error;
+        if (i < seatKeys.length - 1) {
+          apiLog.writeln(
+            'POST échoué (seat-orders/$seatKey): ${error.message}',
+          );
+        }
       }
-
-      apiLog.writeln('POST échoué: ${firstError.message}');
-      apiLog.writeln('── Retry POST seat_order.id=$seatRecordId ──');
-
-      await _remote.addSeatOrderItems(
-        orderId: orderId,
-        seatNumber: seatRecordId,
-        body: body,
-      );
     }
 
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
+    throw lastError ??
+        ApiException(message: 'Impossible d\'ajouter l\'article à la commande.');
   }
 }

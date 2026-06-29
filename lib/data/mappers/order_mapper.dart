@@ -770,9 +770,9 @@ class OrderMapper {
     );
   }
 
-  /// POST body field `course_number` expects the course database id.
+  /// POST body `course_number` is the course sequence (1, 2, 3…), not the DB id.
   static int resolvePostCourseNumber(({int? id, int number}) course) {
-    return course.id ?? course.number;
+    return course.number;
   }
 
   static Map<String, dynamic> buildAddSeatOrderItemsPayload({
@@ -787,7 +787,7 @@ class OrderMapper {
     final item = <String, dynamic>{
       'product_id': productId,
       'qty': qty,
-      'sub_total': subTotal ?? unitPrice * qty,
+      'sub_total': _formatMoney(subTotal ?? unitPrice * qty),
       'comment': comment,
     };
     if (menuSelections != null && menuSelections.isNotEmpty) {

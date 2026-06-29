@@ -210,6 +210,8 @@ class SessionController extends GetxController {
     orders.insert(0, order);
   }
 
+  void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
+
   static String normalizeTableKey(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return trimmed;

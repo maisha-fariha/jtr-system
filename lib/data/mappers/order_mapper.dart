@@ -612,4 +612,353 @@ class OrderMapper {
 
     return null;
   }
+
+  /// Default seat for adding items (first seat in order, else 1).
+  static int resolveDefaultSeatNumber(Map<String, dynamic> detail) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is List && seatOrders.isNotEmpty) {
+      final first = seatOrders.first;
+      if (first is Map<String, dynamic>) {
+        final seatNumber = first['seat_number'];
+        if (seatNumber is num) return seatNumber.toInt();
+      }
+    }
+    return 1;
+  }
+
+  /// Active course on the target seat.
+  static ({int? id, int number}) resolveActiveCourse(
+    Map<String, dynamic> detail, {
+    int? seatNumber,
+  }) {
+    final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List || seatOrders.isEmpty) {
+      return (id: null, number: 1);
+    }
+
+    int? lastActiveId;
+    int? lastActiveNumber;
+    int? lastAnyId;
+    int? lastAnyNumber;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final seatNo = (seat['seat_number'] as num?)?.toInt();
+      if (seatNo != targetSeat) continue;
+
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseNumber = (course['course_number'] as num?)?.toInt();
+        if (courseNumber == null) continue;
+
+        final courseId = (course['id'] as num?)?.toInt();
+        lastAnyId = courseId;
+        lastAnyNumber = courseNumber;
+
+        final status = course['status'] as String?;
+        if (status == 'in_progress' ||
+            status == 'to_be_continued' ||
+            status == 'pending') {
+          lastActiveId = courseId;
+          lastActiveNumber = courseNumber;
+        }
+      }
+    }
+
+    return (
+      id: lastActiveId ?? lastAnyId,
+      number: lastActiveNumber ?? lastAnyNumber ?? 1,
+    );
+  }
+
+  /// POST body field `course_number` expects the course database id.
+  static int resolvePostCourseNumber(({int? id, int number}) course) {
+    return course.id ?? course.number;
+  }
+
+  static Map<String, dynamic> buildAddSeatOrderItemsPayload({
+    required int courseNumber,
+    required int productId,
+    required double unitPrice,
+    int qty = 1,
+    String comment = '',
+  }) {
+    return {
+      'course_number': courseNumber,
+      'items': [
+        {
+          'product_id': productId,
+          'qty': qty,
+          'sub_total': unitPrice * qty,
+          'comment': comment,
+        },
+      ],
+    };
+  }
+
+  /// PUT /api/orders/:id writable body.
+  static Map<String, dynamic> buildOrderUpdatePayload(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final seatOrders = orderDetail['seat_orders'];
+    return {
+      'waiter_id': orderDetail['waiter_id'],
+      'number_of_guests': orderDetail['number_of_guests'],
+      if (orderDetail['sales_zone_id'] != null)
+        'sales_zone_id': orderDetail['sales_zone_id'],
+      if (orderDetail['table_id'] != null) 'table_id': orderDetail['table_id'],
+      if (orderDetail['customer_id'] != null)
+        'customer_id': orderDetail['customer_id'],
+      'seat_orders': seatOrders is List
+          ? seatOrders
+              .whereType<Map<String, dynamic>>()
+              .map(_sanitizeSeatOrderForUpdate)
+              .toList()
+          : <dynamic>[],
+    };
+  }
+
+  static Map<String, dynamic> appendComposedItem({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required double subTotal,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatNumber = resolveDefaultSeatNumber(working);
+    final course = resolveActiveCourse(working, seatNumber: seatNumber);
+    final itemStatus = _resolveItemStatusForCourse(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+    );
+
+    final newItem = <String, dynamic>{
+      'seat_number': seatNumber,
+      if (course.id != null) 'course_id': course.id,
+      if (course.id != null) 'course_number': course.number,
+      'product_id': productId,
+      'product': {'id': productId},
+      'qty': 1,
+      'sub_total': _formatMoney(subTotal),
+      'status': itemStatus,
+      'comment': comment,
+      'menu_selections': menuSelections,
+    };
+
+    _appendItemToSeatOrders(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+      newItem: newItem,
+    );
+
+    return buildOrderUpdatePayload(working);
+  }
+
+  static void _appendItemToSeatOrders(
+    Map<String, dynamic> detail, {
+    required int seatNumber,
+    required int courseNumber,
+    required Map<String, dynamic> newItem,
+  }) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List || seatOrders.isEmpty) {
+      detail['seat_orders'] = [
+        {
+          'seat_number': seatNumber,
+          'courses': [
+            {
+              'course_number': courseNumber,
+              'seat_number': seatNumber,
+              'items': [newItem],
+            },
+          ],
+        },
+      ];
+      return;
+    }
+
+    final updatedSeats = <dynamic>[];
+    var itemAdded = false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) {
+        updatedSeats.add(seat);
+        continue;
+      }
+
+      final seatCopy = Map<String, dynamic>.from(seat);
+      final seatNo = (seatCopy['seat_number'] as num?)?.toInt() ?? seatNumber;
+
+      if (!itemAdded && seatNo == seatNumber) {
+        final courses = seatCopy['courses'];
+        if (courses is List && courses.isNotEmpty) {
+          seatCopy['courses'] = courses.map((course) {
+            if (course is! Map<String, dynamic>) return course;
+            final courseCopy = Map<String, dynamic>.from(course);
+            final cn = (courseCopy['course_number'] as num?)?.toInt();
+            if (cn == courseNumber) {
+              final items = courseCopy['items'];
+              final itemsList =
+                  items is List ? List<dynamic>.from(items) : <dynamic>[];
+              itemsList.add(newItem);
+              courseCopy['items'] = itemsList;
+              itemAdded = true;
+            }
+            return courseCopy;
+          }).toList();
+        } else {
+          seatCopy['courses'] = [
+            {
+              'course_number': courseNumber,
+              'seat_number': seatNumber,
+              'items': [newItem],
+            },
+          ];
+          itemAdded = true;
+        }
+      }
+
+      updatedSeats.add(seatCopy);
+    }
+
+    if (!itemAdded) {
+      updatedSeats.add({
+        'seat_number': seatNumber,
+        'courses': [
+          {
+            'course_number': courseNumber,
+            'seat_number': seatNumber,
+            'items': [newItem],
+          },
+        ],
+      });
+    }
+
+    detail['seat_orders'] = updatedSeats;
+  }
+
+  static String _resolveItemStatusForCourse(
+    Map<String, dynamic> detail, {
+    required int seatNumber,
+    required int courseNumber,
+  }) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return 'in_progress';
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      if ((seat['seat_number'] as num?)?.toInt() != seatNumber) continue;
+
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        if ((course['course_number'] as num?)?.toInt() != courseNumber) {
+          continue;
+        }
+
+        final items = course['items'];
+        if (items is List) {
+          for (final item in items) {
+            if (item is Map<String, dynamic>) {
+              final status = item['status'];
+              if (status is String && status.isNotEmpty) return status;
+            }
+          }
+        }
+
+        final courseStatus = course['status'];
+        if (courseStatus is String && courseStatus.isNotEmpty) {
+          return courseStatus;
+        }
+      }
+    }
+
+    return 'in_progress';
+  }
+
+  static Map<String, dynamic> _sanitizeSeatOrderForUpdate(
+    Map<String, dynamic> seat,
+  ) {
+    final courses = seat['courses'];
+    final sanitized = <String, dynamic>{
+      'seat_number': seat['seat_number'],
+      'courses': courses is List
+          ? courses
+              .whereType<Map<String, dynamic>>()
+              .map(_sanitizeCourseForUpdate)
+              .toList()
+          : <dynamic>[],
+    };
+    final id = seat['id'];
+    final orderId = seat['order_id'];
+    if (id != null) sanitized['id'] = id;
+    if (orderId != null) sanitized['order_id'] = orderId;
+    return sanitized;
+  }
+
+  static Map<String, dynamic> _sanitizeCourseForUpdate(
+    Map<String, dynamic> course,
+  ) {
+    final items = course['items'];
+    final sanitized = <String, dynamic>{
+      'course_number': course['course_number'],
+      'seat_number': course['seat_number'],
+      'items': items is List
+          ? items
+              .whereType<Map<String, dynamic>>()
+              .map(_sanitizeItemForUpdate)
+              .toList()
+          : <dynamic>[],
+    };
+    final id = course['id'];
+    final orderId = course['order_id'];
+    if (id != null) sanitized['id'] = id;
+    if (orderId != null) sanitized['order_id'] = orderId;
+    if (course['label'] != null) sanitized['label'] = course['label'];
+    if (course['status'] != null) sanitized['status'] = course['status'];
+    return sanitized;
+  }
+
+  static Map<String, dynamic> _sanitizeItemForUpdate(Map<String, dynamic> item) {
+    final product = item['product'];
+    final productId = (item['product_id'] as num?)?.toInt() ??
+        (product is Map<String, dynamic>
+            ? (product['id'] as num?)?.toInt()
+            : null);
+
+    final sanitized = <String, dynamic>{
+      'seat_number': item['seat_number'],
+      if (item['course_id'] != null) 'course_id': item['course_id'],
+      if (item['course_number'] != null) 'course_number': item['course_number'],
+      if (productId != null) 'product': {'id': productId},
+      if (productId != null) 'product_id': productId,
+      'sub_total': item['sub_total'],
+      'qty': item['qty'],
+      'status': item['status'] ?? 'in_progress',
+      'comment': item['comment'] ?? '',
+    };
+
+    final id = item['id'];
+    final orderId = item['order_id'];
+    if (id != null) sanitized['id'] = id;
+    if (orderId != null) sanitized['order_id'] = orderId;
+
+    final menuSelections = item['menu_selections'];
+    if (menuSelections is List && menuSelections.isNotEmpty) {
+      sanitized['menu_selections'] = menuSelections;
+    }
+
+    return sanitized;
+  }
+
+  static String _formatMoney(double value) => value.toStringAsFixed(2);
 }

@@ -27,6 +27,9 @@ class OrderRepository {
   /// Last create-order debug trace (for on-screen error/success dialog).
   String? lastCreateOrderLog;
 
+  /// Last add-item debug trace.
+  String? lastAddItemLog;
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
   Future<SessionOrder> getOrderDetail(int orderId) async {
     final online = await _connectivity.isOnline;
@@ -341,5 +344,147 @@ class OrderRepository {
     final detail = await _remote.fetchOrderDetail(orderId);
     await _local.saveOrderDetail(orderId, detail);
     return OrderMapper.fromOrderDetail(detail);
+  }
+
+  Future<SessionOrder> addSimpleProductToOrder({
+    required int orderId,
+    required int productId,
+    required double unitPrice,
+    int qty = 1,
+    String comment = '',
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — ajout article impossible.';
+      throw ApiException(
+        message: 'Ajout impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajout article simple ──');
+    apiLog.writeln('order_id=$orderId product_id=$productId qty=$qty');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+      final course = OrderMapper.resolveActiveCourse(
+        detail,
+        seatNumber: seatNumber,
+      );
+      final postCourseNumber = OrderMapper.resolvePostCourseNumber(course);
+
+      if (course.id == null) {
+        apiLog.writeln(
+          'ERREUR: aucune suite (course) sur la commande. '
+          'La commande doit avoir au moins un seat_order/course.',
+        );
+        lastAddItemLog = apiLog.toString();
+        throw ApiException(
+          message:
+              'Impossible d\'ajouter: aucune suite active sur cette commande.',
+        );
+      }
+
+      apiLog.writeln(
+        'seat_number=$seatNumber course_id=${course.id} '
+        'post_course_number=$postCourseNumber',
+      );
+
+      final body = OrderMapper.buildAddSeatOrderItemsPayload(
+        courseNumber: postCourseNumber,
+        productId: productId,
+        unitPrice: unitPrice,
+        qty: qty,
+        comment: comment,
+      );
+
+      apiLog.writeln(
+        '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
+      );
+      apiLog.writeln(formatApiPayload(body));
+
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatNumber,
+        body: body,
+      );
+
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      apiLog.writeln('── GET /api/orders/$orderId (refresh) ──');
+      final refreshed = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, refreshed);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(refreshed);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> addComposedProductToOrder({
+    required int orderId,
+    required int productId,
+    required double basePrice,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — ajout menu impossible.';
+      throw ApiException(
+        message: 'Ajout impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajout produit composé ──');
+    apiLog.writeln('order_id=$orderId product_id=$productId');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final supplement = menuSelections.fold<double>(
+        0,
+        (sum, selection) {
+          final price = selection['price'];
+          if (price is num) return sum + price.toDouble();
+          return sum +
+              (double.tryParse(price?.toString().replaceAll(',', '.') ?? '') ??
+                  0);
+        },
+      );
+
+      final payload = OrderMapper.appendComposedItem(
+        orderDetail: detail,
+        productId: productId,
+        subTotal: basePrice + supplement,
+        menuSelections: menuSelections,
+        comment: comment,
+      );
+
+      apiLog.writeln('── PUT /api/orders/$orderId ──');
+      apiLog.writeln('menu_selections: ${menuSelections.length}');
+      apiLog.writeln(formatApiPayload(payload));
+
+      final updated = await _remote.updateOrder(orderId, payload);
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
   }
 }

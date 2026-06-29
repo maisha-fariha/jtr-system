@@ -5,9 +5,12 @@ import '../core/network/api_client.dart';
 import '../core/storage/hive_storage.dart';
 import '../data/datasources/auth_local_datasource.dart';
 import '../data/datasources/auth_remote_datasource.dart';
+import '../data/datasources/catalog_local_datasource.dart';
+import '../data/datasources/catalog_remote_datasource.dart';
 import '../data/datasources/order_local_datasource.dart';
 import '../data/datasources/order_remote_datasource.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/datasources/session_datasource.dart';
 import '../data/repositories/session_repository.dart';
@@ -74,6 +77,22 @@ class AppBinding extends Bindings {
       () => SessionRepository(
         remote: Get.find<SessionRemoteDataSource>(),
         local: Get.find<SessionLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<CatalogLocalDataSource>(
+      () => CatalogLocalDataSource(Get.find<HiveStorage>()),
+      fenix: true,
+    );
+    Get.lazyPut<CatalogRemoteDataSource>(
+      () => CatalogRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<CatalogRepository>(
+      () => CatalogRepository(
+        remote: Get.find<CatalogRemoteDataSource>(),
+        local: Get.find<CatalogLocalDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

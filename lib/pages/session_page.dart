@@ -305,7 +305,10 @@ class _OrderRow extends GetView<SessionController> {
             ],
           ),
           child: GestureDetector(
-            onDoubleTap: () => controller.openTableDetails(order.number),
+            onDoubleTap: () => controller.openTableDetails(
+              order.number,
+              orderId: order.id > 0 ? order.id : null,
+            ),
             child: Container(
             decoration: BoxDecoration(
               color: AppTheme.background,

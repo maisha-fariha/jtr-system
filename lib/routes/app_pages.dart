@@ -14,6 +14,7 @@ import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../controllers/table_details_controller.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../pages/table_details_page.dart';
@@ -87,7 +88,12 @@ class AppPages {
       name: AppRoutes.tableDetails,
       page: () => const TableDetailsPage(),
       binding: BindingsBuilder(() {
-        Get.put(TableDetailsController());
+        Get.put(
+          TableDetailsController(
+            catalogRepository: Get.find<CatalogRepository>(),
+            orderRepository: Get.find<OrderRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(

@@ -230,4 +230,39 @@ class OrderRemoteDataSource {
       );
     }
   }
+
+  Future<void> addSeatOrderItems({
+    required int orderId,
+    required int seatNumber,
+    required Map<String, dynamic> body,
+  }) async {
+    final path = ApiEndpoints.addSeatOrderItems(orderId, seatNumber);
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final raw = response.data;
+      if (raw is Map<String, dynamic>) {
+        final envelope = ApiEnvelope<dynamic>.fromJson(raw, (json) => json);
+        if (!envelope.success) {
+          throw ApiException(
+            message: envelope.message ?? 'Impossible d\'ajouter l\'article.',
+            statusCode: envelope.status,
+          );
+        }
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
+  }
 }

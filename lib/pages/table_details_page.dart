@@ -4,7 +4,6 @@ import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
-import '../data/demo_table_menu.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
@@ -646,6 +645,25 @@ class _CategoryTabs extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      if (controller.isCatalogLoading.value && controller.categories.isEmpty) {
+        return const SizedBox(
+          height: 44,
+          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        );
+      }
+
+      if (controller.categories.isEmpty) {
+        return SizedBox(
+          height: 44,
+          child: Center(
+            child: Text(
+              controller.catalogError.value ?? 'Aucune catégorie',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            ),
+          ),
+        );
+      }
+
       final selectedIndex = controller.selectedCategoryIndex.value;
 
       return SizedBox(
@@ -653,9 +671,9 @@ class _CategoryTabs extends GetView<TableDetailsController> {
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          itemCount: demoTableMenuCategories.length,
+          itemCount: controller.categories.length,
           itemBuilder: (context, index) {
-            final category = demoTableMenuCategories[index];
+            final category = controller.categories[index];
             final isSelected = selectedIndex == index;
 
             return GestureDetector(
@@ -667,16 +685,15 @@ class _CategoryTabs extends GetView<TableDetailsController> {
                   border: Border(
                     bottom: BorderSide(
                       color: isSelected ? AppTheme.primary : Colors.transparent,
-                      width: 2.5,
+                      width: 2,
                     ),
                   ),
                 ),
                 child: Text(
-                  category.label,
+                  category.name,
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.4,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
                     color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
                   ),
                 ),
@@ -697,85 +714,132 @@ class _MenuGrid extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final selectedIndex = controller.selectedCategoryIndex.value;
-      final session = Get.find<SessionController>();
-      final currentOrder = session.findOrder(
-        orderNumber: controller.orderNumber,
-        orderId: controller.orderId,
-      );
-      if (currentOrder != null) {
-        currentOrder.products.length;
+      if (controller.isCatalogLoading.value && controller.products.isEmpty) {
+        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
       }
-      final items = demoTableMenuCategories[selectedIndex].items;
 
-      return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.05,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          final isUnavailable = controller.isMenuItemUnavailable(item);
+      if (controller.catalogError.value != null &&
+          controller.products.isEmpty) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              controller.catalogError.value!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+        );
+      }
 
-          return GestureDetector(
-            onTap: isUnavailable ? null : () => controller.toggleMenuItem(item),
-            child: Opacity(
-              opacity: isUnavailable ? 0.45 : 1,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                decoration: BoxDecoration(
-                  color: _menuGridItemBackground(isUnavailable),
-                  borderRadius: BorderRadius.circular(10),
-                  border: _menuGridItemBorder(isUnavailable),
-                  boxShadow: _menuGridItemShadow(isUnavailable),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Text(
-                        item.name,
-                        textAlign: TextAlign.center,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.darkText.withValues(
-                            alpha: isUnavailable ? 0.5 : 0.85,
-                          ),
-                          height: 1.25,
-                        ),
-                      ),
+      final items = controller.currentProducts;
+      if (items.isEmpty) {
+        return Center(
+          child: Text(
+            'Aucun produit dans cette catégorie',
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        );
+      }
+
+      final isAdding = controller.isAddingProduct.value;
+
+      return Stack(
+        children: [
+          GridView.builder(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 3,
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.05,
+            ),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final product = items[index];
+              final isInOrder = controller.isProductInOrder(product);
+
+              return GestureDetector(
+                onTap: isAdding || isInOrder
+                    ? null
+                    : () => controller.onProductTap(product),
+                child: Opacity(
+                  opacity: isInOrder ? 0.45 : 1,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: BoxDecoration(
+                      color: _menuGridItemBackground(isInOrder),
+                      borderRadius: BorderRadius.circular(10),
+                      border: _menuGridItemBorder(isInOrder),
+                      boxShadow: _menuGridItemShadow(isInOrder),
                     ),
-                    if (isUnavailable)
-                      Positioned(
-                        bottom: 8,
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: const BoxDecoration(
-                            color: AppTheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.check,
-                            color: Colors.white,
-                            size: 14,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(10),
+                          child: Text(
+                            product.name,
+                            textAlign: TextAlign.center,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.darkText.withValues(
+                                alpha: isInOrder ? 0.5 : 0.85,
+                              ),
+                              height: 1.25,
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                        if (product.isComposed)
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: Icon(
+                              Icons.tune,
+                              size: 14,
+                              color: AppTheme.primary.withValues(alpha: 0.8),
+                            ),
+                          ),
+                        if (isInOrder)
+                          Positioned(
+                            bottom: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primary.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'AJOUTÉ',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
+              );
+            },
+          ),
+          if (isAdding)
+            Container(
+              color: Colors.white.withValues(alpha: 0.45),
+              child: const Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
-          );
-        },
+        ],
       );
     });
   }

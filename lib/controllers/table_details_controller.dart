@@ -1,17 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../data/demo_table_menu.dart';
+import '../core/network/api_exception.dart';
+import '../data/models/catalog/catalog_product_model.dart';
+import '../data/models/catalog/leaf_category_model.dart';
+import '../data/repositories/catalog_repository.dart';
+import '../data/repositories/order_repository.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
+import '../widgets/api_debug_dialog.dart';
+import '../widgets/composed_product_picker_sheet.dart';
 import 'session_controller.dart';
 
 class TableDetailsController extends GetxController {
+  TableDetailsController({
+    required CatalogRepository catalogRepository,
+    required OrderRepository orderRepository,
+  })  : _catalogRepository = catalogRepository,
+        _orderRepository = orderRepository;
+
+  final CatalogRepository _catalogRepository;
+  final OrderRepository _orderRepository;
+
   final selectedCategoryIndex = 0.obs;
-  final selectedMenuItems = <String>{}.obs;
   final isBottomPanelExpanded = true.obs;
   final showPaymentOptions = false.obs;
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
+  final isCatalogLoading = false.obs;
+  final isAddingProduct = false.obs;
+  final catalogError = RxnString();
+  final categories = <LeafCategoryModel>[].obs;
+  final products = <CatalogProductModel>[].obs;
 
   late final String orderNumber;
   int? orderId;
@@ -24,38 +43,37 @@ class TableDetailsController extends GetxController {
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
 
-    _syncSelectedMenuItemsFromOrder();
-
-    if (Get.isRegistered<SessionController>()) {
-      Get.find<SessionController>()
-          .loadOrderDetails(
-            orderNumber,
-            orderId: orderId,
-            forceRefresh: true,
-          )
-          .then((_) => _syncSelectedMenuItemsFromOrder());
-    }
+    _loadCatalog();
+    _refreshOrder();
   }
 
-  void _syncSelectedMenuItemsFromOrder() {
-    final currentOrder = order;
-    if (currentOrder == null) return;
+  Future<void> _loadCatalog() async {
+    isCatalogLoading.value = true;
+    catalogError.value = null;
 
-    final names = <String>{};
-    for (final category in demoTableMenuCategories) {
-      for (final item in category.items) {
-        if (_orderContainsProduct(currentOrder, item.name)) {
-          names.add(item.name);
-        }
+    try {
+      final loadedCategories = await _catalogRepository.getLeafCategories();
+      final loadedProducts = await _catalogRepository.getProducts();
+      categories.assignAll(loadedCategories);
+      products.assignAll(loadedProducts);
+      if (selectedCategoryIndex.value >= categories.length) {
+        selectedCategoryIndex.value = 0;
       }
+    } on ApiException catch (e) {
+      catalogError.value = e.message;
+    } catch (_) {
+      catalogError.value = 'Impossible de charger le menu.';
+    } finally {
+      isCatalogLoading.value = false;
     }
-    selectedMenuItems.assignAll(names);
   }
 
-  bool _orderContainsProduct(SessionOrder currentOrder, String itemName) {
-    final normalized = itemName.toUpperCase();
-    return currentOrder.products.any(
-      (product) => product.name.toUpperCase() == normalized,
+  Future<void> _refreshOrder() async {
+    if (!Get.isRegistered<SessionController>()) return;
+    await Get.find<SessionController>().loadOrderDetails(
+      orderNumber,
+      orderId: orderId,
+      forceRefresh: true,
     );
   }
 
@@ -67,8 +85,16 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  TableMenuCategory get currentCategory =>
-      demoTableMenuCategories[selectedCategoryIndex.value];
+  List<CatalogProductModel> get currentProducts {
+    if (categories.isEmpty) return const [];
+    final category = categories[selectedCategoryIndex.value];
+    return _catalogRepository.productsForCategory(products, category.id);
+  }
+
+  LeafCategoryModel? get currentCategory {
+    if (categories.isEmpty) return null;
+    return categories[selectedCategoryIndex.value];
+  }
 
   void selectCategory(int index) => selectedCategoryIndex.value = index;
 
@@ -130,27 +156,88 @@ class TableDetailsController extends GetxController {
 
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
-  void toggleMenuItem(TableMenuItem item) {
-    if (isMenuItemUnavailable(item)) return;
-    if (!Get.isRegistered<SessionController>()) return;
-    final session = Get.find<SessionController>();
+  Future<void> onProductTap(CatalogProductModel product) async {
+    if (isAddingProduct.value) return;
 
-    selectedMenuItems.add(item.name);
-    session.addTableMenuItemToOrder(orderNumber, item.name, item.price);
-    selectedMenuItems.refresh();
-  }
-
-  bool isMenuItemUnavailable(TableMenuItem item) {
-    if (!Get.isRegistered<SessionController>()) return false;
-    final session = Get.find<SessionController>();
-    for (final currentOrder in session.orders) {
-      if (currentOrder.number != orderNumber) continue;
-      return _orderContainsProduct(currentOrder, item.name);
+    final currentOrder = order;
+    if (currentOrder == null || currentOrder.id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
     }
-    return false;
+
+    isAddingProduct.value = true;
+    try {
+      if (product.isComposed) {
+        final detail = await _catalogRepository.getProductDetail(product.id);
+        await ComposedProductPickerSheet.show(
+          product: detail,
+          onConfirm: (selections) => _addComposedProduct(
+            orderId: currentOrder.id,
+            product: detail,
+            menuSelections: selections,
+            displayNumber: currentOrder.number,
+          ),
+        );
+      } else {
+        final updated = await _orderRepository.addSimpleProductToOrder(
+          orderId: currentOrder.id,
+          productId: product.id,
+          unitPrice: product.unitPrice,
+        );
+        _syncOrderInSession(updated, currentOrder.number);
+      }
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur ajout article',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
+    } finally {
+      isAddingProduct.value = false;
+    }
   }
 
-  bool isMenuItemSelected(String name) => selectedMenuItems.contains(name);
+  Future<void> _addComposedProduct({
+    required int orderId,
+    required CatalogProductModel product,
+    required List<Map<String, dynamic>> menuSelections,
+    required String displayNumber,
+  }) async {
+    isAddingProduct.value = true;
+    try {
+      final updated = await _orderRepository.addComposedProductToOrder(
+        orderId: orderId,
+        productId: product.id,
+        basePrice: product.unitPrice,
+        menuSelections: menuSelections,
+      );
+      _syncOrderInSession(updated, displayNumber);
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur ajout menu',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } finally {
+      isAddingProduct.value = false;
+    }
+  }
+
+  void _syncOrderInSession(SessionOrder updated, String displayNumber) {
+    if (!Get.isRegistered<SessionController>()) return;
+    Get.find<SessionController>().updateOrderRow(
+      updated.copyWith(number: displayNumber),
+    );
+  }
+
+  bool isProductInOrder(CatalogProductModel product) {
+    final currentOrder = order;
+    if (currentOrder == null) return false;
+    final normalized = product.name.toUpperCase();
+    return currentOrder.products.any(
+      (line) => line.name.toUpperCase() == normalized,
+    );
+  }
 
   void incrementProduct(int productIndex) {
     if (!Get.isRegistered<SessionController>()) return;

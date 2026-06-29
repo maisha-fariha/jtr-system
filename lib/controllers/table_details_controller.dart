@@ -14,18 +14,25 @@ class TableDetailsController extends GetxController {
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
 
   late final String orderNumber;
+  int? orderId;
 
   @override
   void onInit() {
     super.onInit();
     final args = Get.arguments;
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
+    final rawId = args is Map ? args['orderId'] : null;
+    orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
 
     _syncSelectedMenuItemsFromOrder();
 
-    if (orderNumber.isNotEmpty && Get.isRegistered<SessionController>()) {
+    if (Get.isRegistered<SessionController>()) {
       Get.find<SessionController>()
-          .loadOrderDetails(orderNumber, forceRefresh: true)
+          .loadOrderDetails(
+            orderNumber,
+            orderId: orderId,
+            forceRefresh: true,
+          )
           .then((_) => _syncSelectedMenuItemsFromOrder());
     }
   }
@@ -54,11 +61,10 @@ class TableDetailsController extends GetxController {
 
   SessionOrder? get order {
     if (!Get.isRegistered<SessionController>()) return null;
-    final session = Get.find<SessionController>();
-    for (final item in session.orders) {
-      if (item.number == orderNumber) return item;
-    }
-    return null;
+    return Get.find<SessionController>().findOrder(
+      orderNumber: orderNumber,
+      orderId: orderId,
+    );
   }
 
   TableMenuCategory get currentCategory =>

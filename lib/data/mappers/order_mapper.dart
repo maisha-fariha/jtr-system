@@ -8,11 +8,23 @@ import '../models/open_order_summary.dart';
 class ResolvedTable {
   const ResolvedTable({
     required this.id,
+    required this.tableNumber,
     this.salesZoneId,
+    this.existingOrderId,
+    this.status,
+    this.isSeparated = false,
   });
 
   final int id;
+  final int tableNumber;
   final int? salesZoneId;
+  final int? existingOrderId;
+  final String? status;
+  final bool isSeparated;
+
+  bool get hasActiveOrder => existingOrderId != null && existingOrderId! > 0;
+
+  bool get isAvailable => status == 'available' && !hasActiveOrder;
 }
 
 class OrderMapper {
@@ -231,29 +243,18 @@ class OrderMapper {
     return copy;
   }
 
+  /// Minimal payload to open an empty table. Do not send [seat_orders]:
+  /// the API requires nested courses/items when that field is present.
   static Map<String, dynamic> buildCreateOrderPayload({
     required int waiterId,
     required int numberOfGuests,
     required int tableId,
     int? salesZoneId,
   }) {
-    const seatNumber = 1;
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
       'number_of_guests': numberOfGuests,
       'table_id': tableId,
-      'seat_orders': [
-        {
-          'seat_number': seatNumber,
-          'courses': [
-            {
-              'course_number': 1,
-              'seat_number': seatNumber,
-              'items': <Map<String, dynamic>>[],
-            },
-          ],
-        },
-      ],
     };
 
     if (salesZoneId != null) {
@@ -277,21 +278,117 @@ class OrderMapper {
     List<Map<String, dynamic>> tables,
     String tableNumber,
   ) {
-    final id = resolveTableId(tables, tableNumber);
-    if (id == null) return null;
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
 
-    for (final table in tables) {
-      final tableId = table['id'];
-      if (tableId != id) continue;
+    final matches = _tablesMatchingNumber(tables, normalized);
+    if (matches.isEmpty) return null;
 
-      final zoneId = table['sales_zone_id'];
-      return ResolvedTable(
-        id: id,
-        salesZoneId: zoneId is int ? zoneId : (zoneId as num?)?.toInt(),
-      );
+    for (final table in matches) {
+      final orderId = _activeOrderId(table);
+      if (orderId != null) {
+        return _toResolvedTable(table, orderId: orderId);
+      }
     }
 
-    return ResolvedTable(id: id);
+    final preferred = _pickTableForNewOrder(matches);
+    return _toResolvedTable(preferred);
+  }
+
+  static List<Map<String, dynamic>> _tablesMatchingNumber(
+    List<Map<String, dynamic>> tables,
+    String normalized,
+  ) {
+    final matches = <Map<String, dynamic>>[];
+    final parsed = int.tryParse(normalized);
+
+    for (final table in tables) {
+      final number = table['table_number']?.toString() ??
+          table['number']?.toString();
+      if (number == normalized) {
+        matches.add(table);
+        continue;
+      }
+
+      final id = table['id'];
+      if (parsed != null && id is num && id.toInt() == parsed) {
+        matches.add(table);
+      }
+    }
+
+    return matches;
+  }
+
+  static Map<String, dynamic> _pickTableForNewOrder(
+    List<Map<String, dynamic>> matches,
+  ) {
+    bool isParentTable(Map<String, dynamic> table) {
+      if (table['is_separated'] == true) return false;
+      final parentId = table['parent_table_id'];
+      return parentId == null;
+    }
+
+    for (final table in matches) {
+      if (!isParentTable(table)) continue;
+      if (table['status'] == 'available' && _activeOrderId(table) == null) {
+        return table;
+      }
+    }
+
+    for (final table in matches) {
+      if (table['status'] == 'available' && _activeOrderId(table) == null) {
+        return table;
+      }
+    }
+
+    for (final table in matches) {
+      if (isParentTable(table)) return table;
+    }
+
+    return matches.first;
+  }
+
+  static int? _activeOrderId(Map<String, dynamic> table) {
+    final activeOrder = table['active_order'];
+    if (activeOrder is! Map<String, dynamic>) return null;
+    return (activeOrder['id'] as num?)?.toInt();
+  }
+
+  static int? _salesZoneIdFromTable(Map<String, dynamic> table) {
+    final direct = table['sales_zone_id'];
+    if (direct is num) return direct.toInt();
+
+    final activeOrder = table['active_order'];
+    if (activeOrder is Map<String, dynamic>) {
+      final fromOrder = activeOrder['sales_zone_id'];
+      if (fromOrder is num) return fromOrder.toInt();
+    }
+
+    return null;
+  }
+
+  static ResolvedTable _toResolvedTable(
+    Map<String, dynamic> table, {
+    int? orderId,
+  }) {
+    final id = (table['id'] as num?)?.toInt() ?? 0;
+    final tableNumber = (table['table_number'] as num?)?.toInt() ?? id;
+
+    return ResolvedTable(
+      id: id,
+      tableNumber: tableNumber,
+      salesZoneId: _salesZoneIdFromTable(table),
+      existingOrderId: orderId ?? _activeOrderId(table),
+      status: table['status'] as String?,
+      isSeparated: table['is_separated'] == true,
+    );
+  }
+
+  static int? activeOrderIdForTableNumber(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    return resolveTable(tables, tableNumber)?.existingOrderId;
   }
 
   static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {
@@ -342,27 +439,21 @@ class OrderMapper {
     List<Map<String, dynamic>> tables,
     String tableNumber,
   ) {
-    final normalized = tableNumber.trim();
-    if (normalized.isEmpty) return null;
+    return resolveTable(tables, tableNumber)?.id;
+  }
 
-    for (final table in tables) {
-      final number = table['table_number']?.toString() ??
-          table['number']?.toString() ??
-          table['name']?.toString();
-      if (number == normalized) {
-        final id = table['id'];
-        if (id is int) return id;
-      }
+  static int? extractOrderIdFromPayload(Map<String, dynamic> data) {
+    final direct = orderIdFromDetail(data);
+    if (direct > 0) return direct;
+
+    final activeOrder = data['active_order'];
+    if (activeOrder is Map<String, dynamic>) {
+      final id = (activeOrder['id'] as num?)?.toInt();
+      if (id != null && id > 0) return id;
     }
 
-    final parsed = int.tryParse(normalized);
-    if (parsed != null) {
-      for (final table in tables) {
-        final id = table['id'];
-        if (id == parsed) return parsed;
-      }
-      return parsed;
-    }
+    final orderId = data['order_id'];
+    if (orderId is num) return orderId.toInt();
 
     return null;
   }

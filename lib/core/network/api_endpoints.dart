@@ -11,6 +11,8 @@ class ApiEndpoints {
   static const createOrder = '/api/orders';
   static const markOrderPrinted = '/api/orders/mark-printed';
   static const tablesList = '/api/tables/list';
+  static const tables = '/api/tables';
+  static String tableById(int tableId) => '/api/tables/$tableId';
   static String tableSession(int tableId) => '/api/tables/$tableId/session';
 
   static String orderById(int id) => '/api/orders/$id';

@@ -2,6 +2,7 @@ import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../models/user_suggestion.dart';
 import '../../services/connectivity_service.dart';
+import '../../utils/api_log.dart';
 import '../datasources/auth_local_datasource.dart';
 import '../datasources/auth_remote_datasource.dart';
 import '../models/auth_session_model.dart';
@@ -123,6 +124,7 @@ class AuthRepository {
 
     await _local.saveSession(session);
     _apiClient.setAuthToken(session.token);
+    logAuthToken(session.token, source: 'login');
     return session;
   }
 
@@ -130,11 +132,13 @@ class AuthRepository {
     final token = _local.readToken();
     if (token != null && token.isNotEmpty) {
       _apiClient.setAuthToken(token);
+      logAuthToken(token, source: 'restored');
     }
   }
 
   Future<void> logout() async {
     await _local.clearSession();
     _apiClient.setAuthToken(null);
+    logAuthTokenCleared(source: 'logout');
   }
 }

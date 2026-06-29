@@ -11,6 +11,7 @@ import '../utils/app_theme.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../data/mappers/order_mapper.dart';
 import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
@@ -163,17 +164,50 @@ class SessionController extends GetxController {
   void _upsertOrderInList(SessionOrder order) {
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
-      orders[idx] = order.copyWith(number: orders[idx].number);
+      orders[idx] = order;
       return;
     }
 
-    final byNumber = orders.indexWhere((item) => item.number == order.number);
+    final byNumber = orders.indexWhere(
+      (item) => _tableKeysMatch(item.number, order.number),
+    );
     if (byNumber >= 0) {
-      orders[byNumber] = order.copyWith(number: orders[byNumber].number);
+      orders[byNumber] = order;
       return;
     }
 
     orders.insert(0, order);
+  }
+
+  static String normalizeTableKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return trimmed;
+    return trimmed.replaceFirst(RegExp(r'^T'), '');
+  }
+
+  static bool _tableKeysMatch(String a, String b) {
+    if (a == b) return true;
+    return normalizeTableKey(a) == normalizeTableKey(b);
+  }
+
+  SessionOrder? findOrder({String? orderNumber, int? orderId}) {
+    if (orderId != null && orderId > 0) {
+      for (final order in orders) {
+        if (order.id == orderId) return order;
+      }
+    }
+
+    if (orderNumber == null || orderNumber.isEmpty) return null;
+
+    for (final order in orders) {
+      if (order.number == orderNumber) return order;
+    }
+
+    for (final order in orders) {
+      if (_tableKeysMatch(order.number, orderNumber)) return order;
+    }
+
+    return null;
   }
 
   Future<void> _enrichMissingOrderDetails() async {
@@ -235,11 +269,13 @@ class SessionController extends GetxController {
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
+    int? orderId,
   }) async {
-    final idx = orders.indexWhere((order) => order.number == orderNumber);
-    if (idx < 0) return;
+    final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
+    if (existing == null) return;
 
-    final existing = orders[idx];
+    final idx = orders.indexWhere((order) => order.id == existing.id);
+    if (idx < 0) return;
     if (existing.isLocalOnly) return;
 
     if (!forceRefresh && existing.products.isNotEmpty) return;
@@ -281,29 +317,53 @@ class SessionController extends GetxController {
     TableNumberDialog.show(onConfirm: _onTableNumberConfirmed);
   }
 
-  void openTableDetails(String orderNumber) {
+  void openTableDetails(String orderNumber, {int? orderId}) {
     Get.toNamed(
       AppRoutes.tableDetails,
-      arguments: {'orderNumber': orderNumber},
+      arguments: {
+        'orderNumber': orderNumber,
+        if (orderId != null) 'orderId': orderId,
+      },
     );
   }
 
   void _onTableNumberConfirmed(String tableNumber) {
-    if (isTableOccupied(tableNumber)) {
-      TableOccupiedDialog.show(
-        userName: _currentUserDisplayName,
-        tableNumber: tableNumber,
-      );
-      return;
+    unawaited(_onTableNumberConfirmedAsync(tableNumber));
+  }
+
+  Future<void> _onTableNumberConfirmedAsync(String tableNumber) async {
+    try {
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final existingOrderId =
+          OrderMapper.activeOrderIdForTableNumber(tables, tableNumber);
+      if (existingOrderId != null || isTableOccupied(tableNumber)) {
+        TableOccupiedDialog.show(
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+        return;
+      }
+    } catch (_) {
+      if (isTableOccupied(tableNumber)) {
+        TableOccupiedDialog.show(
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+        return;
+      }
     }
 
-    TableNumberDialog.show(
-      title: 'NOMBRE DE COUVERTS',
-      onConfirm: (couverts) => _createTableAndOpenDetails(
-        tableNumber: tableNumber,
-        couverts: couverts,
-      ),
-    );
+    Future.microtask(() {
+      TableNumberDialog.show(
+        title: 'NOMBRE DE COUVERTS',
+        onConfirm: (couverts) {
+          unawaited(_createTableAndOpenDetails(
+            tableNumber: tableNumber,
+            couverts: couverts,
+          ));
+        },
+      );
+    });
   }
 
   Future<void> _createTableAndOpenDetails({
@@ -313,44 +373,65 @@ class SessionController extends GetxController {
     final guests = int.tryParse(couverts.trim()) ?? 1;
     final waiterId = _currentWaiterId;
     if (waiterId <= 0) {
-      _showSnack('Erreur', 'Utilisateur non connecté.');
+      _showCreateOrderError('Utilisateur non connecté. Veuillez vous reconnecter.');
       return;
     }
 
     isCreatingOrder.value = true;
     try {
-      final tables = await _sessionRepository.getTablesList();
+      await loadActiveDay(forceRefresh: true);
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
       final result = await _orderRepository.createTableOrder(
         waiterId: waiterId,
         tableNumber: tableNumber,
         numberOfGuests: guests,
         tables: tables,
+        salesZoneId: activeDay.value.salesZoneId,
       );
       final created = result.order;
+      final orderToShow = created;
 
       final loaded = await _orderRepository.refreshOpenOrdersEnsuring(
         created.id,
         fallbackTableNumber: int.tryParse(tableNumber.trim()),
       );
       orders.assignAll(loaded);
-      _upsertOrderInList(created);
+      _upsertOrderInList(orderToShow);
 
-      openTableDetails(created.number);
-      unawaited(loadOrderDetails(created.number, forceRefresh: true));
+      openTableDetails(orderToShow.number, orderId: created.id);
+      unawaited(
+        loadOrderDetails(
+          orderToShow.number,
+          orderId: created.id,
+          forceRefresh: true,
+        ),
+      );
     } on ApiException catch (e) {
-      final log = _orderRepository.lastCreateOrderLog;
-      if (log != null && log.trim().isNotEmpty) {
-        ApiDebugDialog.show(
-          title: 'Erreur création commande — API',
-          body: '$log\n\nMESSAGE: ${e.message}',
-        );
-      }
-      _showSnack('Erreur', e.message);
-    } catch (_) {
-      _showSnack('Erreur', 'Impossible de créer la commande.');
+      _showCreateOrderError(e.message, apiLog: _orderRepository.lastCreateOrderLog);
+    } catch (e) {
+      _showCreateOrderError(
+        'Impossible de créer la commande.',
+        apiLog: _orderRepository.lastCreateOrderLog,
+        detail: '$e',
+      );
     } finally {
       isCreatingOrder.value = false;
     }
+  }
+
+  void _showCreateOrderError(
+    String message, {
+    String? apiLog,
+    String? detail,
+  }) {
+    final log = apiLog?.trim();
+    if (log != null && log.isNotEmpty) {
+      ApiDebugDialog.show(
+        title: 'Erreur création commande — API',
+        body: detail == null ? '$log\n\nMESSAGE: $message' : '$log\n\nMESSAGE: $message\n\n$detail',
+      );
+    }
+    _showSnack('Erreur', message);
   }
 
   bool isTableOccupied(String tableNumber) {

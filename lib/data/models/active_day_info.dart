@@ -6,12 +6,14 @@ class ActiveDayInfo {
     required this.displayDate,
     this.sessionNumber,
     this.salesZoneLabel = 'SUR PLACE',
+    this.salesZoneId,
   });
 
   final int id;
   final String displayDate;
   final String? sessionNumber;
   final String salesZoneLabel;
+  final int? salesZoneId;
 
   factory ActiveDayInfo.fromJson(Map<String, dynamic> json) {
     final id = json['id'] as int? ?? 0;
@@ -22,8 +24,10 @@ class ActiveDayInfo {
 
     final salesZone = json['sales_zone'];
     var zoneLabel = 'SUR PLACE';
+    int? salesZoneId = (json['sales_zone_id'] as num?)?.toInt();
     if (salesZone is Map<String, dynamic>) {
       zoneLabel = (salesZone['name'] as String? ?? zoneLabel).toUpperCase();
+      salesZoneId ??= (salesZone['id'] as num?)?.toInt();
     } else if (json['sales_zone_name'] is String) {
       zoneLabel = (json['sales_zone_name'] as String).toUpperCase();
     }
@@ -35,6 +39,7 @@ class ActiveDayInfo {
       displayDate: DateFormatter.formatFrenchLongDate(parsed),
       sessionNumber: sessionNumber ?? (id > 0 ? '$id' : null),
       salesZoneLabel: zoneLabel,
+      salesZoneId: salesZoneId,
     );
   }
 

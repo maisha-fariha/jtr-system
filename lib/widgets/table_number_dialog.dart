@@ -50,8 +50,9 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
 
   void _confirm() {
     if (_tableInput.isEmpty) return;
+    final value = _tableInput;
     Get.back();
-    widget.onConfirm?.call(_tableInput);
+    Future.microtask(() => widget.onConfirm?.call(value));
   }
 
   @override

@@ -215,53 +215,28 @@ class OrderRepository {
       throw ApiException(message: 'Table $tableNumber introuvable.');
     }
 
-    apiLog.writeln('Table résolue: id=${table.id}, numéro=$tableNumber');
-
-    final orderPayload = OrderMapper.buildCreateOrderPayload(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: table.id,
-      salesZoneId: salesZoneId ?? table.salesZoneId,
+    apiLog.writeln(
+      'Table résolue: id=${table.id}, numéro=${table.tableNumber}, '
+      'status=${table.status ?? '—'}, '
+      'activeOrder=${table.existingOrderId ?? '—'}',
     );
 
-    Map<String, dynamic> created;
-    _remote.lastApiLog = null;
-    try {
-      created = await _remote.createOrder(orderPayload);
-    } on ApiException catch (orderError) {
-      apiLog.writeln('── POST /api/orders échoué ──');
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
-      apiLog.writeln('Raison: ${orderError.message}');
-      lastCreateOrderLog = apiLog.toString();
-      rethrow;
+    var orderId = table.existingOrderId;
+
+    if (orderId != null && orderId > 0) {
+      apiLog.writeln('── Table déjà ouverte → commande existante $orderId ──');
+    } else {
+      orderId = await _openTableOrder(
+        table: table,
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        salesZoneId: salesZoneId,
+        tables: tables,
+        apiLog: apiLog,
+      );
     }
 
-    apiLog.writeln('── Via POST /api/orders ──');
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
-
-    created = _unwrapOrderResponse(created);
-    apiLog
-      ..writeln()
-      ..writeln('── Données extraites après création ──')
-      ..writeln(formatApiPayload(created));
-
-    var orderId = OrderMapper.orderIdFromDetail(created);
-    if (orderId <= 0) {
-      orderId = (await _resolveOrderIdForTable(
-            tableId: table.id,
-            tableNumber: int.tryParse(tableNumber.trim()),
-          )) ??
-          0;
-      if (orderId > 0) {
-        apiLog.writeln('── Order id résolu via open-orders: $orderId ──');
-      }
-    }
-
-    if (orderId <= 0) {
+    if (orderId == null || orderId <= 0) {
       lastCreateOrderLog = apiLog.toString();
       throw ApiException(
         message:
@@ -274,10 +249,9 @@ class OrderRepository {
     await _local.saveOrderDetail(orderId, detail);
     apiLog.writeln(formatApiPayload(detail));
 
-    final parsedTableNumber = int.tryParse(tableNumber.trim());
     await refreshOpenOrdersEnsuring(
       orderId,
-      fallbackTableNumber: parsedTableNumber,
+      fallbackTableNumber: table.tableNumber,
     );
 
     final inOpenList = findCachedSummary(orderId) != null;
@@ -287,7 +261,7 @@ class OrderRepository {
           : 'Présent via détail commande: oui (id=$orderId)',
     );
 
-    final displayNumber = OrderMapper.tableDisplayNumber(tableNumber);
+    final displayNumber = OrderMapper.tableDisplayNumber('${table.tableNumber}');
     final order =
         OrderMapper.fromOrderDetail(detail).copyWith(number: displayNumber);
 
@@ -298,6 +272,100 @@ class OrderRepository {
 
     lastCreateOrderLog = apiLog.toString();
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
+  }
+
+  Future<int?> _openTableOrder({
+    required ResolvedTable table,
+    required int waiterId,
+    required int numberOfGuests,
+    required int? salesZoneId,
+    required List<Map<String, dynamic>> tables,
+    required StringBuffer apiLog,
+  }) async {
+    final sessionPayload = OrderMapper.buildStartTableSessionPayload(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+    );
+
+    Map<String, dynamic>? created;
+    _remote.lastApiLog = null;
+    try {
+      created = await _remote.startTableSession(table.id, sessionPayload);
+      apiLog.writeln('── Via POST /api/tables/${table.id}/session ──');
+    } on ApiException catch (sessionError) {
+      apiLog.writeln('── POST /api/tables/${table.id}/session échoué ──');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      apiLog.writeln('Raison: ${sessionError.message}');
+    }
+
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+
+    var orderId = created == null
+        ? null
+        : OrderMapper.extractOrderIdFromPayload(_unwrapOrderResponse(created));
+
+    if (orderId != null && orderId > 0) {
+      return orderId;
+    }
+
+    orderId = await _resolveOrderIdForTable(
+      tableId: table.id,
+      tableNumber: table.tableNumber,
+    );
+    if (orderId != null && orderId > 0) {
+      apiLog.writeln('── Order id résolu via open-orders: $orderId ──');
+      return orderId;
+    }
+
+    orderId = OrderMapper.activeOrderIdForTableNumber(
+      tables,
+      '${table.tableNumber}',
+    );
+    if (orderId != null && orderId > 0) {
+      apiLog.writeln('── Order id depuis GET /api/tables: $orderId ──');
+      return orderId;
+    }
+
+    final orderPayload = OrderMapper.buildCreateOrderPayload(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: salesZoneId ?? table.salesZoneId,
+    );
+
+    _remote.lastApiLog = null;
+    try {
+      created = await _remote.createOrder(orderPayload);
+      apiLog.writeln('── Via POST /api/orders ──');
+    } on ApiException catch (orderError) {
+      apiLog.writeln('── POST /api/orders échoué ──');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      apiLog.writeln('Raison: ${orderError.message}');
+      lastCreateOrderLog = apiLog.toString();
+      rethrow;
+    }
+
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+
+    orderId = OrderMapper.extractOrderIdFromPayload(
+      _unwrapOrderResponse(created),
+    );
+    if (orderId != null && orderId > 0) {
+      return orderId;
+    }
+
+    return _resolveOrderIdForTable(
+      tableId: table.id,
+      tableNumber: table.tableNumber,
+    );
   }
 
   Map<String, dynamic> _unwrapOrderResponse(Map<String, dynamic> data) {

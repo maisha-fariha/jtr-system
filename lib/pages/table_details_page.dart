@@ -23,13 +23,10 @@ class TableDetailsPage extends GetView<TableDetailsController> {
           }
 
           final session = Get.find<SessionController>();
-          SessionOrder? order;
-          for (final item in session.orders) {
-            if (item.number == controller.orderNumber) {
-              order = item;
-              break;
-            }
-          }
+          final order = session.findOrder(
+            orderNumber: controller.orderNumber,
+            orderId: controller.orderId,
+          );
 
           if (order == null) {
             return Center(
@@ -48,13 +45,10 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
-                  SessionOrder? currentOrder;
-                  for (final item in session.orders) {
-                    if (item.number == controller.orderNumber) {
-                      currentOrder = item;
-                      break;
-                    }
-                  }
+                  SessionOrder? currentOrder = session.findOrder(
+                    orderNumber: controller.orderNumber,
+                    orderId: controller.orderId,
+                  );
                   currentOrder ??= order!;
 
                   return Column(
@@ -705,12 +699,12 @@ class _MenuGrid extends GetView<TableDetailsController> {
     return Obx(() {
       final selectedIndex = controller.selectedCategoryIndex.value;
       final session = Get.find<SessionController>();
-      final orders = session.orders;
-      for (final currentOrder in orders) {
-        if (currentOrder.number == controller.orderNumber) {
-          currentOrder.products.length;
-          break;
-        }
+      final currentOrder = session.findOrder(
+        orderNumber: controller.orderNumber,
+        orderId: controller.orderId,
+      );
+      if (currentOrder != null) {
+        currentOrder.products.length;
       }
       final items = demoTableMenuCategories[selectedIndex].items;
 

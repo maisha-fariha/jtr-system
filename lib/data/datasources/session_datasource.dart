@@ -71,6 +71,51 @@ class SessionRemoteDataSource {
   }
 
   Future<List<Map<String, dynamic>>> fetchTablesList() async {
+    try {
+      return await _fetchPaginatedTables();
+    } catch (_) {
+      return _fetchLegacyTablesList();
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchPaginatedTables() async {
+    final allTables = <Map<String, dynamic>>[];
+    var page = 1;
+    var lastPage = 1;
+
+    while (page <= lastPage && page <= 25) {
+      final response = await _client.get<Map<String, dynamic>>(
+        ApiEndpoints.tables,
+        queryParameters: {'page': page},
+      );
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to load tables.',
+          statusCode: envelope.status,
+        );
+      }
+
+      final pageTables = _extractTablesFromPayload(envelope.data);
+      allTables.addAll(pageTables);
+
+      lastPage = _readLastPage(envelope.data);
+      if (pageTables.isEmpty) break;
+      page++;
+    }
+
+    if (allTables.isEmpty) {
+      throw ApiException(message: 'Aucune table disponible.');
+    }
+
+    return allTables;
+  }
+
+  Future<List<Map<String, dynamic>>> _fetchLegacyTablesList() async {
     final response =
         await _client.get<Map<String, dynamic>>(ApiEndpoints.tablesList);
     final envelope = ApiEnvelope<dynamic>.fromJson(
@@ -85,18 +130,50 @@ class SessionRemoteDataSource {
       );
     }
 
-    final data = envelope.data;
+    final tables = _extractTablesFromPayload(envelope.data);
+    return tables;
+  }
+
+  List<Map<String, dynamic>> _extractTablesFromPayload(dynamic data) {
     if (data is List) {
       return data.whereType<Map<String, dynamic>>().toList();
     }
-    if (data is Map<String, dynamic>) {
-      final tables = data['tables'] ?? data['data'];
-      if (tables is List) {
-        return tables.whereType<Map<String, dynamic>>().toList();
+
+    if (data is! Map<String, dynamic>) return const [];
+
+    final direct = data['data'];
+    if (direct is List) {
+      return direct.whereType<Map<String, dynamic>>().toList();
+    }
+
+    if (direct is Map<String, dynamic>) {
+      final nested = direct['data'];
+      if (nested is List) {
+        return nested.whereType<Map<String, dynamic>>().toList();
       }
     }
 
+    final tables = data['tables'];
+    if (tables is List) {
+      return tables.whereType<Map<String, dynamic>>().toList();
+    }
+
     return const [];
+  }
+
+  int _readLastPage(dynamic data) {
+    if (data is! Map<String, dynamic>) return 1;
+
+    final meta = data['meta'];
+    if (meta is Map<String, dynamic>) {
+      final last = meta['last_page'];
+      if (last is num) return last.toInt();
+    }
+
+    final directMeta = data['last_page'];
+    if (directMeta is num) return directMeta.toInt();
+
+    return 1;
   }
 }
 
@@ -113,6 +190,7 @@ class SessionLocalDataSource {
         'displayDate': day.displayDate,
         'sessionNumber': day.sessionNumber,
         'salesZoneLabel': day.salesZoneLabel,
+        'salesZoneId': day.salesZoneId,
       }),
     );
   }
@@ -129,6 +207,7 @@ class SessionLocalDataSource {
       displayDate: decoded['displayDate'] as String? ?? '',
       sessionNumber: decoded['sessionNumber'] as String?,
       salesZoneLabel: decoded['salesZoneLabel'] as String? ?? 'SUR PLACE',
+      salesZoneId: decoded['salesZoneId'] as int?,
     );
   }
 

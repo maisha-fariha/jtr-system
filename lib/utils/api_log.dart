@@ -39,6 +39,18 @@ void logApiCall({
   debugPrint(text);
 }
 
+/// Logs the bearer token to the debug console (login / session restore).
+void logAuthToken(String token, {required String source}) {
+  debugPrint('════════ AUTH TOKEN ($source) ════════');
+  debugPrint(token);
+  debugPrint('Authorization: Bearer $token');
+  debugPrint('════════════════════════════════════════');
+}
+
+void logAuthTokenCleared({required String source}) {
+  debugPrint('════════ AUTH TOKEN cleared ($source) ════════');
+}
+
 String formatApiPayload(Object? value) => _encode(value);
 
 String _encode(Object? value) {

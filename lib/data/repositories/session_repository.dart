@@ -121,25 +121,80 @@ class SessionRepository {
     } catch (_) {}
   }
 
-  /// Open tables/orders for the session screen from [GET /api/tables/list].
+  /// Open orders for the session screen — primary [GET /api/orders], not tables.
   Future<List<SessionOrder>> getSessionOrders({bool forceRefresh = false}) async {
-    if (!forceRefresh && _local.readTablesList().isNotEmpty) {
-      _refreshTablesInBackground();
-      return OrderMapper.sessionOrdersFromTables(_local.readTablesList());
+    if (!forceRefresh && _local.readOpenOrdersList().isNotEmpty) {
+      _refreshSessionOrdersInBackground();
+      return _sessionOrdersFromCache();
     }
 
     if (!await _connectivity.isOnline) {
-      final cached = _local.readTablesList();
-      if (cached.isEmpty) {
+      final cachedOrders = _local.readOpenOrdersList();
+      if (cachedOrders.isEmpty) {
         throw ApiException(
-          message: 'Liste des tables indisponible hors ligne.',
+          message: 'Liste des commandes indisponible hors ligne.',
         );
       }
-      return OrderMapper.sessionOrdersFromTables(cached);
+      return _sessionOrdersFromCache();
     }
 
-    final tables = await _remote.fetchTablesList();
-    await _local.saveTablesList(tables);
-    return OrderMapper.sessionOrdersFromTables(tables);
+    return _fetchSessionOrdersFromNetwork();
+  }
+
+  List<SessionOrder> _sessionOrdersFromCache() {
+    final orders = OrderMapper.sessionOrdersFromOrdersList(
+      _local.readOpenOrdersList(),
+    );
+    final tables = _local.readTablesList();
+    if (tables.isEmpty) return orders;
+    return OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
+  }
+
+  Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork() async {
+    final activeDay = await getActiveDay();
+    var orderMaps = await _loadOrderMaps(activeDay);
+
+    if (orderMaps.isEmpty) {
+      final tables = await _remote.fetchTablesList();
+      await _local.saveTablesList(tables);
+      return OrderMapper.sessionOrdersFromTables(tables);
+    }
+
+    await _local.saveOpenOrdersList(orderMaps);
+
+    List<Map<String, dynamic>> tables = const [];
+    try {
+      tables = await _remote.fetchTablesList();
+      await _local.saveTablesList(tables);
+    } catch (_) {
+      tables = _local.readTablesList();
+    }
+
+    final orders = OrderMapper.sessionOrdersFromOrdersList(orderMaps);
+    if (tables.isEmpty) return orders;
+    return OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
+  }
+
+  Future<List<Map<String, dynamic>>> _loadOrderMaps(ActiveDayInfo activeDay) async {
+    try {
+      final orders = await _remote.fetchOrdersList(
+        dayId: activeDay.id > 0 ? activeDay.id : null,
+        salesZoneId: activeDay.salesZoneId,
+      );
+      if (orders.isNotEmpty) return orders;
+    } catch (_) {}
+
+    try {
+      return await _remote.fetchOpenOrdersList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _refreshSessionOrdersInBackground() async {
+    try {
+      if (!await _connectivity.isOnline) return;
+      await _fetchSessionOrdersFromNetwork();
+    } catch (_) {}
   }
 }

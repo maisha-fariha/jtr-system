@@ -70,6 +70,75 @@ class SessionRemoteDataSource {
     return DayStatisticsInfo.fromJson(envelope.data!);
   }
 
+  /// Open orders for the session screen ([GET /api/orders], active business day).
+  Future<List<Map<String, dynamic>>> fetchOrdersList({
+    int? dayId,
+    int? salesZoneId,
+  }) async {
+    final allOrders = <Map<String, dynamic>>[];
+    var page = 1;
+    var lastPage = 1;
+
+    while (page <= lastPage && page <= 25) {
+      final queryParameters = <String, dynamic>{
+        'active_day': true,
+        'per_page': 100,
+        'page': page,
+      };
+      if (dayId != null && dayId > 0) {
+        queryParameters['day_id'] = dayId;
+      }
+      if (salesZoneId != null && salesZoneId > 0) {
+        queryParameters['sales_zone_id'] = salesZoneId;
+      }
+
+      final response = await _client.get<Map<String, dynamic>>(
+        ApiEndpoints.orders,
+        queryParameters: queryParameters,
+      );
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to load orders.',
+          statusCode: envelope.status,
+        );
+      }
+
+      final pageOrders = _extractOrdersFromPayload(envelope.data);
+      allOrders.addAll(pageOrders);
+
+      lastPage = _readLastPage(envelope.data);
+      if (pageOrders.isEmpty) break;
+      page++;
+    }
+
+    return allOrders;
+  }
+
+  /// Fallback when [fetchOrdersList] returns nothing ([GET /api/days/open-orders]).
+  Future<List<Map<String, dynamic>>> fetchOpenOrdersList() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.openOrders,
+    );
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load open orders.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return _extractOpenOrdersFromPayload(envelope.data);
+  }
+
   Future<List<Map<String, dynamic>>> fetchTablesList() async {
     try {
       return await _fetchTablesListEndpoint();
@@ -206,6 +275,43 @@ class SessionRemoteDataSource {
 
     return 1;
   }
+
+  List<Map<String, dynamic>> _extractOrdersFromPayload(dynamic data) {
+    if (data is List) {
+      return data.whereType<Map<String, dynamic>>().toList();
+    }
+
+    if (data is! Map<String, dynamic>) return const [];
+
+    final direct = data['data'];
+    if (direct is List) {
+      return direct.whereType<Map<String, dynamic>>().toList();
+    }
+
+    if (direct is Map<String, dynamic>) {
+      final nested = direct['data'];
+      if (nested is List) {
+        return nested.whereType<Map<String, dynamic>>().toList();
+      }
+    }
+
+    return const [];
+  }
+
+  List<Map<String, dynamic>> _extractOpenOrdersFromPayload(dynamic data) {
+    if (data is List) {
+      return data.whereType<Map<String, dynamic>>().toList();
+    }
+
+    if (data is! Map<String, dynamic>) return const [];
+
+    final openOrders = data['openOrders'] ?? data['open_orders'];
+    if (openOrders is List) {
+      return openOrders.whereType<Map<String, dynamic>>().toList();
+    }
+
+    return _extractOrdersFromPayload(data);
+  }
 }
 
 class SessionLocalDataSource {
@@ -268,6 +374,23 @@ class SessionLocalDataSource {
 
   List<Map<String, dynamic>> readTablesList() {
     final raw = _storage.readString(StorageConstants.tablesListKey);
+    if (raw == null || raw.isEmpty) return const [];
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const [];
+
+    return decoded.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> saveOpenOrdersList(List<Map<String, dynamic>> orders) async {
+    await _storage.writeString(
+      StorageConstants.openOrdersKey,
+      jsonEncode(orders),
+    );
+  }
+
+  List<Map<String, dynamic>> readOpenOrdersList() {
+    final raw = _storage.readString(StorageConstants.openOrdersKey);
     if (raw == null || raw.isEmpty) return const [];
 
     final decoded = jsonDecode(raw);

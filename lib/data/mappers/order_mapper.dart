@@ -79,6 +79,72 @@ class OrderMapper {
     return displayNumbers.map((number) => byDisplay[number]!).toList();
   }
 
+  /// Builds session rows from [GET /api/orders] (active-day open orders).
+  static List<SessionOrder> sessionOrdersFromOrdersList(
+    List<Map<String, dynamic>> orders,
+  ) {
+    final sortMillisById = <int, int>{};
+    final rows = <SessionOrder>[];
+
+    for (final order in orders) {
+      final orderId = orderIdFromDetail(order);
+      if (orderId <= 0) continue;
+
+      rows.add(fromOrderDetail(order));
+      sortMillisById[orderId] = _orderSortMillis(order);
+    }
+
+    rows.sort(
+      (a, b) =>
+          (sortMillisById[b.id] ?? 0).compareTo(sortMillisById[a.id] ?? 0),
+    );
+    return rows;
+  }
+
+  /// Merges API orders with tables that have an open session but no order yet.
+  static List<SessionOrder> mergeOrdersWithOpenTableSessions(
+    List<SessionOrder> orders,
+    List<Map<String, dynamic>> tables,
+  ) {
+    final byDisplay = <String, SessionOrder>{
+      for (final order in orders) order.number: order,
+    };
+    final sortMillisByDisplay = <String, int>{
+      for (final order in orders) order.number: _sessionOrderSortMillis(order),
+    };
+
+    for (final table in tables) {
+      if (!_hasOpenSession(table)) continue;
+
+      final sessionOrder = fromTableSession(table);
+      final displayNumber = sessionOrder.number;
+      if (byDisplay.containsKey(displayNumber)) continue;
+
+      byDisplay[displayNumber] = sessionOrder;
+      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
+    }
+
+    final displayNumbers = byDisplay.keys.toList()
+      ..sort(
+        (a, b) => (sortMillisByDisplay[b] ?? 0)
+            .compareTo(sortMillisByDisplay[a] ?? 0),
+      );
+
+    return displayNumbers.map((number) => byDisplay[number]!).toList();
+  }
+
+  static int _orderSortMillis(Map<String, dynamic> order) {
+    final createdAt = order['created_at'];
+    if (createdAt is String) {
+      return DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
+    }
+    return 0;
+  }
+
+  static int _sessionOrderSortMillis(SessionOrder order) {
+    return order.id;
+  }
+
   static bool _hasOpenSession(Map<String, dynamic> table) {
     if (_activeOrderId(table) != null) return false;
 

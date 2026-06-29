@@ -7,7 +7,9 @@ class ApiEndpoints {
 
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';
-  static const createOrder = '/api/orders';
+  static const orders = '/api/orders';
+  static const createOrder = orders;
+  static const openOrders = '/api/days/open-orders';
   static const markOrderPrinted = '/api/orders/mark-printed';
   static const tablesList = '/api/tables/list';
   static const tables = '/api/tables';

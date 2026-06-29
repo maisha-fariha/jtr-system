@@ -5,7 +5,10 @@ import '../core/network/api_client.dart';
 import '../core/storage/hive_storage.dart';
 import '../data/datasources/auth_local_datasource.dart';
 import '../data/datasources/auth_remote_datasource.dart';
+import '../data/datasources/order_local_datasource.dart';
+import '../data/datasources/order_remote_datasource.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/order_repository.dart';
 import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
 
@@ -37,6 +40,22 @@ class AppBinding extends Bindings {
         local: Get.find<AuthLocalDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
         apiClient: Get.find<ApiClient>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<OrderLocalDataSource>(
+      () => OrderLocalDataSource(Get.find<HiveStorage>()),
+      fenix: true,
+    );
+    Get.lazyPut<OrderRemoteDataSource>(
+      () => OrderRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<OrderRepository>(
+      () => OrderRepository(
+        remote: Get.find<OrderRemoteDataSource>(),
+        local: Get.find<OrderLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,
     );

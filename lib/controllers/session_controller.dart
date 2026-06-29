@@ -7,6 +7,8 @@ import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/order_repository.dart';
+import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -55,52 +57,52 @@ class SessionTableUiState {
 }
 
 class SessionController extends GetxController {
+  SessionController({required OrderRepository orderRepository})
+      : _orderRepository = orderRepository;
+
+  final OrderRepository _orderRepository;
+
   final selectedAction = SessionAction.nouvelleCommande.obs;
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
-
-  static const _initialOrders = [
-    SessionOrder(
-      number: 'T5',
-      numberColor: AppTheme.primary,
-      group: '1',
-      poste: 'POC1',
-      profitCenter: 'SUR PLACE',
-      couverts: '0',
-      impressionCount: 0,
-      impressionColor: Color(0xFFE74C3C),
-      total: '630,00 €',
-      products: [
-        OrderProduct(quantity: '1', name: 'SALADE CAESAR', price: '110,00 €'),
-        OrderProduct(quantity: '1', name: 'BURGER CLASSIC', price: '150,00 €'),
-        OrderProduct(quantity: '2', name: 'FRITES MAISON', price: '80,00 €'),
-        OrderProduct(quantity: '2', name: 'COCA COLA', price: '40,00 €'),
-        OrderProduct(quantity: '1', name: 'DESSERT DU JOUR', price: '250,00 €'),
-      ],
-    ),
-    SessionOrder(
-      number: 'T6',
-      numberColor: Color(0xFF7EB8DA),
-      group: '1',
-      poste: 'POC1',
-      profitCenter: 'SUR PLACE',
-      couverts: '0',
-      impressionCount: 1,
-      impressionColor: Color(0xFFF1C40F),
-      total: '950,00 €',
-      products: [
-        OrderProduct(quantity: '1', name: 'SALADE DI MARE', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA VEGETARIEN', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA REGINA', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA PARMA', price: '150,00 €'),
-      ],
-    ),
-  ];
+  final isLoadingOrders = false.obs;
+  final loadingDetailOrderNumbers = <String>{}.obs;
+  final ordersError = RxnString();
 
   @override
   void onInit() {
     super.onInit();
-    orders.assignAll(_initialOrders);
+    loadOpenOrders();
+  }
+
+  Future<void> loadOpenOrders({bool forceRefresh = false}) async {
+    isLoadingOrders.value = true;
+    ordersError.value = null;
+
+    try {
+      final loaded = await _orderRepository.getOpenOrders(
+        forceRefresh: forceRefresh,
+      );
+      _mergeRemoteOrders(loaded);
+    } on ApiException catch (e) {
+      ordersError.value = e.message;
+      if (orders.isEmpty) {
+        _showSnack('Erreur', e.message);
+      }
+    } catch (_) {
+      ordersError.value = 'Impossible de charger les commandes.';
+      if (orders.isEmpty) {
+        _showSnack('Erreur', ordersError.value!);
+      }
+    } finally {
+      isLoadingOrders.value = false;
+    }
+  }
+
+  void _mergeRemoteOrders(List<SessionOrder> remoteOrders) {
+    final localOnly =
+        orders.where((order) => order.isLocalOnly).toList(growable: false);
+    orders.assignAll([...remoteOrders, ...localOnly]);
   }
 
   void selectAction(SessionAction action) {
@@ -109,14 +111,22 @@ class SessionController extends GetxController {
 
   void toggleOrderExpansion(String orderNumber) {
     final current = tableUiState.value.expandedOrderNumber;
+    final willExpand = current != orderNumber;
     tableUiState.value = tableUiState.value.copyWith(
-      expandedOrderNumber: current == orderNumber ? null : orderNumber,
-      clearExpanded: current == orderNumber,
+      expandedOrderNumber: willExpand ? orderNumber : null,
+      clearExpanded: !willExpand,
     );
+    if (willExpand) {
+      loadOrderDetails(orderNumber);
+    }
   }
 
   bool isOrderExpanded(String orderNumber) {
     return tableUiState.value.expandedOrderNumber == orderNumber;
+  }
+
+  bool isLoadingOrderDetail(String orderNumber) {
+    return loadingDetailOrderNumbers.contains(orderNumber);
   }
 
   void selectRow({
@@ -126,6 +136,7 @@ class SessionController extends GetxController {
   }) {
     final current = tableUiState.value;
     final isExpanded = current.expandedOrderNumber == orderNumber;
+    final willExpand = expandOnNumberTap && !isExpanded;
 
     tableUiState.value = SessionTableUiState(
       expandedOrderNumber: expandOnNumberTap
@@ -136,6 +147,35 @@ class SessionController extends GetxController {
         productIndex: productIndex,
       ),
     );
+
+    if (willExpand) {
+      loadOrderDetails(orderNumber);
+    }
+  }
+
+  Future<void> loadOrderDetails(String orderNumber) async {
+    final idx = orders.indexWhere((order) => order.number == orderNumber);
+    if (idx < 0) return;
+
+    final existing = orders[idx];
+    if (existing.isLocalOnly) return;
+
+    if (loadingDetailOrderNumbers.contains(orderNumber)) return;
+
+    loadingDetailOrderNumbers.add(orderNumber);
+    loadingDetailOrderNumbers.refresh();
+
+    try {
+      final detail = await _orderRepository.getOrderDetail(existing.id);
+      orders[idx] = detail.copyWith(number: existing.number);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible de charger les produits.');
+    } finally {
+      loadingDetailOrderNumbers.remove(orderNumber);
+      loadingDetailOrderNumbers.refresh();
+    }
   }
 
   bool isRowSelected({
@@ -190,6 +230,7 @@ class SessionController extends GetxController {
 
     orders.add(
       SessionOrder(
+        id: 0,
         number: orderNumber,
         numberColor: AppTheme.primary,
         group: '1',
@@ -300,21 +341,14 @@ class SessionController extends GetxController {
       final existing = orders[idx];
       final newTotal =
           _parseTotalString(existing.total) + _sumProducts(newProducts);
-      orders[idx] = SessionOrder(
-        number: existing.number,
-        numberColor: existing.numberColor,
-        group: existing.group,
-        poste: existing.poste,
-        profitCenter: existing.profitCenter,
-        couverts: existing.couverts,
-        impressionCount: existing.impressionCount,
-        impressionColor: existing.impressionColor,
+      orders[idx] = existing.copyWith(
         total: _formatTotal(newTotal),
         products: [...existing.products, ...newProducts],
       );
     } else {
       final total = _sumProducts(newProducts);
       orders.add(SessionOrder(
+        id: 0,
         number: tableNumber,
         numberColor: AppTheme.primary,
         group: '1',
@@ -429,15 +463,7 @@ class SessionController extends GetxController {
       (sum, product) => sum + _parsePriceString(product.price),
     );
 
-    orders[idx] = SessionOrder(
-      number: existing.number,
-      numberColor: existing.numberColor,
-      group: existing.group,
-      poste: existing.poste,
-      profitCenter: existing.profitCenter,
-      couverts: existing.couverts,
-      impressionCount: existing.impressionCount,
-      impressionColor: existing.impressionColor,
+    orders[idx] = existing.copyWith(
       total: _formatTotal(newTotal),
       products: products,
     );
@@ -522,9 +548,27 @@ class SessionController extends GetxController {
     );
   }
 
-  void deleteOrder(String orderNumber) {
-    orders.removeWhere((order) => order.number == orderNumber);
+  Future<void> deleteOrder(String orderNumber) async {
+    final idx = orders.indexWhere((order) => order.number == orderNumber);
+    if (idx < 0) return;
 
+    final order = orders[idx];
+
+    try {
+      if (!order.isLocalOnly) {
+        await _orderRepository.closeOrder(order.id);
+      }
+
+      orders.removeAt(idx);
+      _clearUiStateForOrder(orderNumber);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible d\'annuler la table.');
+    }
+  }
+
+  void _clearUiStateForOrder(String orderNumber) {
     final state = tableUiState.value;
     var nextState = state;
 
@@ -545,14 +589,35 @@ class SessionController extends GetxController {
     );
   }
 
-  void applyOffer(String orderNumber) {
-    Get.snackbar(
-      'Offre',
-      'Offre appliquée sur la table $orderNumber.',
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+  Future<void> applyOffer(String orderNumber) async {
+    final idx = orders.indexWhere((order) => order.number == orderNumber);
+    if (idx < 0) return;
+
+    final order = orders[idx];
+
+    try {
+      if (order.isLocalOnly) {
+        final offeredProducts = order.products
+            .map((product) => product.copyWith(price: '0,00 €'))
+            .toList();
+        orders[idx] = order.copyWith(
+          total: '0,00 €',
+          products: offeredProducts,
+        );
+      } else {
+        final updated = await _orderRepository.applyTableOffer(order.id);
+        orders[idx] = updated.copyWith(number: order.number);
+      }
+
+      _showSnack(
+        'Offre',
+        'Offre appliquée sur la table $orderNumber.',
+      );
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible d\'appliquer l\'offre.');
+    }
   }
 
   Future<void> printTicket() async {
@@ -585,6 +650,16 @@ class SessionController extends GetxController {
       const TicketSuccessDialog(),
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.45),
+    );
+  }
+
+  void _showSnack(String title, String message) {
+    Get.snackbar(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
     );
   }
 }

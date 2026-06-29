@@ -6,4 +6,6 @@ class StorageConstants {
   static const loginRolesKey = 'login_roles';
   static const authSessionKey = 'auth_session';
   static const authTokenKey = 'auth_token';
+  static const openOrdersKey = 'open_orders';
+  static const orderDetailsPrefix = 'order_detail_';
 }

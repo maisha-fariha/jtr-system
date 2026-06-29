@@ -14,6 +14,7 @@ import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../controllers/table_details_controller.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/order_repository.dart';
 import '../pages/table_details_page.dart';
 
 class AppRoutes {
@@ -58,7 +59,9 @@ class AppPages {
       name: AppRoutes.session,
       page: () => const SessionPage(),
       binding: BindingsBuilder(() {
-        Get.put(SessionController());
+        Get.put(
+          SessionController(orderRepository: Get.find<OrderRepository>()),
+        );
       }),
     ),
     GetPage(

@@ -68,6 +68,22 @@ class ApiClient extends GetxService {
     }
   }
 
+  Future<Response<T>> put<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    try {
+      return await _dio.put<T>(
+        path,
+        data: data,
+        queryParameters: queryParameters,
+      );
+    } on DioException catch (error) {
+      throw _mapError(error);
+    }
+  }
+
   ApiException _mapError(DioException error) {
     final response = error.response;
     if (response?.data is Map<String, dynamic>) {

@@ -1,0 +1,98 @@
+import '../../core/network/api_client.dart';
+import '../../core/network/api_endpoints.dart';
+import '../../core/network/api_exception.dart';
+import '../models/api_envelope.dart';
+import '../models/open_order_summary.dart';
+
+class OrderRemoteDataSource {
+  OrderRemoteDataSource(this._client);
+
+  final ApiClient _client;
+
+  Future<OpenOrdersData> fetchOpenOrders() async {
+    final response =
+        await _client.get<Map<String, dynamic>>(ApiEndpoints.openOrders);
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+      response.data!,
+      (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load open orders.',
+        statusCode: envelope.status,
+      );
+    }
+
+    final data = envelope.data;
+    if (data == null || data is! Map<String, dynamic>) {
+      return const OpenOrdersData(
+        hasOpenOrders: false,
+        openOrdersCount: 0,
+        openOrders: [],
+      );
+    }
+
+    return OpenOrdersData.fromJson(data);
+  }
+
+  Future<Map<String, dynamic>> fetchOrderDetail(int orderId) async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.orderById(orderId),
+    );
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+      response.data!,
+      (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success || envelope.data == null) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load order details.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return envelope.data!;
+  }
+
+  Future<void> closeOrder(int orderId) async {
+    final response = await _client.post<Map<String, dynamic>>(
+      ApiEndpoints.closeOrder(orderId),
+      data: const {},
+    );
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to close order.',
+        statusCode: envelope.status,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> updateOrder(
+    int orderId,
+    Map<String, dynamic> body,
+  ) async {
+    final response = await _client.put<Map<String, dynamic>>(
+      ApiEndpoints.orderById(orderId),
+      data: body,
+    );
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+      response.data!,
+      (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to update order.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return envelope.data ?? body;
+  }
+}

@@ -27,8 +27,29 @@ class SessionPage extends GetView<SessionController> {
             const _TableHeader(),
             Expanded(
               child: SlidableAutoCloseBehavior(
-                child: Obx(
-                  () => ListView.separated(
+                child: Obx(() {
+                  if (controller.isLoadingOrders.value &&
+                      controller.orders.isEmpty) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: AppTheme.primary),
+                    );
+                  }
+
+                  if (controller.orders.isEmpty) {
+                    return Center(
+                      child: Text(
+                        controller.ordersError.value ??
+                            'Aucune commande ouverte',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    );
+                  }
+
+                  return ListView.separated(
                     padding: const EdgeInsets.only(top: 8, bottom: 8),
                     itemCount: controller.orders.length,
                     separatorBuilder: (context, index) =>
@@ -36,8 +57,8 @@ class SessionPage extends GetView<SessionController> {
                     itemBuilder: (context, index) {
                       return _OrderRow(order: controller.orders[index]);
                     },
-                  ),
-                ),
+                  );
+                }),
               ),
             ),
             const _ActionButtons(),
@@ -359,15 +380,42 @@ class _OrderRow extends GetView<SessionController> {
               ),
               if (isExpanded) ...[
                 Divider(height: 1, color: AppTheme.cardBorder),
-                for (var i = 0; i < order.products.length; i++) ...[
-                  _ProductRow(
-                    orderNumber: order.number,
-                    productIndex: i,
-                    product: order.products[i],
-                  ),
-                  if (i < order.products.length - 1)
-                    Divider(height: 1, color: AppTheme.subtleDivider),
-                ],
+                if (controller.isLoadingOrderDetail(order.number))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (order.products.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'Aucun produit',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  )
+                else
+                  for (var i = 0; i < order.products.length; i++) ...[
+                    _ProductRow(
+                      orderNumber: order.number,
+                      productIndex: i,
+                      product: order.products[i],
+                    ),
+                    if (i < order.products.length - 1)
+                      Divider(height: 1, color: AppTheme.subtleDivider),
+                  ],
                 const SizedBox(height: 4),
               ],
             ],

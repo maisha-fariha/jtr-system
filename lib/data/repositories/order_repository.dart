@@ -19,8 +19,22 @@ class OrderRepository {
   final OrderLocalDataSource _local;
   final ConnectivityService _connectivity;
 
-  List<SessionOrder> get cachedOpenOrders =>
-      _local.readOpenOrders().map(OrderMapper.fromOpenOrder).toList();
+  List<SessionOrder> get cachedOpenOrders => mergeCachedDetails(
+        _local.readOpenOrders().map(OrderMapper.fromOpenOrder).toList(),
+      );
+
+  /// Applies cached [GET /api/orders/:id] data onto a summary row.
+  SessionOrder mergeCachedDetail(SessionOrder summary) {
+    if (summary.isLocalOnly) return summary;
+
+    final cached = _local.readOrderDetail(summary.id);
+    if (cached == null) return summary;
+
+    return OrderMapper.fromOrderDetail(cached).copyWith(number: summary.number);
+  }
+
+  List<SessionOrder> mergeCachedDetails(List<SessionOrder> summaries) =>
+      summaries.map(mergeCachedDetail).toList();
 
   /// Loads open orders from cache first, then refreshes when online.
   Future<List<SessionOrder>> getOpenOrders({bool forceRefresh = false}) async {
@@ -33,7 +47,9 @@ class OrderRepository {
     if (online) {
       final data = await _remote.fetchOpenOrders();
       await _local.saveOpenOrders(data.openOrders);
-      return data.openOrders.map(OrderMapper.fromOpenOrder).toList();
+      return mergeCachedDetails(
+        data.openOrders.map(OrderMapper.fromOpenOrder).toList(),
+      );
     }
 
     if (_local.readOpenOrders().isNotEmpty) {
@@ -41,6 +57,39 @@ class OrderRepository {
     }
 
     throw ApiException(message: 'Aucune commande disponible hors ligne.');
+  }
+
+  /// Fetches order details for rows missing cached detail (list column metadata).
+  Future<void> enrichMissingOrderDetails(
+    void Function(SessionOrder updated) onUpdated,
+  ) async {
+    if (!await _connectivity.isOnline) return;
+
+    final summaries = _local.readOpenOrders().where(
+      (summary) => _local.readOrderDetail(summary.id) == null,
+    );
+
+    await Future.wait(
+      summaries.map((summary) async {
+        final base = OrderMapper.fromOpenOrder(summary);
+        final enriched = await _fetchAndCacheDetail(base);
+        if (enriched != null) {
+          onUpdated(enriched);
+        }
+      }),
+    );
+  }
+
+  Future<SessionOrder?> _fetchAndCacheDetail(SessionOrder summary) async {
+    if (summary.isLocalOnly) return null;
+
+    try {
+      final detail = await _remote.fetchOrderDetail(summary.id);
+      await _local.saveOrderDetail(summary.id, detail);
+      return OrderMapper.fromOrderDetail(detail).copyWith(number: summary.number);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _refreshOpenOrdersInBackground() async {

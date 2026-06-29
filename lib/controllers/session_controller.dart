@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -84,6 +86,7 @@ class SessionController extends GetxController {
         forceRefresh: forceRefresh,
       );
       _mergeRemoteOrders(loaded);
+      unawaited(_enrichMissingOrderDetails());
     } on ApiException catch (e) {
       ordersError.value = e.message;
       if (orders.isEmpty) {
@@ -103,6 +106,14 @@ class SessionController extends GetxController {
     final localOnly =
         orders.where((order) => order.isLocalOnly).toList(growable: false);
     orders.assignAll([...remoteOrders, ...localOnly]);
+  }
+
+  Future<void> _enrichMissingOrderDetails() async {
+    await _orderRepository.enrichMissingOrderDetails((enriched) {
+      final idx = orders.indexWhere((order) => order.id == enriched.id);
+      if (idx < 0) return;
+      orders[idx] = enriched.copyWith(number: orders[idx].number);
+    });
   }
 
   void selectAction(SessionAction action) {
@@ -153,12 +164,17 @@ class SessionController extends GetxController {
     }
   }
 
-  Future<void> loadOrderDetails(String orderNumber) async {
+  Future<void> loadOrderDetails(
+    String orderNumber, {
+    bool forceRefresh = false,
+  }) async {
     final idx = orders.indexWhere((order) => order.number == orderNumber);
     if (idx < 0) return;
 
     final existing = orders[idx];
     if (existing.isLocalOnly) return;
+
+    if (!forceRefresh && existing.products.isNotEmpty) return;
 
     if (loadingDetailOrderNumbers.contains(orderNumber)) return;
 

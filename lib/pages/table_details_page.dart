@@ -424,17 +424,20 @@ class _ProductSlidableAction extends StatelessWidget {
   const _ProductSlidableAction({
     required this.icon,
     required this.onPressed,
-    this.backgroundColor = const Color(0xFFF0F0F0),
+    this.backgroundColor,
     this.iconColor,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
-  final Color backgroundColor;
+  final Color? backgroundColor;
   final Color? iconColor;
 
   @override
   Widget build(BuildContext context) {
+    final bgColor = backgroundColor ?? AppTheme.slidableActionBackground;
+    final fgColor = iconColor ?? AppTheme.darkText;
+
     return CustomSlidableAction(
       onPressed: (_) => onPressed(),
       backgroundColor: Colors.transparent,
@@ -443,14 +446,14 @@ class _ProductSlidableAction extends StatelessWidget {
         width: 44,
         height: 44,
         decoration: BoxDecoration(
-          color: backgroundColor,
+          color: bgColor,
           borderRadius: BorderRadius.circular(10),
         ),
         alignment: Alignment.center,
         child: Icon(
           icon,
           size: 20,
-          color: iconColor ?? AppTheme.darkText,
+          color: fgColor,
         ),
       ),
     );
@@ -701,7 +704,14 @@ class _MenuGrid extends GetView<TableDetailsController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final selectedIndex = controller.selectedCategoryIndex.value;
-      final selectedItems = controller.selectedMenuItems.toSet();
+      final session = Get.find<SessionController>();
+      final orders = session.orders;
+      for (final currentOrder in orders) {
+        if (currentOrder.number == controller.orderNumber) {
+          currentOrder.products.length;
+          break;
+        }
+      }
       final items = demoTableMenuCategories[selectedIndex].items;
 
       return GridView.builder(
@@ -715,54 +725,59 @@ class _MenuGrid extends GetView<TableDetailsController> {
         itemCount: items.length,
         itemBuilder: (context, index) {
           final item = items[index];
-          final isSelected = selectedItems.contains(item.name);
+          final isUnavailable = controller.isMenuItemUnavailable(item);
 
           return GestureDetector(
-            onTap: () => controller.toggleMenuItem(item),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              decoration: BoxDecoration(
-                color: _menuGridItemBackground(isSelected),
-                borderRadius: BorderRadius.circular(10),
-                border: _menuGridItemBorder(isSelected),
-                boxShadow: _menuGridItemShadow(isSelected),
-              ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(10),
-                    child: Text(
-                      item.name,
-                      textAlign: TextAlign.center,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.darkText.withValues(alpha: 0.85),
-                        height: 1.25,
-                      ),
-                    ),
-                  ),
-                  if (isSelected)
-                    Positioned(
-                      bottom: 8,
-                      child: Container(
-                        width: 22,
-                        height: 22,
-                        decoration: const BoxDecoration(
-                          color: AppTheme.primary,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.check,
-                          color: Colors.white,
-                          size: 14,
+            onTap: isUnavailable ? null : () => controller.toggleMenuItem(item),
+            child: Opacity(
+              opacity: isUnavailable ? 0.45 : 1,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                decoration: BoxDecoration(
+                  color: _menuGridItemBackground(isUnavailable),
+                  borderRadius: BorderRadius.circular(10),
+                  border: _menuGridItemBorder(isUnavailable),
+                  boxShadow: _menuGridItemShadow(isUnavailable),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Text(
+                        item.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.darkText.withValues(
+                            alpha: isUnavailable ? 0.5 : 0.85,
+                          ),
+                          height: 1.25,
                         ),
                       ),
                     ),
-                ],
+                    if (isUnavailable)
+                      Positioned(
+                        bottom: 8,
+                        child: Container(
+                          width: 22,
+                          height: 22,
+                          decoration: const BoxDecoration(
+                            color: AppTheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.check,
+                            color: Colors.white,
+                            size: 14,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           );

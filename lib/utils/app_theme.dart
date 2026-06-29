@@ -57,6 +57,14 @@ class AppTheme {
   /// → Modal dialog background
   static Color get dialogBackground => _dark ? const Color(0xFF212031) : Colors.white;
 
+  /// → Expanded identifiant suggestions dropdown
+  static Color get suggestionsPanelBackground =>
+      _dark ? const Color(0xFF212031) : const Color(0xFFF2F2F2);
+
+  /// → Suggestions dropdown / auth input border
+  static Color get suggestionsPanelBorder =>
+      _dark ? const Color(0xFF3A3A4A) : const Color(0xFFD5D5D5);
+
   /// → Dialog list-item / header icon button background
   static Color get dialogItemBackground =>
       _dark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F6F9);
@@ -64,6 +72,38 @@ class AppTheme {
   /// → Dialog barrier overlay
   static Color get dialogBarrier =>
       _dark ? Colors.black.withValues(alpha: 0.55) : Colors.black.withValues(alpha: 0.22);
+
+  /// → Numeric keypad dialog background
+  static Color get keypadDialogBackground =>
+      _dark ? const Color(0xFF2D2B3D) : Colors.white;
+
+  /// → Numeric keypad key background
+  static Color get keypadKeyBackground =>
+      _dark ? const Color(0xFF3E3B54) : const Color(0xFFE8F0FE);
+
+  /// → Numeric keypad display field (recessed input area)
+  static Color get keypadDisplayBackground =>
+      _dark ? const Color(0xFF242235) : const Color(0xFFE8F0FE);
+
+  /// → Numeric keypad key border
+  static Color get keypadKeyBorder =>
+      _dark ? const Color(0xFF3E3B54) : const Color(0xFFD6E4F0);
+
+  /// → Cancel key background on numeric keypad
+  static Color get keypadCancelBackground =>
+      _dark ? const Color(0xFF4A2B2B) : const Color(0xFFFCE4E4);
+
+  /// → Cancel key icon
+  static Color get keypadCancelIcon =>
+      _dark ? primary : const Color(0xFFE74C3C);
+
+  /// → Keypad key label / icon colour
+  static Color get keypadKeyForeground =>
+      _dark ? Colors.white : darkText;
+
+  /// → Swipe row action button background (+, −, edit)
+  static Color get slidableActionBackground =>
+      _dark ? const Color(0xFF3E3B54) : const Color(0xFFF0F0F0);
 
   /// → Logo image path for the active theme
   static String get logo => _dark ? AppAssets.logoDark : AppAssets.logoLight;

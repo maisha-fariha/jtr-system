@@ -16,7 +16,7 @@ class AppFooter extends StatelessWidget {
       return Column(
         children: [
           Text(
-            'All rights and license ganted by JTR Ennovation.',
+            'All rights and license granted by JTR Innovation.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,

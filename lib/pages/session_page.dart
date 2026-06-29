@@ -80,7 +80,7 @@ class _SessionHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'SESSION ACTIVE',
+                  'MANAGER',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,

@@ -20,6 +20,29 @@ class TableDetailsController extends GetxController {
     super.onInit();
     final args = Get.arguments;
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
+    _syncSelectedMenuItemsFromOrder();
+  }
+
+  void _syncSelectedMenuItemsFromOrder() {
+    final currentOrder = order;
+    if (currentOrder == null) return;
+
+    final names = <String>{};
+    for (final category in demoTableMenuCategories) {
+      for (final item in category.items) {
+        if (_orderContainsProduct(currentOrder, item.name)) {
+          names.add(item.name);
+        }
+      }
+    }
+    selectedMenuItems.assignAll(names);
+  }
+
+  bool _orderContainsProduct(SessionOrder currentOrder, String itemName) {
+    final normalized = itemName.toUpperCase();
+    return currentOrder.products.any(
+      (product) => product.name.toUpperCase() == normalized,
+    );
   }
 
   SessionOrder? get order {
@@ -95,17 +118,23 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
   void toggleMenuItem(TableMenuItem item) {
+    if (isMenuItemUnavailable(item)) return;
     if (!Get.isRegistered<SessionController>()) return;
     final session = Get.find<SessionController>();
 
-    if (selectedMenuItems.contains(item.name)) {
-      selectedMenuItems.remove(item.name);
-      session.removeTableMenuItemFromOrder(orderNumber, item.name);
-    } else {
-      selectedMenuItems.add(item.name);
-      session.addTableMenuItemToOrder(orderNumber, item.name, item.price);
-    }
+    selectedMenuItems.add(item.name);
+    session.addTableMenuItemToOrder(orderNumber, item.name, item.price);
     selectedMenuItems.refresh();
+  }
+
+  bool isMenuItemUnavailable(TableMenuItem item) {
+    if (!Get.isRegistered<SessionController>()) return false;
+    final session = Get.find<SessionController>();
+    for (final currentOrder in session.orders) {
+      if (currentOrder.number != orderNumber) continue;
+      return _orderContainsProduct(currentOrder, item.name);
+    }
+    return false;
   }
 
   bool isMenuItemSelected(String name) => selectedMenuItems.contains(name);

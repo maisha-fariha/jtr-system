@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 
+import '../controllers/theme_controller.dart';
 import '../models/user_suggestion.dart';
 import '../utils/app_theme.dart';
 import 'user_identifiant_field_controller.dart';
@@ -21,38 +23,44 @@ class UserIdentifiantField extends StatelessWidget {
     return ListenableBuilder(
       listenable: controller,
       builder: (context, _) {
-        return CompositedTransformTarget(
-          link: controller.identifiantLayerLink,
-          child: AuthInputContainer(
-            showIcons: showFieldIcons,
-            prefixIcon: Icons.person_outline,
-            suffixIcon: Icons.keyboard_arrow_down,
-            suffixRotation: controller.showSuggestions ? 0.5 : 0,
-            onSuffixTap: controller.toggleSuggestions,
-            child: TextField(
-              controller: controller.textController,
-              focusNode: controller.identifiantFocusNode,
-              onTap: controller.onIdentifiantTap,
-              style: TextStyle(
-                fontSize: 15,
-                color: AppTheme.darkText,
-              ),
-              decoration: InputDecoration(
-                hintText: hintText,
-                hintStyle: TextStyle(
-                  color: AppTheme.textSecondary.withValues(alpha: 0.55),
+        return Obx(() {
+          if (Get.isRegistered<ThemeController>()) {
+            ThemeController.to.isDark.value;
+          }
+
+          return CompositedTransformTarget(
+            link: controller.identifiantLayerLink,
+            child: AuthInputContainer(
+              showIcons: showFieldIcons,
+              prefixIcon: Icons.person_outline,
+              suffixIcon: Icons.keyboard_arrow_down,
+              suffixRotation: controller.showSuggestions ? 0.5 : 0,
+              onSuffixTap: controller.toggleSuggestions,
+              child: TextField(
+                controller: controller.textController,
+                focusNode: controller.identifiantFocusNode,
+                onTap: controller.onIdentifiantTap,
+                style: TextStyle(
                   fontSize: 15,
-                  fontWeight: FontWeight.w400,
+                  color: AppTheme.darkText,
                 ),
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.zero,
+                decoration: InputDecoration(
+                  hintText: hintText,
+                  hintStyle: TextStyle(
+                    color: AppTheme.textSecondary.withValues(alpha: 0.55),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w400,
+                  ),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.zero,
+                ),
               ),
             ),
-          ),
-        );
+          );
+        });
       },
     );
   }
@@ -162,36 +170,44 @@ class _SuggestionsOverlayLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerDown: (_) => controller.hideSuggestions(unfocus: true),
+    return Obx(() {
+      if (Get.isRegistered<ThemeController>()) {
+        ThemeController.to.isDark.value;
+      }
+
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: (_) => controller.hideSuggestions(unfocus: true),
+            ),
           ),
-        ),
-        CompositedTransformFollower(
-          link: controller.identifiantLayerLink,
-          showWhenUnlinked: false,
-          offset: const Offset(0, UserIdentifiantSuggestionsOverlay.fieldHeight),
-          child: Material(
-            color: Colors.transparent,
-            elevation: 4,
-            shadowColor: Colors.black.withValues(alpha: 0.12),
-            child: SizedBox(
-              width: fieldWidth,
-              child: _UserSuggestionsList(
-                users: controller.filteredUsers,
-                onUserSelected: (user) => controller.selectUser(
-                  user,
-                  onSelected: onUserSelected,
+          CompositedTransformFollower(
+            link: controller.identifiantLayerLink,
+            showWhenUnlinked: false,
+            offset: const Offset(0, UserIdentifiantSuggestionsOverlay.fieldHeight),
+            child: Material(
+              color: Colors.transparent,
+              elevation: AppTheme.isDark ? 8 : 4,
+              shadowColor: AppTheme.isDark
+                  ? Colors.black.withValues(alpha: 0.45)
+                  : Colors.black.withValues(alpha: 0.12),
+              child: SizedBox(
+                width: fieldWidth,
+                child: _UserSuggestionsList(
+                  users: controller.filteredUsers,
+                  onUserSelected: (user) => controller.selectUser(
+                    user,
+                    onSelected: onUserSelected,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ],
-    );
+        ],
+      );
+    });
   }
 }
 
@@ -208,22 +224,22 @@ class _UserSuggestionsList extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       constraints: const BoxConstraints(maxHeight: 220),
-      decoration: const BoxDecoration(
-        color: Color(0xFFF2F2F2),
+      decoration: BoxDecoration(
+        color: AppTheme.suggestionsPanelBackground,
         border: Border(
-          left: BorderSide(color: Color(0xFFD5D5D5)),
-          right: BorderSide(color: Color(0xFFD5D5D5)),
-          bottom: BorderSide(color: Color(0xFFD5D5D5)),
+          left: BorderSide(color: AppTheme.suggestionsPanelBorder),
+          right: BorderSide(color: AppTheme.suggestionsPanelBorder),
+          bottom: BorderSide(color: AppTheme.suggestionsPanelBorder),
         ),
       ),
       child: ListView.separated(
         shrinkWrap: true,
         padding: EdgeInsets.zero,
         itemCount: users.length,
-        separatorBuilder: (context, index) => const Divider(
+        separatorBuilder: (context, index) => Divider(
           height: 1,
           thickness: 1,
-          color: Color(0xFFE0E0E0),
+          color: AppTheme.cardBorder,
         ),
         itemBuilder: (context, index) {
           final user = users[index];
@@ -337,7 +353,7 @@ class AuthInputContainer extends StatelessWidget {
         color: AppTheme.background,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: const Color(0xFFD5D5D5),
+          color: AppTheme.suggestionsPanelBorder,
         ),
       ),
       child: Row(

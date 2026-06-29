@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../controllers/theme_controller.dart';
 import '../models/user_suggestion.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 import 'user_identifiant_field_controller.dart';
 
 class UserIdentifiantField extends StatelessWidget {
@@ -41,14 +42,20 @@ class UserIdentifiantField extends StatelessWidget {
                 focusNode: controller.identifiantFocusNode,
                 onTap: controller.onIdentifiantTap,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: JtrResponsive.getResponsiveFontSize(
+                    context,
+                    15,
+                  ),
                   color: AppTheme.darkText,
                 ),
                 decoration: InputDecoration(
                   hintText: hintText,
                   hintStyle: TextStyle(
                     color: AppTheme.textSecondary.withValues(alpha: 0.55),
-                    fontSize: 15,
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      15,
+                    ),
                     fontWeight: FontWeight.w400,
                   ),
                   border: InputBorder.none,
@@ -76,7 +83,10 @@ class UserIdentifiantSuggestionsOverlay extends StatefulWidget {
     this.onUserSelected,
   });
 
-  static const fieldHeight = 58.0;
+  static const fieldHeightBase = 58.0;
+
+  static double fieldHeight(BuildContext context) =>
+      JtrResponsive.getResponsiveHeight(context, fieldHeightBase);
 
   final UserIdentifiantFieldController controller;
   final double fieldWidth;
@@ -186,7 +196,10 @@ class _SuggestionsOverlayLayer extends StatelessWidget {
           CompositedTransformFollower(
             link: controller.identifiantLayerLink,
             showWhenUnlinked: false,
-            offset: const Offset(0, UserIdentifiantSuggestionsOverlay.fieldHeight),
+            offset: Offset(
+              0,
+              UserIdentifiantSuggestionsOverlay.fieldHeight(context),
+            ),
             child: Material(
               color: Colors.transparent,
               elevation: AppTheme.isDark ? 8 : 4,
@@ -223,7 +236,9 @@ class _UserSuggestionsList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(maxHeight: 220),
+      constraints: BoxConstraints(
+        maxHeight: JtrResponsive.getResponsiveHeight(context, 220),
+      ),
       decoration: BoxDecoration(
         color: AppTheme.suggestionsPanelBackground,
         border: Border(
@@ -264,17 +279,23 @@ class _UserSuggestionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final avatarSize = JtrResponsive.getResponsiveSize(context, 40);
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 16,
+            vertical: 12,
+          ),
           child: Row(
             children: [
               Container(
-                width: 40,
-                height: 40,
+                width: avatarSize,
+                height: avatarSize,
                 decoration: const BoxDecoration(
                   color: AppTheme.primary,
                   shape: BoxShape.circle,
@@ -282,14 +303,17 @@ class _UserSuggestionTile extends StatelessWidget {
                 alignment: Alignment.center,
                 child: Text(
                   user.id,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white,
-                    fontSize: 13,
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      13,
+                    ),
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
-              const SizedBox(width: 14),
+              JtrResponsive.getResponsiveHorizontalSpacing(context, 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -297,17 +321,23 @@ class _UserSuggestionTile extends StatelessWidget {
                     Text(
                       user.name,
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          14,
+                        ),
                         fontWeight: FontWeight.bold,
                         color: AppTheme.darkText,
                         letterSpacing: 0.3,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    JtrResponsive.getResponsiveSpacing(context, 2),
                     Text(
                       user.role,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          12,
+                        ),
                         fontWeight: FontWeight.w500,
                         color: AppTheme.textSecondary.withValues(alpha: 0.65),
                         letterSpacing: 0.3,
@@ -345,13 +375,16 @@ class AuthInputContainer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: UserIdentifiantSuggestionsOverlay.fieldHeight,
-      padding: EdgeInsets.symmetric(
+      height: UserIdentifiantSuggestionsOverlay.fieldHeight(context),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
         horizontal: showIcons ? 16 : 12,
       ),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 8),
+        ),
         border: Border.all(
           color: AppTheme.suggestionsPanelBorder,
         ),
@@ -362,9 +395,9 @@ class AuthInputContainer extends StatelessWidget {
             Icon(
               prefixIcon,
               color: AppTheme.textSecondary.withValues(alpha: 0.55),
-              size: 22,
+              size: JtrResponsive.getResponsiveSize(context, 22),
             ),
-            const SizedBox(width: 12),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
           ],
           Expanded(child: child),
           if (showIcons && suffixIcon != null) ...[
@@ -377,7 +410,7 @@ class AuthInputContainer extends StatelessWidget {
                 child: Icon(
                   suffixIcon,
                   color: AppTheme.textSecondary.withValues(alpha: 0.55),
-                  size: 22,
+                  size: JtrResponsive.getResponsiveSize(context, 22),
                 ),
               ),
             ),

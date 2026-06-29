@@ -5,14 +5,13 @@ import '../controllers/login_controller.dart';
 import '../controllers/theme_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/themed_asset_image.dart';
 import '../widgets/user_identifiant_field.dart';
 
 class LoginPage extends GetView<LoginController> {
   const LoginPage({super.key});
-
-  static const _horizontalPadding = 32.0;
 
   @override
   Widget build(BuildContext context) {
@@ -21,8 +20,9 @@ class LoginPage extends GetView<LoginController> {
         ThemeController.to.isDark.value;
       }
 
+      final horizontalPadding = JtrResponsive.getResponsiveWidth(context, 32);
       final fieldWidth =
-          MediaQuery.sizeOf(context).width - (_horizontalPadding * 2);
+          MediaQuery.sizeOf(context).width - (horizontalPadding * 2);
 
       return Scaffold(
         resizeToAvoidBottomInset: false,
@@ -37,15 +37,15 @@ class LoginPage extends GetView<LoginController> {
             icon: Icon(
               Icons.arrow_back_ios_new,
               color: AppTheme.darkText,
-              size: 20,
+              size: JtrResponsive.getResponsiveSize(context, 20),
             ),
             onPressed: () => Get.back(),
           ),
-          title: const Text(
+          title: Text(
             'CONNEXION',
             style: TextStyle(
               color: AppTheme.primary,
-              fontSize: 18,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
               fontWeight: FontWeight.bold,
               letterSpacing: 1.2,
             ),
@@ -56,24 +56,26 @@ class LoginPage extends GetView<LoginController> {
           children: [
             SafeArea(
               child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: _horizontalPadding),
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 32,
+                ),
                 child: Column(
                   children: [
-                    const SizedBox(height: 40),
+                    JtrResponsive.getResponsiveSpacing(context, 40),
                     const ThemedAssetImage.logo(),
-                    const SizedBox(height: 48),
+                    JtrResponsive.getResponsiveSpacing(context, 48),
                     UserIdentifiantField(
                       controller: controller.identifiantFieldController,
                       showFieldIcons: true,
                     ),
-                    const SizedBox(height: 16),
-                    _buildPasswordField(),
+                    JtrResponsive.getResponsiveSpacing(context, 16),
+                    _buildPasswordField(context),
                     const Spacer(),
-                    _buildLoginButton(),
+                    _buildLoginButton(context),
                     const Spacer(flex: 2),
                     const AppFooter(),
-                    const SizedBox(height: 24),
+                    JtrResponsive.getResponsiveSpacing(context, 24),
                   ],
                 ),
               ),
@@ -89,7 +91,7 @@ class LoginPage extends GetView<LoginController> {
     });
   }
 
-  Widget _buildPasswordField() {
+  Widget _buildPasswordField(BuildContext context) {
     return Obx(
       () => AuthInputContainer(
         showIcons: true,
@@ -103,14 +105,14 @@ class LoginPage extends GetView<LoginController> {
           focusNode: controller.passwordFocusNode,
           obscureText: controller.obscurePassword.value,
           style: TextStyle(
-            fontSize: 15,
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
             color: AppTheme.darkText,
           ),
           decoration: InputDecoration(
             hintText: 'Mot de passe',
             hintStyle: TextStyle(
               color: AppTheme.textSecondary.withValues(alpha: 0.55),
-              fontSize: 15,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
               fontWeight: FontWeight.w400,
             ),
             border: InputBorder.none,
@@ -124,10 +126,10 @@ class LoginPage extends GetView<LoginController> {
     );
   }
 
-  Widget _buildLoginButton() {
+  Widget _buildLoginButton(BuildContext context) {
     return SizedBox(
       width: double.infinity,
-      height: 56,
+      height: JtrResponsive.getResponsiveHeight(context, 56),
       child: ElevatedButton(
         onPressed: () => Get.offNamed(AppRoutes.session),
         style: ElevatedButton.styleFrom(
@@ -136,13 +138,15 @@ class LoginPage extends GetView<LoginController> {
           elevation: 4,
           shadowColor: AppTheme.primary.withValues(alpha: 0.4),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 16),
+            ),
           ),
         ),
-        child: const Text(
+        child: Text(
           'Se connecter',
           style: TextStyle(
-            fontSize: 18,
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
             fontWeight: FontWeight.w600,
           ),
         ),

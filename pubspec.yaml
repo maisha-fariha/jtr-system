@@ -36,6 +36,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   get: ^4.6.6
   flutter_slidable: ^4.0.3
+  flutter_screenutil: ^5.9.0
+  gems_responsive:
+    path: flutter_gems/packages/gems_responsive
 
 dev_dependencies:
   flutter_test:

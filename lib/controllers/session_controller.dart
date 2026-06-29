@@ -7,6 +7,7 @@ import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../controllers/login_controller.dart';
+import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/table_occupied_dialog.dart';
@@ -245,16 +246,11 @@ class SessionController extends GetxController {
       );
       return;
     }
-    Get.defaultDialog(
+    AppConfirmDialog.show(
       title: 'Demander la suite',
-      middleText:
+      message:
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
-      textConfirm: 'Envoyer',
-      textCancel: 'Annuler',
-      confirmTextColor: Colors.white,
-      buttonColor: AppTheme.primary,
       onConfirm: () {
-        Get.back();
         Get.snackbar(
           'Suite demandée',
           'La suite a été envoyée pour la table ${selected.orderNumber}.',

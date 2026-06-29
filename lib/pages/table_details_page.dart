@@ -8,6 +8,7 @@ import '../data/demo_table_menu.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
@@ -96,31 +97,47 @@ class _TableDetailsHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        left: 16,
+        right: 16,
+        top: 10,
+        bottom: 10,
+      ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              horizontal: 10,
+              vertical: 6,
+            ),
             decoration: BoxDecoration(
               color: order.numberColor.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(
+                JtrResponsive.getResponsiveRadius(context, 8),
+              ),
             ),
             child: Text(
               order.number,
               style: TextStyle(
-                fontSize: 14,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
                 fontWeight: FontWeight.w800,
                 color: order.numberColor,
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          Icon(Icons.person_outline, size: 18, color: AppTheme.textSecondary),
-          const SizedBox(width: 4),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+          Icon(
+            Icons.person_outline,
+            size: JtrResponsive.getResponsiveSize(context, 18),
+            color: AppTheme.textSecondary,
+          ),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
           Text(
             order.couverts,
             style: TextStyle(
-              fontSize: 14,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
               fontWeight: FontWeight.w600,
               color: AppTheme.darkText,
             ),
@@ -129,7 +146,7 @@ class _TableDetailsHeader extends StatelessWidget {
           Text(
             order.profitCenter,
             style: TextStyle(
-              fontSize: 13,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
               fontWeight: FontWeight.w600,
               color: AppTheme.textSecondary,
               letterSpacing: 0.3,
@@ -139,7 +156,7 @@ class _TableDetailsHeader extends StatelessWidget {
           Text(
             _currentTime(),
             style: TextStyle(
-              fontSize: 14,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
               fontWeight: FontWeight.w600,
               color: AppTheme.darkText,
             ),
@@ -159,31 +176,44 @@ class _OrderSummary extends StatelessWidget {
 
   static const _productSlidableGroupTag = 'table-details-products';
 
+  TextStyle _headerStyle(BuildContext context) => TextStyle(
+        fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+        fontWeight: FontWeight.w600,
+        letterSpacing: 0.5,
+        color: AppTheme.textSecondary,
+      );
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            left: 20,
+            right: 20,
+            top: 12,
+            bottom: 8,
+          ),
           child: Row(
             children: [
               Expanded(
                 flex: 1,
                 child: Text(
                   'QTÉ',
-                  style: _headerStyle,
+                  style: _headerStyle(context),
                 ),
               ),
               Expanded(
                 flex: 5,
-                child: Text('ARTICLE', style: _headerStyle),
+                child: Text('ARTICLE', style: _headerStyle(context)),
               ),
               Expanded(
                 flex: 2,
                 child: Text(
                   'PRIX',
                   textAlign: TextAlign.right,
-                  style: _headerStyle,
+                  style: _headerStyle(context),
                 ),
               ),
             ],
@@ -192,9 +222,13 @@ class _OrderSummary extends StatelessWidget {
         Expanded(
           child: SlidableAutoCloseBehavior(
             child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 20,
+              ),
               itemCount: order.products.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 4),
+              separatorBuilder: (_, _) =>
+                  JtrResponsive.getResponsiveSpacing(context, 4),
               itemBuilder: (context, index) => _ProductLine(
                 orderNumber: order.number,
                 productIndex: index,
@@ -206,13 +240,19 @@ class _OrderSummary extends StatelessWidget {
         ),
         const Divider(height: 1, color: Color(0xFFE8E8E8)),
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            left: 20,
+            right: 20,
+            top: 12,
+            bottom: 12,
+          ),
           child: Row(
             children: [
               Text(
                 'Total',
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
                   fontWeight: FontWeight.w700,
                   color: AppTheme.darkText,
                 ),
@@ -221,7 +261,7 @@ class _OrderSummary extends StatelessWidget {
               Text(
                 order.total,
                 style: TextStyle(
-                  fontSize: 22,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 22),
                   fontWeight: FontWeight.w800,
                   color: AppTheme.darkText,
                 ),
@@ -232,13 +272,6 @@ class _OrderSummary extends StatelessWidget {
       ],
     );
   }
-
-  static final _headerStyle = TextStyle(
-    fontSize: 11,
-    fontWeight: FontWeight.w600,
-    letterSpacing: 0.5,
-    color: AppTheme.textSecondary,
-  );
 }
 
 class _ProductLine extends GetView<TableDetailsController> {
@@ -284,7 +317,7 @@ class _ProductLine extends GetView<TableDetailsController> {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -292,8 +325,8 @@ class _ProductLine extends GetView<TableDetailsController> {
               flex: 1,
               child: Text(
                 product.quantity,
-                style: const TextStyle(
-                  fontSize: 14,
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
                   fontWeight: FontWeight.w700,
                   color: AppTheme.primary,
                 ),
@@ -307,30 +340,35 @@ class _ProductLine extends GetView<TableDetailsController> {
                   Text(
                     product.name,
                     style: TextStyle(
-                      fontSize: 13,
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                       fontWeight: FontWeight.w600,
                       color: AppTheme.darkText,
                       letterSpacing: 0.2,
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   if (product.message != null &&
                       product.message!.isNotEmpty) ...[
-                    const SizedBox(height: 2),
+                    JtrResponsive.getResponsiveSpacing(context, 2),
                     Row(
                       children: [
-                        Text(
-                          product.message!,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.primary,
-                            letterSpacing: 0.3,
+                        Flexible(
+                          child: Text(
+                            product.message!,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.primary,
+                              letterSpacing: 0.3,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const SizedBox(width: 2),
-                        const Icon(
+                        Icon(
                           Icons.keyboard_arrow_down,
-                          size: 14,
+                          size: JtrResponsive.getResponsiveSize(context, 14),
                           color: AppTheme.primary,
                         ),
                       ],
@@ -345,7 +383,7 @@ class _ProductLine extends GetView<TableDetailsController> {
                 product.price,
                 textAlign: TextAlign.right,
                 style: TextStyle(
-                  fontSize: 13,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                   fontWeight: FontWeight.w600,
                   color: AppTheme.darkText,
                 ),
@@ -376,11 +414,11 @@ class _ProductLine extends GetView<TableDetailsController> {
             Text(
               product.name,
               style: TextStyle(
-                fontSize: 13,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                 color: AppTheme.textSecondary,
               ),
             ),
-            const SizedBox(height: 16),
+            JtrResponsive.getResponsiveSpacing(context, 16),
             TextField(
               controller: messageController,
               maxLines: 3,
@@ -441,18 +479,20 @@ class _ProductSlidableAction extends StatelessWidget {
     return CustomSlidableAction(
       onPressed: (_) => onPressed(),
       backgroundColor: Colors.transparent,
-      padding: const EdgeInsets.only(left: 6),
+      padding: JtrResponsive.getResponsivePadding(context, left: 6),
       child: Container(
-        width: 44,
-        height: 44,
+        width: JtrResponsive.getResponsiveSize(context, 44),
+        height: JtrResponsive.getResponsiveSize(context, 44),
         decoration: BoxDecoration(
           color: bgColor,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 10),
+          ),
         ),
         alignment: Alignment.center,
         child: Icon(
           icon,
-          size: 20,
+          size: JtrResponsive.getResponsiveSize(context, 20),
           color: fgColor,
         ),
       ),
@@ -461,6 +501,22 @@ class _ProductSlidableAction extends StatelessWidget {
 }
 
 // ── Action toolbar ─────────────────────────────────────────────────────────────
+
+double _categoryPartFontSize(BuildContext context, double base) {
+  final fontSize = JtrResponsive.getResponsiveFontSize(context, base);
+  if (JtrResponsive.isLargeDevice(context)) {
+    return fontSize + 2;
+  }
+  return fontSize;
+}
+
+double _toolbarIconSize(BuildContext context) {
+  final size = JtrResponsive.getResponsiveSize(context, 22);
+  if (JtrResponsive.isLargeDevice(context)) {
+    return size + 2;
+  }
+  return size;
+}
 
 class _ActionToolbar extends StatefulWidget {
   const _ActionToolbar();
@@ -500,47 +556,71 @@ class _ActionToolbarState extends State<_ActionToolbar> {
   @override
   Widget build(BuildContext context) {
     final controller = Get.find<TableDetailsController>();
+    final isLarge = JtrResponsive.isLargeDevice(context);
+
+    Widget buildIconRow() {
+      return Obx(() {
+        final expanded = controller.isBottomPanelExpanded.value;
+
+        return Row(
+          mainAxisAlignment:
+              isLarge ? MainAxisAlignment.spaceBetween : MainAxisAlignment.start,
+          children: [
+            for (final icon in _icons)
+              _ToolbarIconButton(
+                icon: icon,
+                isActive: controller.isToolbarIconActive(icon),
+                onPressed: () => controller.onToolbarIconTap(icon),
+                compact: isLarge,
+              ),
+            _ToolbarIconButton(
+              icon: expanded
+                  ? Icons.keyboard_arrow_down
+                  : Icons.keyboard_arrow_up,
+              isActive: expanded && !controller.showPaymentOptions.value,
+              onPressed: controller.toggleBottomPanel,
+              compact: isLarge,
+            ),
+          ],
+        );
+      });
+    }
 
     return Container(
-      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        top: 10,
+        bottom: 4,
+      ),
       decoration: const BoxDecoration(
         border: Border(
           top: BorderSide(color: Color(0xFFE8E8E8)),
           bottom: BorderSide(color: Color(0xFFE8E8E8)),
         ),
       ),
-      child: Scrollbar(
-        controller: _scrollController,
-        thumbVisibility: true,
-        trackVisibility: true,
-        scrollbarOrientation: ScrollbarOrientation.bottom,
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Obx(() {
-            final expanded = controller.isBottomPanelExpanded.value;
-
-            return Row(
-              children: [
-                for (final icon in _icons)
-                  _ToolbarIconButton(
-                    icon: icon,
-                    isActive: controller.isToolbarIconActive(icon),
-                    onPressed: () => controller.onToolbarIconTap(icon),
-                  ),
-                _ToolbarIconButton(
-                  icon: expanded
-                      ? Icons.keyboard_arrow_down
-                      : Icons.keyboard_arrow_up,
-                  isActive: expanded && !controller.showPaymentOptions.value,
-                  onPressed: controller.toggleBottomPanel,
+      child: isLarge
+          ? Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 12,
+              ),
+              child: buildIconRow(),
+            )
+          : Scrollbar(
+              controller: _scrollController,
+              thumbVisibility: true,
+              trackVisibility: true,
+              scrollbarOrientation: ScrollbarOrientation.bottom,
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                scrollDirection: Axis.horizontal,
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 12,
                 ),
-              ],
-            );
-          }),
-        ),
-      ),
+                child: buildIconRow(),
+              ),
+            ),
     );
   }
 }
@@ -550,11 +630,13 @@ class _ToolbarIconButton extends StatelessWidget {
     required this.icon,
     required this.isActive,
     required this.onPressed,
+    this.compact = false,
   });
 
   final IconData icon;
   final bool isActive;
   final VoidCallback onPressed;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -562,10 +644,12 @@ class _ToolbarIconButton extends StatelessWidget {
       onPressed: onPressed,
       icon: Icon(
         icon,
-        size: 22,
+        size: _toolbarIconSize(context),
         color: isActive ? AppTheme.primary : AppTheme.textSecondary,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 10),
+      padding: compact
+          ? EdgeInsets.zero
+          : JtrResponsive.getResponsivePadding(context, horizontal: 10),
       constraints: const BoxConstraints(),
     );
   }
@@ -581,7 +665,13 @@ class _PaymentButtons extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        left: 16,
+        right: 16,
+        top: 12,
+        bottom: 16,
+      ),
       child: Row(
         children: [
           Expanded(
@@ -591,7 +681,7 @@ class _PaymentButtons extends StatelessWidget {
               onTap: () {},
             ),
           ),
-          const SizedBox(width: 12),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
           Expanded(
             child: _PaymentButton(
               label: 'CARTE DE CREDIT',
@@ -618,22 +708,24 @@ class _PaymentButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final radius = JtrResponsive.getResponsiveRadius(context, 14);
+
     return Material(
       color: backgroundColor,
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(radius),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(radius),
         child: Container(
-          height: 56,
+          height: JtrResponsive.getResponsiveHeight(context, 56),
           alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          padding: JtrResponsive.getResponsivePadding(context, horizontal: 8),
           child: Text(
             label,
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.white,
-              fontSize: 13,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
               fontWeight: FontWeight.w700,
               letterSpacing: 0.4,
             ),
@@ -655,10 +747,10 @@ class _CategoryTabs extends GetView<TableDetailsController> {
       final selectedIndex = controller.selectedCategoryIndex.value;
 
       return SizedBox(
-        height: 44,
+        height: JtrResponsive.adaptiveHeight(context, 44, compact: 36),
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: JtrResponsive.getResponsivePadding(context, horizontal: 16),
           itemCount: demoTableMenuCategories.length,
           itemBuilder: (context, index) {
             final category = demoTableMenuCategories[index];
@@ -667,7 +759,10 @@ class _CategoryTabs extends GetView<TableDetailsController> {
             return GestureDetector(
               onTap: () => controller.selectCategory(index),
               child: Container(
-                margin: const EdgeInsets.only(right: 20),
+                margin: JtrResponsive.getResponsiveMargin(
+                  context,
+                  right: 20,
+                ),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   border: Border(
@@ -680,7 +775,7 @@ class _CategoryTabs extends GetView<TableDetailsController> {
                 child: Text(
                   category.label,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: _categoryPartFontSize(context, 12),
                     fontWeight: FontWeight.w700,
                     letterSpacing: 0.4,
                     color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
@@ -713,73 +808,114 @@ class _MenuGrid extends GetView<TableDetailsController> {
         }
       }
       final items = demoTableMenuCategories[selectedIndex].items;
+      final isCompact = JtrResponsive.isCompactSquare(context);
+      final isLarge = JtrResponsive.isLargeDevice(context);
+      final crossAxisCount = JtrResponsive.gridColumns(
+        context,
+        small: 3,
+        medium: 4,
+        large: 4,
+      );
+      final gridSpacing = JtrResponsive.getResponsiveSize(context, 10);
+      final gridPadding = JtrResponsive.getResponsivePadding(
+        context,
+        left: 16,
+        right: 16,
+        top: 12,
+        bottom: 16,
+      );
 
-      return GridView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 1.05,
-        ),
-        itemCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          final isUnavailable = controller.isMenuItemUnavailable(item);
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final fixedRowCount = isCompact ? 3 : (isLarge ? 4 : null);
+          var childAspectRatio = 1.05;
 
-          return GestureDetector(
-            onTap: isUnavailable ? null : () => controller.toggleMenuItem(item),
-            child: Opacity(
-              opacity: isUnavailable ? 0.45 : 1,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                decoration: BoxDecoration(
-                  color: _menuGridItemBackground(isUnavailable),
-                  borderRadius: BorderRadius.circular(10),
-                  border: _menuGridItemBorder(isUnavailable),
-                  boxShadow: _menuGridItemShadow(isUnavailable),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Text(
-                        item.name,
-                        textAlign: TextAlign.center,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.darkText.withValues(
-                            alpha: isUnavailable ? 0.5 : 0.85,
-                          ),
-                          height: 1.25,
-                        ),
-                      ),
-                    ),
-                    if (isUnavailable)
-                      Positioned(
-                        bottom: 8,
-                        child: Container(
-                          width: 22,
-                          height: 22,
-                          decoration: const BoxDecoration(
-                            color: AppTheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.check,
-                            color: Colors.white,
-                            size: 14,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+          if (fixedRowCount != null) {
+            final availableHeight = constraints.maxHeight -
+                gridPadding.vertical -
+                gridSpacing * (fixedRowCount - 1);
+            final availableWidth = constraints.maxWidth -
+                gridPadding.horizontal -
+                gridSpacing * (crossAxisCount - 1);
+            final cellWidth = availableWidth / crossAxisCount;
+            final cellHeight = availableHeight / fixedRowCount;
+            if (cellHeight > 0) {
+              childAspectRatio = cellWidth / cellHeight;
+            }
+          }
+
+          return GridView.builder(
+            padding: gridPadding,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              mainAxisSpacing: gridSpacing,
+              crossAxisSpacing: gridSpacing,
+              childAspectRatio: childAspectRatio,
             ),
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final item = items[index];
+              final isUnavailable = controller.isMenuItemUnavailable(item);
+              final itemRadius = JtrResponsive.getResponsiveRadius(context, 10);
+
+              return GestureDetector(
+                onTap: isUnavailable ? null : () => controller.toggleMenuItem(item),
+                child: Opacity(
+                  opacity: isUnavailable ? 0.45 : 1,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: BoxDecoration(
+                      color: _menuGridItemBackground(isUnavailable),
+                      borderRadius: BorderRadius.circular(itemRadius),
+                      border: _menuGridItemBorder(isUnavailable),
+                      boxShadow: _menuGridItemShadow(isUnavailable),
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Padding(
+                          padding: JtrResponsive.getResponsivePadding(
+                            context,
+                            all: 10,
+                          ),
+                          child: Text(
+                            item.name,
+                            textAlign: TextAlign.center,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: _categoryPartFontSize(context, 11),
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.darkText.withValues(
+                                alpha: isUnavailable ? 0.5 : 0.85,
+                              ),
+                              height: 1.25,
+                            ),
+                          ),
+                        ),
+                        if (isUnavailable)
+                          Positioned(
+                            bottom: JtrResponsive.getResponsiveHeight(context, 8),
+                            child: Container(
+                              width: JtrResponsive.getResponsiveSize(context, 22),
+                              height: JtrResponsive.getResponsiveSize(context, 22),
+                              decoration: const BoxDecoration(
+                                color: AppTheme.primary,
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.check,
+                                color: Colors.white,
+                                size: JtrResponsive.getResponsiveSize(context, 14),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
           );
         },
       );

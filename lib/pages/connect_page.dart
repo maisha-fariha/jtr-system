@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../controllers/connect_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/themed_asset_image.dart';
 
 class ConnectPage extends GetView<ConnectController> {
@@ -15,18 +16,21 @@ class ConnectPage extends GetView<ConnectController> {
       backgroundColor: AppTheme.connectBackground,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 32,
+          ),
           child: Column(
             children: [
-              const SizedBox(height: 48),
+              JtrResponsive.getResponsiveSpacing(context, 48),
               const ThemedAssetImage.logo(),
               const Spacer(),
-              _buildProgressCard(),
-              const SizedBox(height: 35),
-              _buildConnectionStatus(),
+              _buildProgressCard(context),
+              JtrResponsive.getResponsiveSpacing(context, 35),
+              _buildConnectionStatus(context),
               const Spacer(),
-              Obx(() => _buildNextButton()),
-              const SizedBox(height: 24),
+              Obx(() => _buildNextButton(context)),
+              JtrResponsive.getResponsiveSpacing(context, 24),
             ],
           ),
         ),
@@ -34,18 +38,27 @@ class ConnectPage extends GetView<ConnectController> {
     );
   }
 
-  Widget _buildProgressCard() {
+  Widget _buildProgressCard(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 28,
+        vertical: 32,
+      ),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 24),
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
+            blurRadius: JtrResponsive.getResponsiveSize(context, 24),
+            offset: Offset(
+              0,
+              JtrResponsive.getResponsiveHeight(context, 8),
+            ),
           ),
         ],
       ),
@@ -55,41 +68,41 @@ class ConnectPage extends GetView<ConnectController> {
             'Chargement base de données',
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 18,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
               fontWeight: FontWeight.w600,
               color: AppTheme.darkText,
             ),
           ),
-          const SizedBox(height: 8),
+          JtrResponsive.getResponsiveSpacing(context, 8),
           Text(
             'INITIALISATION',
             style: TextStyle(
-              fontSize: 12,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
               fontWeight: FontWeight.w500,
               letterSpacing: 1.2,
               color: AppTheme.textSecondary.withValues(alpha: 0.7),
             ),
           ),
-          const SizedBox(height: 28),
-          Obx(() => _buildProgressBar(controller.progress.value)),
-          const SizedBox(height: 16),
+          JtrResponsive.getResponsiveSpacing(context, 28),
+          Obx(() => _buildProgressBar(context, controller.progress.value)),
+          JtrResponsive.getResponsiveSpacing(context, 16),
           Obx(
             () => Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Container(
-                  width: 8,
-                  height: 8,
+                  width: JtrResponsive.getResponsiveSize(context, 8),
+                  height: JtrResponsive.getResponsiveSize(context, 8),
                   decoration: const BoxDecoration(
                     color: AppTheme.primary,
                     shape: BoxShape.circle,
                   ),
                 ),
-                const SizedBox(width: 8),
+                JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
                 Text(
                   controller.statusDetail.value,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),
                   ),
                 ),
@@ -101,28 +114,30 @@ class ConnectPage extends GetView<ConnectController> {
     );
   }
 
-  Widget _buildProgressBar(double value) {
+  Widget _buildProgressBar(BuildContext context, double value) {
     final percent = (value * 100).round();
+    final barHeight = JtrResponsive.getResponsiveHeight(context, 44);
+    final barRadius = JtrResponsive.getResponsiveRadius(context, 22);
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final fillWidth = constraints.maxWidth * value.clamp(0.0, 1.0);
 
         return Container(
-          height: 44,
+          height: barHeight,
           decoration: BoxDecoration(
             color: const Color(0xFFE8E8E8),
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(barRadius),
           ),
           child: Stack(
             children: [
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: fillWidth,
-                height: 44,
+                height: barHeight,
                 decoration: BoxDecoration(
                   color: AppTheme.primary,
-                  borderRadius: BorderRadius.circular(22),
+                  borderRadius: BorderRadius.circular(barRadius),
                 ),
               ),
               if (fillWidth > 0)
@@ -134,9 +149,12 @@ class ConnectPage extends GetView<ConnectController> {
                   child: Center(
                     child: Text(
                       '$percent%',
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          16,
+                        ),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -149,31 +167,31 @@ class ConnectPage extends GetView<ConnectController> {
     );
   }
 
-  Widget _buildConnectionStatus() {
+  Widget _buildConnectionStatus(BuildContext context) {
     return Obx(
       () => Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            width: 28,
-            height: 28,
+            width: JtrResponsive.getResponsiveSize(context, 28),
+            height: JtrResponsive.getResponsiveSize(context, 28),
             decoration: BoxDecoration(
               color: AppTheme.lightButton,
               shape: BoxShape.circle,
             ),
             child: Icon(
               Icons.check,
-              size: 16,
+              size: JtrResponsive.getResponsiveSize(context, 16),
               color: controller.isConnected.value
                   ? AppTheme.primary
                   : AppTheme.primary.withValues(alpha: 0.4),
             ),
           ),
-          const SizedBox(width: 10),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
           Text(
             'Connexion établie',
             style: TextStyle(
-              fontSize: 16,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
               fontWeight: FontWeight.w500,
               color: controller.isConnected.value
                   ? AppTheme.primary
@@ -185,12 +203,12 @@ class ConnectPage extends GetView<ConnectController> {
     );
   }
 
-  Widget _buildNextButton() {
+  Widget _buildNextButton(BuildContext context) {
     final isEnabled = controller.isConnected.value;
 
     return SizedBox(
       width: double.infinity,
-      height: 56,
+      height: JtrResponsive.getResponsiveHeight(context, 56),
       child: ElevatedButton(
         onPressed: isEnabled ? () => Get.offNamed(AppRoutes.login) : null,
         style: ElevatedButton.styleFrom(
@@ -201,21 +219,26 @@ class ConnectPage extends GetView<ConnectController> {
           elevation: isEnabled ? 4 : 0,
           shadowColor: AppTheme.primary.withValues(alpha: 0.4),
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 16),
+            ),
           ),
         ),
-        child: const Row(
+        child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               'Next',
               style: TextStyle(
-                fontSize: 18,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
                 fontWeight: FontWeight.w600,
               ),
             ),
-            SizedBox(width: 8),
-            Icon(Icons.chevron_right, size: 24),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+            Icon(
+              Icons.chevron_right,
+              size: JtrResponsive.getResponsiveSize(context, 24),
+            ),
           ],
         ),
       ),

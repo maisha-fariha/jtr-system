@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class TableOccupiedDialog extends StatelessWidget {
   const TableOccupiedDialog({
@@ -31,22 +32,38 @@ class TableOccupiedDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 36),
+      insetPadding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 36,
+      ),
       child: Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.topCenter,
         children: [
           Container(
-            margin: const EdgeInsets.only(top: 36),
-            padding: const EdgeInsets.fromLTRB(24, 52, 24, 24),
+            margin: EdgeInsets.only(
+              top: JtrResponsive.getResponsiveHeight(context, 36),
+            ),
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              left: 24,
+              right: 24,
+              top: 52,
+              bottom: 24,
+            ),
             decoration: BoxDecoration(
               color: AppTheme.background,
-              borderRadius: BorderRadius.circular(28),
+              borderRadius: BorderRadius.circular(
+                JtrResponsive.getResponsiveRadius(context, 28),
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
+                  blurRadius: JtrResponsive.getResponsiveWidth(context, 24),
+                  offset: Offset(
+                    0,
+                    JtrResponsive.getResponsiveHeight(context, 8),
+                  ),
                 ),
               ],
             ),
@@ -57,17 +74,23 @@ class TableOccupiedDialog extends StatelessWidget {
                   'Table occupée',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 20,
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      20,
+                    ),
                     fontWeight: FontWeight.w700,
                     color: AppTheme.darkText,
                   ),
                 ),
-                const SizedBox(height: 16),
+                JtrResponsive.getResponsiveSpacing(context, 16),
                 RichText(
                   textAlign: TextAlign.center,
                   text: TextSpan(
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: JtrResponsive.getResponsiveFontSize(
+                        context,
+                        15,
+                      ),
                       height: 1.45,
                       color: AppTheme.darkText.withValues(alpha: 0.85),
                     ),
@@ -80,7 +103,8 @@ class TableOccupiedDialog extends StatelessWidget {
                         ),
                       ),
                       const TextSpan(
-                        text: ' n\'est pas autorisé à travailler sur la table ',
+                        text:
+                            ' n\'est pas autorisé à travailler sur la table ',
                       ),
                       TextSpan(
                         text: tableNumber,
@@ -90,10 +114,10 @@ class TableOccupiedDialog extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(height: 28),
+                JtrResponsive.getResponsiveSpacing(context, 28),
                 SizedBox(
                   width: double.infinity,
-                  height: 50,
+                  height: JtrResponsive.getResponsiveHeight(context, 50),
                   child: ElevatedButton(
                     onPressed: Get.back,
                     style: ElevatedButton.styleFrom(
@@ -101,10 +125,15 @@ class TableOccupiedDialog extends StatelessWidget {
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                        borderRadius: BorderRadius.circular(
+                          JtrResponsive.getResponsiveRadius(context, 14),
+                        ),
                       ),
-                      textStyle: const TextStyle(
-                        fontSize: 16,
+                      textStyle: TextStyle(
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          16,
+                        ),
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.5,
                       ),
@@ -115,7 +144,7 @@ class TableOccupiedDialog extends StatelessWidget {
               ],
             ),
           ),
-          const Positioned(
+          Positioned(
             top: 0,
             child: _OccupiedIcon(),
           ),
@@ -130,37 +159,48 @@ class _OccupiedIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final outerSize = JtrResponsive.getResponsiveSize(context, 72);
+    final middleSize = JtrResponsive.getResponsiveSize(context, 56);
+    final innerSize = JtrResponsive.getResponsiveSize(context, 44);
+
     return Container(
-      width: 72,
-      height: 72,
+      width: outerSize,
+      height: outerSize,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: AppTheme.background,
         boxShadow: [
           BoxShadow(
             color: AppTheme.primary.withValues(alpha: 0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            blurRadius: JtrResponsive.getResponsiveWidth(context, 12),
+            offset: Offset(
+              0,
+              JtrResponsive.getResponsiveHeight(context, 4),
+            ),
           ),
         ],
       ),
       child: Center(
         child: Container(
-          width: 56,
-          height: 56,
+          width: middleSize,
+          height: middleSize,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(color: AppTheme.primary, width: 2.5),
           ),
           child: Center(
             child: Container(
-              width: 44,
-              height: 44,
+              width: innerSize,
+              height: innerSize,
               decoration: const BoxDecoration(
                 color: AppTheme.primary,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.close, color: Colors.white, size: 26),
+              child: Icon(
+                Icons.close,
+                color: Colors.white,
+                size: JtrResponsive.getResponsiveSize(context, 26),
+              ),
             ),
           ),
         ),

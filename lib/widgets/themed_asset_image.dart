@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
 import '../utils/app_assets.dart';
+import '../utils/responsive.dart';
 
 /// Displays an image asset that switches between light and dark variants.
 class ThemedAssetImage extends StatelessWidget {
@@ -41,8 +42,12 @@ class ThemedAssetImage extends StatelessWidget {
       return Image.asset(
         asset,
         fit: fit,
-        width: width,
-        height: height,
+        width: width != null
+            ? JtrResponsive.getResponsiveWidth(context, width!)
+            : null,
+        height: height != null
+            ? JtrResponsive.getResponsiveHeight(context, height!)
+            : null,
         alignment: alignment,
       );
     });

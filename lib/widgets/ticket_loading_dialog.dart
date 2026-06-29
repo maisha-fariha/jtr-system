@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class TicketLoadingDialog extends StatefulWidget {
   const TicketLoadingDialog({super.key});
@@ -31,32 +32,43 @@ class _TicketLoadingDialogState extends State<TicketLoadingDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final dotSize = JtrResponsive.getResponsiveSize(context, 8);
+    final dotMargin = JtrResponsive.getResponsiveWidth(context, 5);
+
     return Dialog(
       backgroundColor: AppTheme.background,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 20),
+        ),
+      ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 32),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 36,
+          vertical: 32,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
+            Text(
               'Veuillez patienter ...',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: AppTheme.primary,
-                fontSize: 16,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
                 fontWeight: FontWeight.w500,
               ),
             ),
-            const SizedBox(height: 24),
+            JtrResponsive.getResponsiveSpacing(context, 24),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(
                 3,
                 (index) => Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.symmetric(horizontal: 5),
+                  width: dotSize,
+                  height: dotSize,
+                  margin: EdgeInsets.symmetric(horizontal: dotMargin),
                   decoration: BoxDecoration(
                     color: AppTheme.primary.withValues(
                       alpha: index == _activeDot ? 1 : 0.35,

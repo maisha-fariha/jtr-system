@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../controllers/theme_controller.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/themed_asset_image.dart';
 
@@ -47,7 +48,7 @@ class HomePage extends StatelessWidget {
               'JTR System',
               style: TextStyle(
                 color: AppTheme.primary,
-                fontSize: 20,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 20),
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -80,15 +81,18 @@ class HomePage extends StatelessWidget {
             color: AppTheme.background,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32),
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 32,
+                ),
                 child: Column(
                   children: [
-                    const SizedBox(height: 48),
+                    JtrResponsive.getResponsiveSpacing(context, 48),
                     const ThemedAssetImage.logo(),
                     const Spacer(),
                     SizedBox(
                       width: double.infinity,
-                      height: 56,
+                      height: JtrResponsive.getResponsiveHeight(context, 56),
                       child: ElevatedButton(
                         onPressed: () => Get.toNamed(AppRoutes.connect),
                         style: ElevatedButton.styleFrom(
@@ -98,29 +102,40 @@ class HomePage extends StatelessWidget {
                           shadowColor: AppTheme.primary.withValues(alpha: 0.4),
                           surfaceTintColor: Colors.transparent,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(
+                              JtrResponsive.getResponsiveRadius(context, 16),
+                            ),
                           ),
                         ),
-                        child: const Row(
+                        child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Text(
                               'Connect',
                               style: TextStyle(
-                                fontSize: 18,
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  18,
+                                ),
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            SizedBox(width: 8),
-                            Icon(Icons.chevron_right, size: 24),
+                            JtrResponsive.getResponsiveHorizontalSpacing(
+                              context,
+                              8,
+                            ),
+                            Icon(
+                              Icons.chevron_right,
+                              size: JtrResponsive.getResponsiveSize(context, 24),
+                            ),
                           ],
                         ),
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    JtrResponsive.getResponsiveSpacing(context, 20),
                     SizedBox(
                       width: double.infinity,
-                      height: 56,
+                      height: JtrResponsive.getResponsiveHeight(context, 56),
                       child: ElevatedButton(
                         onPressed: () => SystemNavigator.pop(),
                         style: ElevatedButton.styleFrom(
@@ -131,13 +146,18 @@ class HomePage extends StatelessWidget {
                               AppTheme.primary.withValues(alpha: 0.15),
                           surfaceTintColor: Colors.transparent,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
+                            borderRadius: BorderRadius.circular(
+                              JtrResponsive.getResponsiveRadius(context, 16),
+                            ),
                           ),
                         ),
                         child: Text(
                           'Exit',
                           style: TextStyle(
-                            fontSize: 18,
+                            fontSize: JtrResponsive.getResponsiveFontSize(
+                              context,
+                              18,
+                            ),
                             fontWeight: FontWeight.w600,
                             color: AppTheme.darkText,
                           ),
@@ -146,7 +166,7 @@ class HomePage extends StatelessWidget {
                     ),
                     const Spacer(flex: 2),
                     const AppFooter(),
-                    const SizedBox(height: 24),
+                    JtrResponsive.getResponsiveSpacing(context, 24),
                   ],
                 ),
               ),

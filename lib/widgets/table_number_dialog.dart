@@ -9,18 +9,33 @@ class TableNumberDialog extends StatefulWidget {
   const TableNumberDialog({
     super.key,
     this.title = 'N° DE TABLE',
+    this.initialValue,
+    this.integerOnly = false,
+    this.maxDigits,
     this.onConfirm,
   });
 
   final String title;
+  final String? initialValue;
+  final bool integerOnly;
+  final int? maxDigits;
   final ValueChanged<String>? onConfirm;
 
   static Future<void> show({
     String title = 'N° DE TABLE',
+    String? initialValue,
+    bool integerOnly = false,
+    int? maxDigits,
     ValueChanged<String>? onConfirm,
   }) {
     return Get.dialog(
-      TableNumberDialog(title: title, onConfirm: onConfirm),
+      TableNumberDialog(
+        title: title,
+        initialValue: initialValue,
+        integerOnly: integerOnly,
+        maxDigits: maxDigits,
+        onConfirm: onConfirm,
+      ),
       barrierDismissible: false,
       barrierColor: AppTheme.dialogBarrier,
     );
@@ -33,12 +48,32 @@ class TableNumberDialog extends StatefulWidget {
 class _TableNumberDialogState extends State<TableNumberDialog> {
   static const _columns = 4;
 
-  String _tableInput = '';
+  late String _tableInput;
 
-  String get _mainDisplay => _tableInput.isEmpty ? '---' : _tableInput;
+  @override
+  void initState() {
+    super.initState();
+    _tableInput = widget.initialValue ?? '';
+  }
+
+  String get _emptyPlaceholder => widget.integerOnly ? '0' : '---';
+
+  String get _mainDisplay =>
+      _tableInput.isEmpty ? _emptyPlaceholder : _tableInput;
 
   void _appendDigit(String value) {
+    if (widget.integerOnly && value == '.') return;
+    if (widget.maxDigits != null &&
+        value != '.' &&
+        _tableInput.length >= widget.maxDigits!) {
+      return;
+    }
     setState(() => _tableInput += value);
+  }
+
+  void _clear() {
+    if (_tableInput.isEmpty) return;
+    setState(() => _tableInput = '');
   }
 
   void _backspace() {
@@ -47,8 +82,11 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
   }
 
   void _confirm() {
-    if (_tableInput.isEmpty) return;
-    final value = _tableInput;
+    final value = _tableInput.isEmpty && widget.integerOnly
+        ? '0'
+        : _tableInput;
+    if (value.isEmpty) return;
+    if (widget.integerOnly && int.tryParse(value) == null) return;
     Get.back();
     Future.microtask(() => widget.onConfirm?.call(value));
   }
@@ -178,8 +216,8 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         width: cellWidth,
                         height: keyHeight,
                         keyRadius: keyRadius,
-                        label: '/',
-                        onTap: () {},
+                        label: widget.integerOnly ? 'C' : '/',
+                        onTap: widget.integerOnly ? _clear : () {},
                       ),
                     ],
                   ),
@@ -207,13 +245,16 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         label: '6',
                         onTap: () => _appendDigit('6'),
                       ),
-                      _CalcKey(
-                        width: cellWidth,
-                        height: keyHeight,
-                        keyRadius: keyRadius,
-                        label: '*',
-                        onTap: () {},
-                      ),
+                      if (widget.integerOnly)
+                        SizedBox(width: cellWidth, height: keyHeight)
+                      else
+                        _CalcKey(
+                          width: cellWidth,
+                          height: keyHeight,
+                          keyRadius: keyRadius,
+                          label: '*',
+                          onTap: () {},
+                        ),
                     ],
                   ),
                   _KeyRow(
@@ -240,13 +281,16 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         label: '3',
                         onTap: () => _appendDigit('3'),
                       ),
-                      _CalcKey(
-                        width: cellWidth,
-                        height: keyHeight,
-                        keyRadius: keyRadius,
-                        label: '-',
-                        onTap: () {},
-                      ),
+                      if (widget.integerOnly)
+                        SizedBox(width: cellWidth, height: keyHeight)
+                      else
+                        _CalcKey(
+                          width: cellWidth,
+                          height: keyHeight,
+                          keyRadius: keyRadius,
+                          label: '-',
+                          onTap: () {},
+                        ),
                     ],
                   ),
                   _KeyRow(
@@ -259,18 +303,23 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         label: '0',
                         onTap: () => _appendDigit('0'),
                       ),
-                      _CalcKey(
-                        width: cellWidth,
-                        height: keyHeight,
-                        keyRadius: keyRadius,
-                        label: '.',
-                        onTap: () => _appendDigit('.'),
-                      ),
+                      if (!widget.integerOnly)
+                        _CalcKey(
+                          width: cellWidth,
+                          height: keyHeight,
+                          keyRadius: keyRadius,
+                          label: '.',
+                          onTap: () => _appendDigit('.'),
+                        )
+                      else
+                        SizedBox(width: cellWidth),
                       _ConfirmKey(
                         width: cellWidth,
                         height: keyHeight,
                         keyRadius: keyRadius,
-                        onTap: _tableInput.isEmpty ? null : _confirm,
+                        onTap: _tableInput.isEmpty && !widget.integerOnly
+                            ? null
+                            : _confirm,
                       ),
                     ],
                   ),
@@ -319,7 +368,7 @@ class _DisplayField extends StatelessWidget {
               fontSize: fontSize,
               fontWeight: FontWeight.w600,
               color: AppTheme.keypadKeyForeground.withValues(
-                alpha: text == '---' ? 0.35 : 0.9,
+                alpha: text == '---' || text == '0' ? 0.35 : 0.9,
               ),
               letterSpacing: 1.5,
             ),

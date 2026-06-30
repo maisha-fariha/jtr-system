@@ -9,7 +9,6 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
-import '../widgets/quantity_keypad_panel.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
@@ -53,26 +52,18 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
-                  final showKeypad = controller.showQuantityKeypad.value;
-                  final qtyInput = controller.quantityInput.value;
                   SessionOrder? currentOrder = session.findOrder(
                     orderNumber: controller.orderNumber,
                     orderId: controller.orderId,
                   );
-                  currentOrder ??= order!;
+                  currentOrder ??= order;
 
                   return Column(
                     children: [
                       Expanded(child: _OrderSummary(order: currentOrder)),
                       const _ActionToolbar(),
-                      if (showKeypad)
-                        QuantityKeypadPanel(
-                          value: qtyInput,
-                          onChanged: (value) => controller.quantityInput.value = value,
-                          onClose: controller.toggleQuantityKeypad,
-                        ),
                       if (showPayment)
-                        const _PaymentButtons()
+                        const Expanded(flex: 3, child: _PaymentButtons())
                       else if (expanded) ...[
                         const _CategoryTabs(),
                         const Expanded(flex: 2, child: _MenuGrid()),
@@ -923,6 +914,8 @@ class _MenuGrid extends GetView<TableDetailsController> {
                 itemBuilder: (context, index) {
                   final product = items[index];
                   final isInOrder = controller.isProductInOrder(product);
+                  final isSelected = controller.isProductSelected(product);
+                  final orderQty = controller.productQuantityInOrder(product);
                   final itemRadius =
                       JtrResponsive.getResponsiveRadius(context, 10);
 
@@ -935,10 +928,16 @@ class _MenuGrid extends GetView<TableDetailsController> {
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         decoration: BoxDecoration(
-                          color: _menuGridItemBackground(isInOrder),
+                          color: _menuGridItemBackground(
+                            isInOrder: isInOrder,
+                            isSelected: isSelected,
+                          ),
                           borderRadius: BorderRadius.circular(itemRadius),
-                          border: _menuGridItemBorder(isInOrder),
-                          boxShadow: _menuGridItemShadow(isInOrder),
+                          border: _menuGridItemBorder(
+                            isInOrder: isInOrder,
+                            isSelected: isSelected,
+                          ),
+                          boxShadow: _menuGridItemShadow(isSelected),
                         ),
                         child: Stack(
                           alignment: Alignment.center,
@@ -1008,14 +1007,14 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                     ),
                                   ),
                                   child: Text(
-                                    'AJOUTÉ',
+                                    '×$orderQty',
                                     style: TextStyle(
                                       fontSize:
                                           JtrResponsive.getResponsiveFontSize(
                                         context,
-                                        9,
+                                        10,
                                       ),
-                                      fontWeight: FontWeight.w700,
+                                      fontWeight: FontWeight.w800,
                                       color: AppTheme.primary,
                                     ),
                                   ),
@@ -1108,9 +1107,15 @@ class _CategoryGrid extends StatelessWidget {
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
                 decoration: BoxDecoration(
-                  color: _menuGridItemBackground(false),
+                  color: _menuGridItemBackground(
+                    isInOrder: false,
+                    isSelected: false,
+                  ),
                   borderRadius: BorderRadius.circular(itemRadius),
-                  border: _menuGridItemBorder(false),
+                  border: _menuGridItemBorder(
+                    isInOrder: false,
+                    isSelected: false,
+                  ),
                   boxShadow: _menuGridItemShadow(false),
                 ),
                 child: Stack(
@@ -1155,24 +1160,36 @@ class _CategoryGrid extends StatelessWidget {
   }
 }
 
-Color _menuGridItemBackground(bool isSelected) {
+Color _menuGridItemBackground({
+  required bool isInOrder,
+  required bool isSelected,
+}) {
   if (Get.isDarkMode) {
+    if (isSelected) return AppTheme.primary.withValues(alpha: 0.18);
     return AppTheme.inactiveSurface;
   }
 
-  return isSelected ? AppTheme.lightButton : AppTheme.background;
+  if (isSelected) return AppTheme.lightButton;
+  return isInOrder ? AppTheme.lightButton.withValues(alpha: 0.55) : AppTheme.background;
 }
 
-Border? _menuGridItemBorder(bool isSelected) {
+Border? _menuGridItemBorder({
+  required bool isInOrder,
+  required bool isSelected,
+}) {
+  if (isSelected) {
+    return Border.all(color: AppTheme.primary, width: 2.5);
+  }
+
   if (Get.isDarkMode) {
-    return isSelected
-        ? Border.all(color: AppTheme.primary, width: 2)
+    return isInOrder
+        ? Border.all(color: AppTheme.primary.withValues(alpha: 0.5), width: 1.5)
         : null;
   }
 
   return Border.all(
-    color: isSelected ? AppTheme.primary : AppTheme.cardBorder,
-    width: isSelected ? 2 : 1,
+    color: isInOrder ? AppTheme.primary.withValues(alpha: 0.45) : AppTheme.cardBorder,
+    width: isInOrder ? 1.5 : 1,
   );
 }
 

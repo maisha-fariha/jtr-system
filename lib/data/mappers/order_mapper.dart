@@ -854,6 +854,189 @@ class OrderMapper {
     };
   }
 
+  static int quantityForSimpleProduct(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final item = findSimpleItemByProductId(orderDetail, productId);
+    if (item == null) return 0;
+    return (item['qty'] as num?)?.toInt() ?? 0;
+  }
+
+  static Map<String, dynamic>? findSimpleItemByProductId(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          if (!_isSimpleLineItem(item)) continue;
+          if (_itemProductId(item) == productId) return item;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static bool _isSimpleLineItem(Map<String, dynamic> item) {
+    final menus = item['menu_selections'];
+    if (menus is List && menus.isNotEmpty) return false;
+    return item['is_still_menu_missing'] != true;
+  }
+
+  static double _itemUnitPrice(Map<String, dynamic> item) {
+    final qty = (item['qty'] as num?)?.toInt() ?? 1;
+    if (qty <= 0) return 0;
+    return _parseMoney(item['sub_total']) / qty;
+  }
+
+  static Map<String, dynamic> addOrIncrementSimpleItem({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required double unitPrice,
+    int qty = 1,
+    String comment = '',
+  }) {
+    final existing = findSimpleItemByProductId(orderDetail, productId);
+    if (existing == null) {
+      return appendSimpleItem(
+        orderDetail: orderDetail,
+        productId: productId,
+        unitPrice: unitPrice,
+        qty: qty,
+        comment: comment,
+      );
+    }
+
+    final currentQty = (existing['qty'] as num?)?.toInt() ?? 0;
+    final resolvedUnitPrice = _itemUnitPrice(existing);
+    return setSimpleProductQuantity(
+      orderDetail: orderDetail,
+      productId: productId,
+      qty: currentQty + qty,
+      unitPrice: resolvedUnitPrice > 0 ? resolvedUnitPrice : unitPrice,
+    );
+  }
+
+  static Map<String, dynamic> setSimpleProductQuantity({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required int qty,
+    required double unitPrice,
+  }) {
+    if (qty <= 0) {
+      return removeSimpleProductFromOrder(
+        orderDetail: orderDetail,
+        productId: productId,
+      );
+    }
+
+    final working = Map<String, dynamic>.from(orderDetail);
+    var updated = false;
+
+    _mutateSimpleProductLines(
+      working,
+      productId: productId,
+      onMatch: (item) {
+        item['qty'] = qty;
+        item['sub_total'] = unitPrice * qty;
+        updated = true;
+      },
+    );
+
+    if (updated) {
+      return buildOrderUpdatePayload(working);
+    }
+
+    return appendSimpleItem(
+      orderDetail: orderDetail,
+      productId: productId,
+      unitPrice: unitPrice,
+      qty: qty,
+    );
+  }
+
+  static Map<String, dynamic> adjustSimpleProductQuantity({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required int delta,
+    required double unitPrice,
+  }) {
+    final currentQty = quantityForSimpleProduct(orderDetail, productId);
+    final existing = findSimpleItemByProductId(orderDetail, productId);
+    final resolvedUnitPrice = existing != null
+        ? (_itemUnitPrice(existing) > 0
+            ? _itemUnitPrice(existing)
+            : unitPrice)
+        : unitPrice;
+
+    return setSimpleProductQuantity(
+      orderDetail: orderDetail,
+      productId: productId,
+      qty: currentQty + delta,
+      unitPrice: resolvedUnitPrice,
+    );
+  }
+
+  static Map<String, dynamic> removeSimpleProductFromOrder({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateSimpleProductLines(
+      working,
+      productId: productId,
+      onMatch: (item) {
+        item['status'] = 'cancelled';
+      },
+    );
+    return buildOrderUpdatePayload(working);
+  }
+
+  static void _mutateSimpleProductLines(
+    Map<String, dynamic> orderDetail, {
+    required int productId,
+    required void Function(Map<String, dynamic> item) onMatch,
+  }) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          if (!_isSimpleLineItem(item)) continue;
+          if (_itemProductId(item) != productId) continue;
+          onMatch(item);
+          return;
+        }
+      }
+    }
+  }
+
   static Map<String, dynamic> appendSimpleItem({
     required Map<String, dynamic> orderDetail,
     required int productId,

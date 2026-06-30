@@ -353,7 +353,7 @@ class OrderRepository {
 
       _ensureAddItemCourse(detail, apiLog);
 
-      final payload = OrderMapper.appendSimpleItem(
+      final payload = OrderMapper.addOrIncrementSimpleItem(
         orderDetail: detail,
         productId: productId,
         unitPrice: unitPrice,
@@ -421,6 +421,104 @@ class OrderRepository {
         subTotal: basePrice + supplement,
         menuSelections: menuSelections,
         comment: comment,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> setProductQuantityInOrder({
+    required int orderId,
+    required int productId,
+    required int qty,
+    required double unitPrice,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Mise à jour quantité ──');
+    apiLog.writeln('order_id=$orderId product_id=$productId qty=$qty');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.setSimpleProductQuantity(
+        orderDetail: detail,
+        productId: productId,
+        qty: qty,
+        unitPrice: unitPrice,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> adjustProductQuantityInOrder({
+    required int orderId,
+    required int productId,
+    required int delta,
+    required double unitPrice,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajustement quantité ──');
+    apiLog.writeln(
+      'order_id=$orderId product_id=$productId delta=$delta',
+    );
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.adjustSimpleProductQuantity(
+        orderDetail: detail,
+        productId: productId,
+        delta: delta,
+        unitPrice: unitPrice,
       );
 
       final updated = await _putOrderUpdate(

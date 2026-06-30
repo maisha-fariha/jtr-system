@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -10,6 +12,7 @@ import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/composed_product_picker_sheet.dart';
+import '../widgets/table_number_dialog.dart';
 import 'session_controller.dart';
 
 class TableDetailsController extends GetxController {
@@ -25,8 +28,7 @@ class TableDetailsController extends GetxController {
   final selectedCategoryIndex = 0.obs;
   final isBottomPanelExpanded = true.obs;
   final showPaymentOptions = false.obs;
-  final showQuantityKeypad = false.obs;
-  final quantityInput = ''.obs;
+  final selectedProductId = RxnInt();
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
   final isCatalogLoading = false.obs;
   final isAddingProduct = false.obs;
@@ -160,11 +162,29 @@ class TableDetailsController extends GetxController {
     return _catalogRepository.productsForCategory(products, category.id);
   }
 
-  int get pendingQuantity {
-    final parsed = int.tryParse(quantityInput.value);
-    if (parsed != null && parsed > 0) return parsed;
-    return 1;
+  CatalogProductModel? get selectedCatalogProduct {
+    final id = selectedProductId.value;
+    if (id == null) return null;
+    for (final product in products) {
+      if (product.id == id) return product;
+    }
+    return null;
   }
+
+  int productQuantityInOrder(CatalogProductModel product) {
+    final currentOrder = order;
+    if (currentOrder == null) return 0;
+    final normalized = product.name.toUpperCase();
+    for (final line in currentOrder.products) {
+      if (line.name.toUpperCase() == normalized) {
+        return int.tryParse(line.quantity) ?? 0;
+      }
+    }
+    return 0;
+  }
+
+  bool isProductSelected(CatalogProductModel product) =>
+      selectedProductId.value == product.id;
 
   void selectCategory(int index) {
     if (index < 0 || index >= currentLevelCategories.length) return;
@@ -209,11 +229,6 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (showQuantityKeypad.value) {
-      toggleQuantityKeypad();
-      return;
-    }
-
     Get.back();
   }
 
@@ -222,7 +237,7 @@ class TableDetailsController extends GetxController {
     if (isBottomPanelExpanded.value) {
       showPaymentOptions.value = false;
       activeToolbarIcon.value = Icons.grid_view;
-    } else if (!showPaymentOptions.value && !showQuantityKeypad.value) {
+    } else if (!showPaymentOptions.value) {
       activeToolbarIcon.value = null;
     }
   }
@@ -232,8 +247,6 @@ class TableDetailsController extends GetxController {
     showPaymentOptions.value = show;
     if (show) {
       isBottomPanelExpanded.value = false;
-      showQuantityKeypad.value = false;
-      quantityInput.value = '';
       activeToolbarIcon.value = Icons.payments_outlined;
     } else {
       isBottomPanelExpanded.value = true;
@@ -241,18 +254,42 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  void toggleQuantityKeypad() {
-    final show = !showQuantityKeypad.value;
-    showQuantityKeypad.value = show;
-    if (show) {
-      showPaymentOptions.value = false;
-      isBottomPanelExpanded.value = true;
-      quantityInput.value = '';
-      activeToolbarIcon.value = Icons.dialpad_outlined;
-    } else {
-      quantityInput.value = '';
-      activeToolbarIcon.value = Icons.grid_view;
-    }
+  void showQuantityDialog() {
+    final product = selectedCatalogProduct;
+    final currentQty =
+        product != null ? productQuantityInOrder(product) : 0;
+
+    TableNumberDialog.show(
+      title: product?.name.toUpperCase() ?? 'QUANTITÉ',
+      initialValue: currentQty > 0 ? '$currentQty' : null,
+      onConfirm: (value) {
+        final selected = selectedCatalogProduct;
+        if (selected == null) {
+          Get.snackbar(
+            'Sélectionnez un produit',
+            'Touchez un article dans la grille, puis validez la quantité.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+          );
+          return;
+        }
+
+        if (selected.isComposed) {
+          Get.snackbar(
+            'Produit composé',
+            'Ce produit se configure via le sélecteur de menu.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+          );
+          return;
+        }
+
+        final parsed = int.tryParse(value.trim().split('.').first);
+        if (parsed == null || parsed < 0) return;
+
+        unawaited(_setProductQuantity(selected, parsed));
+      },
+    );
   }
 
   void onToolbarIconTap(IconData icon) {
@@ -267,7 +304,7 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.dialpad_outlined) {
-      toggleQuantityKeypad();
+      showQuantityDialog();
       return;
     }
 
@@ -278,8 +315,6 @@ class TableDetailsController extends GetxController {
 
     if (icon == Icons.grid_view || icon == Icons.restaurant) {
       showPaymentOptions.value = false;
-      showQuantityKeypad.value = false;
-      quantityInput.value = '';
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = icon;
       return;
@@ -317,8 +352,7 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    final qty = pendingQuantity;
-    final hadCustomQty = quantityInput.value.isNotEmpty;
+    selectedProductId.value = product.id;
 
     isAddingProduct.value = true;
     try {
@@ -338,13 +372,9 @@ class TableDetailsController extends GetxController {
           orderId: id,
           productId: product.id,
           unitPrice: product.unitPrice,
-          qty: qty,
+          qty: 1,
         );
         _syncOrderInSession(updated, orderNumber);
-      }
-
-      if (hadCustomQty) {
-        quantityInput.value = '';
       }
     } on ApiException catch (e) {
       ApiDebugDialog.show(
@@ -353,6 +383,34 @@ class TableDetailsController extends GetxController {
       );
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
+    } finally {
+      isAddingProduct.value = false;
+    }
+  }
+
+  Future<void> _setProductQuantity(
+    CatalogProductModel product,
+    int qty,
+  ) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) return;
+
+    isAddingProduct.value = true;
+    try {
+      final updated = await _orderRepository.setProductQuantityInOrder(
+        orderId: id,
+        productId: product.id,
+        qty: qty,
+        unitPrice: product.unitPrice,
+      );
+      _syncOrderInSession(updated, orderNumber);
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur quantité',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible de modifier la quantité.');
     } finally {
       isAddingProduct.value = false;
     }

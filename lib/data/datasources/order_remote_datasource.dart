@@ -288,26 +288,84 @@ class OrderRemoteDataSource {
   }
 
   Future<List<Map<String, dynamic>>> fetchPaymentModes() async {
+    final errors = <String>[];
+    final attempts = <String>[];
+
     for (final path in [
-      ApiEndpoints.paymentModesForCheckout,
       ApiEndpoints.activePaymentModes,
+      ApiEndpoints.paymentModesList,
+      ApiEndpoints.paymentModesForCheckout,
     ]) {
       try {
-        final response = await _client.get<Map<String, dynamic>>(path);
-        final envelope = ApiEnvelope<dynamic>.fromJson(
-          response.data!,
-          (json) => json,
+        final response = await _client.get<dynamic>(path);
+        _recordApiLog(
+          method: 'GET',
+          path: path,
+          response: response.data,
+          statusCode: response.statusCode,
         );
 
-        if (!envelope.success) continue;
-
-        final modes = OrderMapper.parsePaymentModesList(envelope.data);
+        final modes = OrderMapper.extractPaymentModes(response.data);
+        attempts.add('$path → ${modes.length} mode(s)');
         if (modes.isNotEmpty) return modes;
-      } on ApiException {
-        continue;
+
+        errors.add('$path: réponse vide ou format non reconnu.');
+      } on ApiException catch (error) {
+        attempts.add('$path → erreur');
+        errors.add(
+          '${error.message}${error.statusCode != null ? ' (HTTP ${error.statusCode})' : ''}',
+        );
+        _appendApiError(error);
+      } catch (error) {
+        attempts.add('$path → exception');
+        errors.add('$path: $error');
       }
     }
 
-    throw ApiException(message: 'Impossible de charger les modes de paiement.');
+    try {
+      final settings = await fetchPaymentSettings();
+      final fallback = OrderMapper.paymentModesFromSettings(settings);
+      attempts.add(
+        '${ApiEndpoints.paymentSettings} → ${fallback.length} mode(s)',
+      );
+      if (fallback.isNotEmpty) return fallback;
+    } on ApiException catch (error) {
+      errors.add(error.message);
+    } catch (error) {
+      errors.add('$error');
+    }
+
+    lastApiLog = [
+      if (lastApiLog != null) lastApiLog,
+      'Tentatives modes de paiement:',
+      ...attempts,
+      if (errors.isNotEmpty) 'Erreurs:',
+      ...errors,
+    ].join('\n');
+
+    throw ApiException(
+      message: errors.isEmpty
+          ? 'Impossible de charger les modes de paiement.'
+          : errors.last,
+    );
+  }
+
+  Future<Map<String, dynamic>> fetchPaymentSettings() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.paymentSettings,
+    );
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+      response.data!,
+      (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success || envelope.data == null) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load payment settings.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return envelope.data!;
   }
 }

@@ -1220,6 +1220,27 @@ class OrderMapper {
     return false;
   }
 
+  static double parseOrderPayableAmount(Map<String, dynamic> data) {
+    final order = unwrapOrderDetail(data);
+    final remaining = order['remaining_amount'];
+    if (remaining is num && remaining > 0) return remaining.toDouble();
+    if (remaining is String) {
+      final parsed =
+          double.tryParse(remaining.replaceAll(',', '.').replaceAll('€', '').trim());
+      if (parsed != null && parsed > 0) return parsed;
+    }
+
+    return parseOrderTotalAmount(data);
+  }
+
+  static double formatPaymentAmount(double amount) =>
+      double.parse(amount.toStringAsFixed(2));
+
+  static String formatPaymentAmountDisplay(double amount) {
+    final formatted = amount.toStringAsFixed(2).replaceAll('.', ',');
+    return '$formatted €';
+  }
+
   static double parseOrderTotalAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
     final raw = order['total_price'] ??
@@ -1234,56 +1255,230 @@ class OrderMapper {
     return 0;
   }
 
-  static List<Map<String, dynamic>> parsePaymentModesList(dynamic data) {
-    if (data is List) {
-      return data.whereType<Map<String, dynamic>>().toList();
-    }
-    if (data is Map<String, dynamic>) {
-      for (final key in ['data', 'payment_modes', 'modes', 'items']) {
-        final inner = data[key];
-        if (inner is List) {
-          return inner.whereType<Map<String, dynamic>>().toList();
+  static List<Map<String, dynamic>> extractPaymentModes(dynamic payload) {
+    final raw = <Map<String, dynamic>>[];
+
+    void collect(dynamic data) {
+      if (data == null) return;
+
+      if (data is List) {
+        for (final entry in data) {
+          if (entry is Map<String, dynamic>) {
+            raw.add(entry);
+          } else if (entry is Map) {
+            raw.add(Map<String, dynamic>.from(entry));
+          }
+        }
+        return;
+      }
+
+      if (data is! Map) return;
+      final map = data is Map<String, dynamic>
+          ? data
+          : Map<String, dynamic>.from(data);
+
+      if (_looksLikePaymentMode(map)) {
+        raw.add(map);
+        return;
+      }
+
+      for (final key in [
+        'data',
+        'payment_modes',
+        'modes',
+        'items',
+        'paymentModes',
+        'active_modes',
+        'active',
+        'results',
+      ]) {
+        if (!map.containsKey(key)) continue;
+        collect(map[key]);
+      }
+
+      for (final entry in map.entries) {
+        final value = entry.value;
+        if (value is! Map) continue;
+        final child = value is Map<String, dynamic>
+            ? value
+            : Map<String, dynamic>.from(value);
+        if (_looksLikePaymentMode(child)) {
+          raw.add({
+            ...child,
+            if (child['code'] == null) 'code': entry.key.toString(),
+          });
         }
       }
     }
-    return const [];
+
+    if (payload is Map<String, dynamic> &&
+        payload.containsKey('success') &&
+        payload.containsKey('data')) {
+      try {
+        final envelope = payload;
+        if (envelope['success'] == true) {
+          collect(envelope['data']);
+        }
+        if (raw.isEmpty) {
+          collect(payload);
+        }
+      } catch (_) {
+        collect(payload);
+      }
+    } else {
+      collect(payload);
+    }
+
+    final normalized = raw
+        .map(normalizePaymentMode)
+        .where((mode) => paymentModeId(mode) != null)
+        .toList();
+
+    final seen = <int>{};
+    return normalized.where((mode) {
+      final id = paymentModeId(mode);
+      if (id == null || seen.contains(id)) return false;
+      seen.add(id);
+      return true;
+    }).toList();
+  }
+
+  static List<Map<String, dynamic>> parsePaymentModesList(dynamic data) =>
+      extractPaymentModes(data);
+
+  static bool _looksLikePaymentMode(Map<String, dynamic> map) {
+    if (map.containsKey('payment_mode')) return true;
+    if (map.containsKey('payment_mode_id')) return true;
+    if (map.containsKey('id') &&
+        (map.containsKey('name') ||
+            map.containsKey('label') ||
+            map.containsKey('code') ||
+            map.containsKey('type'))) {
+      return true;
+    }
+    return false;
+  }
+
+  static Map<String, dynamic> normalizePaymentMode(Map<String, dynamic> raw) {
+    final nested = raw['payment_mode'];
+    if (nested is Map) {
+      final mode = nested is Map<String, dynamic>
+          ? nested
+          : Map<String, dynamic>.from(nested);
+      return {
+        ...mode,
+        'id': paymentModeId(mode) ?? paymentModeId(raw),
+        'name': mode['name'] ?? raw['name'] ?? mode['label'] ?? raw['label'],
+        'code': mode['code'] ?? raw['code'],
+        'type': mode['type'] ?? raw['type'],
+        'is_cash': mode['is_cash'] ?? raw['is_cash'],
+        'is_active': mode['is_active'] ?? raw['is_active'],
+        'active': mode['active'] ?? raw['active'],
+      };
+    }
+
+    return {
+      ...raw,
+      'id': paymentModeId(raw),
+    };
+  }
+
+  static int? paymentModeId(Map<String, dynamic> mode) {
+    final id = mode['id'] ?? mode['payment_mode_id'];
+    if (id is num) return id.toInt();
+    if (id is String) return int.tryParse(id);
+    return null;
+  }
+
+  static List<Map<String, dynamic>> paymentModesFromSettings(
+    Map<String, dynamic> settings,
+  ) {
+    final modes = <Map<String, dynamic>>[];
+    final cashId = settings['default_cash_payment_mode_id'];
+    if (cashId is num) {
+      modes.add({
+        'id': cashId.toInt(),
+        'name': 'Espèces',
+        'code': 'cash',
+        'is_cash': true,
+        'is_active': true,
+      });
+    }
+
+    final cardId = settings['default_card_payment_mode_id'] ??
+        settings['default_credit_payment_mode_id'];
+    if (cardId is num) {
+      modes.add({
+        'id': cardId.toInt(),
+        'name': 'Carte',
+        'code': 'card',
+        'is_cash': false,
+        'is_active': true,
+      });
+    }
+
+    return modes;
+  }
+
+  static List<Map<String, dynamic>> activePaymentModes(
+    List<Map<String, dynamic>> modes,
+  ) {
+    return modes.where((mode) {
+      final status = mode['status']?.toString().toLowerCase();
+      if (status == 'inactive' || status == 'disabled') return false;
+
+      final isActive = mode['is_active'] ?? mode['active'];
+      if (isActive == false || isActive == 0 || isActive == '0') return false;
+      return true;
+    }).toList();
   }
 
   static int? resolvePaymentModeId(
     List<Map<String, dynamic>> modes, {
     required bool isCash,
   }) {
-    if (modes.isEmpty) return null;
+    final active = activePaymentModes(modes);
+    final candidates = active.isEmpty ? modes : active;
+    if (candidates.isEmpty) return null;
 
-    for (final mode in modes) {
-      final id = (mode['id'] as num?)?.toInt();
+    for (final mode in candidates) {
+      final id = paymentModeId(mode);
       if (id == null) continue;
+
+      if (mode['is_cash'] == true && isCash) return id;
+      if (mode['is_cash'] == false && !isCash) return id;
 
       final label = [
         mode['name'],
         mode['code'],
         mode['label'],
         mode['type'],
+        mode['slug'],
+        if (mode['payment_mode'] is Map<String, dynamic>)
+          ...(mode['payment_mode'] as Map<String, dynamic>).values
+              .whereType<String>(),
       ].whereType<String>().join(' ').toLowerCase();
 
       final matchesCash = label.contains('esp') ||
+          label.contains('espece') ||
           label.contains('cash') ||
           label.contains('liquide');
       final matchesCard = label.contains('carte') ||
           label.contains('card') ||
           label.contains('credit') ||
-          label.contains('cb');
+          label.contains('cb') ||
+          label.contains('tpe');
 
       if (isCash && matchesCash) return id;
       if (!isCash && matchesCard) return id;
     }
 
-    if (modes.length == 1) {
-      return (modes.first['id'] as num?)?.toInt();
+    if (candidates.length == 1) {
+      return paymentModeId(candidates.first);
     }
 
-    final firstId = (modes.first['id'] as num?)?.toInt();
-    final lastId = (modes.last['id'] as num?)?.toInt();
+    final firstId = paymentModeId(candidates.first);
+    final lastId = paymentModeId(candidates.last);
     return isCash ? firstId : lastId;
   }
 

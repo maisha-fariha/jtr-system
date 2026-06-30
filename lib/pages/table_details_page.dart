@@ -11,6 +11,7 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/api_debug_dialog.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
@@ -697,34 +698,104 @@ class _PaymentButtons extends GetView<TableDetailsController> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: JtrResponsive.getResponsivePadding(
-        context,
-        left: 16,
-        right: 16,
-        top: 12,
-        bottom: 16,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _PaymentButton(
-              label: 'ESPECE',
-              backgroundColor: _cashGrey,
-              onTap: () => controller.payOrder(context: context, isCash: true),
+    return Obx(() {
+      final loading = controller.paymentModesLoading.value;
+      final error = controller.paymentModesError.value;
+      final busy = controller.isAddingProduct.value;
+      final canPay = controller.canPay;
+
+      return Padding(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 16,
+          right: 16,
+          top: 12,
+          bottom: 16,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Total à encaisser : ${controller.payableTotalLabel}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-          JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-          Expanded(
-            child: _PaymentButton(
-              label: 'CARTE DE CREDIT',
-              backgroundColor: AppTheme.primary,
-              onTap: () => controller.payOrder(context: context, isCash: false),
-            ),
-          ),
-        ],
-      ),
-    );
+            if (loading) ...[
+              JtrResponsive.getResponsiveSpacing(context, 12),
+              const Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white70,
+                  ),
+                ),
+              ),
+            ] else if (error != null) ...[
+              JtrResponsive.getResponsiveSpacing(context, 8),
+              Text(
+                error,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.red.shade300,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                ),
+              ),
+              JtrResponsive.getResponsiveSpacing(context, 8),
+              TextButton(
+                onPressed: busy ? null : () => controller.reloadPaymentModes(),
+                child: const Text('Réessayer'),
+              ),
+              TextButton(
+                onPressed: busy
+                    ? null
+                    : () {
+                        final log = controller.lastPaymentModesLoadLog;
+                        if (log == null || log.isEmpty) return;
+                        ApiDebugDialog.show(
+                          title: 'Chargement modes de paiement',
+                          body: log,
+                        );
+                      },
+                child: const Text('Détails'),
+              ),
+            ] else ...[
+              JtrResponsive.getResponsiveSpacing(context, 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: _PaymentButton(
+                      label: 'ESPECE',
+                      backgroundColor: _cashGrey,
+                      enabled: canPay,
+                      busy: busy,
+                      onTap: () =>
+                          controller.payOrder(context: context, isCash: true),
+                    ),
+                  ),
+                  JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
+                  Expanded(
+                    child: _PaymentButton(
+                      label: 'CARTE DE CREDIT',
+                      backgroundColor: AppTheme.primary,
+                      enabled: canPay,
+                      busy: busy,
+                      onTap: () =>
+                          controller.payOrder(context: context, isCash: false),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -733,36 +804,50 @@ class _PaymentButton extends StatelessWidget {
     required this.label,
     required this.backgroundColor,
     required this.onTap,
+    this.enabled = true,
+    this.busy = false,
   });
 
   final String label;
   final Color backgroundColor;
   final VoidCallback onTap;
+  final bool enabled;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
     final radius = JtrResponsive.getResponsiveRadius(context, 14);
+    final background = enabled ? backgroundColor : backgroundColor.withValues(alpha: 0.45);
 
     return Material(
-      color: backgroundColor,
+      color: background,
       borderRadius: BorderRadius.circular(radius),
       child: InkWell(
-        onTap: onTap,
+        onTap: enabled && !busy ? onTap : null,
         borderRadius: BorderRadius.circular(radius),
         child: Container(
           height: JtrResponsive.getResponsiveHeight(context, 56),
           alignment: Alignment.center,
           padding: JtrResponsive.getResponsivePadding(context, horizontal: 8),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4,
-            ),
-          ),
+          child: busy
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                  ),
+                ),
         ),
       ),
     );

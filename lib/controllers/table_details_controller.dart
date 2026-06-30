@@ -36,6 +36,10 @@ class TableDetailsController extends GetxController {
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
   final isCatalogLoading = false.obs;
   final isAddingProduct = false.obs;
+  final paymentModesLoading = false.obs;
+  final paymentModesReady = false.obs;
+  final paymentModesError = RxnString();
+  String? lastPaymentModesLoadLog;
   final catalogError = RxnString();
   final categoryRoots = <CategoryTreeNode>[].obs;
   final categoryPath = <CategoryTreeNode>[].obs;
@@ -285,11 +289,49 @@ class TableDetailsController extends GetxController {
     if (show) {
       isBottomPanelExpanded.value = false;
       activeToolbarIcon.value = Icons.payments_outlined;
+      unawaited(_loadPaymentModes());
     } else {
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = Icons.grid_view;
     }
   }
+
+  Future<void> _loadPaymentModes({bool forceRefresh = false}) async {
+    paymentModesLoading.value = true;
+    paymentModesError.value = null;
+    try {
+      final modes = await _orderRepository.getPaymentModes(
+        forceRefresh: forceRefresh,
+      );
+      paymentModesReady.value = modes.isNotEmpty;
+      if (modes.isEmpty) {
+        paymentModesError.value = 'Aucun mode de paiement configuré.';
+      }
+    } on ApiException catch (e) {
+      paymentModesReady.value = false;
+      paymentModesError.value = e.message;
+      lastPaymentModesLoadLog = _orderRepository.lastPaymentModesLog;
+    } catch (e) {
+      paymentModesReady.value = false;
+      paymentModesError.value =
+          'Impossible de charger les modes de paiement.';
+      lastPaymentModesLoadLog =
+          '${_orderRepository.lastPaymentModesLog ?? ''}\n$e';
+    } finally {
+      paymentModesLoading.value = false;
+    }
+  }
+
+  Future<void> reloadPaymentModes() =>
+      _loadPaymentModes(forceRefresh: true);
+
+  String get payableTotalLabel => order?.total ?? '—';
+
+  bool get canPay =>
+      resolvedOrderId != null &&
+      paymentModesReady.value &&
+      !paymentModesLoading.value &&
+      !isAddingProduct.value;
 
   void showQuantityDialog({required BuildContext context}) {
     final product = selectedCatalogProduct;
@@ -493,11 +535,29 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    if (!paymentModesReady.value) {
+      await _loadPaymentModes();
+      if (!paymentModesReady.value) {
+        Get.snackbar(
+          'Paiement indisponible',
+          paymentModesError.value ??
+              'Les modes de paiement ne sont pas chargés.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+        );
+        return;
+      }
+    }
+
+    if (!context.mounted) return;
+
     final label = isCash ? 'espèces' : 'carte de crédit';
+    final amountLabel = payableTotalLabel;
     AppConfirmDialog.show(
       context: context,
       title: 'Paiement',
-      message: 'Encaisser la table $orderNumber en $label ?',
+      message:
+          'Encaisser $amountLabel pour la table $orderNumber en $label ?',
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
@@ -507,6 +567,8 @@ class TableDetailsController extends GetxController {
           );
           _syncOrderInSession(updated, orderNumber);
           showPaymentOptions.value = false;
+          isBottomPanelExpanded.value = true;
+          activeToolbarIcon.value = Icons.grid_view;
           Get.snackbar(
             'Paiement enregistré',
             'Le paiement en $label a été enregistré.',
@@ -517,7 +579,7 @@ class TableDetailsController extends GetxController {
         } on ApiException catch (e) {
           ApiDebugDialog.show(
             title: 'Erreur paiement',
-            body: '${_orderRepository.lastAddItemLog ?? ''}\n\n${e.message}',
+            body: '${_orderRepository.lastPaymentLog ?? ''}\n\n${e.message}',
           );
         } catch (_) {
           Get.snackbar(

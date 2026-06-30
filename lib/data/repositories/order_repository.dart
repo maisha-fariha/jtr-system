@@ -30,6 +30,14 @@ class OrderRepository {
   /// Last add-item debug trace.
   String? lastAddItemLog;
 
+  /// Last payment debug trace.
+  String? lastPaymentLog;
+
+  /// Last payment-modes fetch debug trace.
+  String? lastPaymentModesLog;
+
+  List<Map<String, dynamic>> _cachedPaymentModes = [];
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
   Future<SessionOrder> getOrderDetail(int orderId) async {
     final online = await _connectivity.isOnline;
@@ -678,40 +686,109 @@ class OrderRepository {
     return OrderMapper.fromOrderDetail(updated);
   }
 
+  Future<List<Map<String, dynamic>>> getPaymentModes({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _cachedPaymentModes.isNotEmpty) {
+      return _cachedPaymentModes;
+    }
+
+    if (!await _connectivity.isOnline) {
+      if (_cachedPaymentModes.isNotEmpty) return _cachedPaymentModes;
+      throw ApiException(
+        message: 'Modes de paiement indisponibles hors ligne.',
+      );
+    }
+
+    try {
+      final modes = await _remote.fetchPaymentModes();
+      final active = OrderMapper.activePaymentModes(modes);
+      final resolved = active.isEmpty ? modes : active;
+      if (resolved.isEmpty) {
+        throw ApiException(
+          message: 'Aucun mode de paiement actif configuré.',
+        );
+      }
+
+      _cachedPaymentModes = resolved;
+      lastPaymentModesLog = _remote.lastApiLog;
+      return resolved;
+    } on ApiException {
+      lastPaymentModesLog = _remote.lastApiLog;
+      rethrow;
+    }
+  }
+
   Future<SessionOrder> payOrder({
     required int orderId,
     required bool isCash,
   }) async {
+    final apiLog = StringBuffer();
+    lastPaymentLog = null;
+
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Paiement impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    final detail = await _remote.fetchOrderDetail(orderId);
-    final amount = OrderMapper.parseOrderTotalAmount(detail);
-    if (amount <= 0) {
-      throw ApiException(message: 'Montant de commande invalide.');
-    }
+    apiLog.writeln('── Paiement commande ──');
+    apiLog.writeln('order_id=$orderId isCash=$isCash');
 
-    final modes = await _remote.fetchPaymentModes();
-    final paymentModeId =
-        OrderMapper.resolvePaymentModeId(modes, isCash: isCash);
-    if (paymentModeId == null) {
-      throw ApiException(
-        message: 'Mode de paiement introuvable pour cette commande.',
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final amount = OrderMapper.formatPaymentAmount(
+        OrderMapper.parseOrderPayableAmount(detail),
       );
+      if (amount <= 0) {
+        throw ApiException(message: 'Montant à encaisser invalide.');
+      }
+
+      apiLog.writeln('amount=$amount');
+
+      final modes = await getPaymentModes();
+      final paymentModeId =
+          OrderMapper.resolvePaymentModeId(modes, isCash: isCash);
+      if (paymentModeId == null) {
+        throw ApiException(
+          message: isCash
+              ? 'Mode espèces introuvable. Vérifiez la configuration caisse.'
+              : 'Mode carte introuvable. Vérifiez la configuration caisse.',
+        );
+      }
+
+      apiLog.writeln('payment_mode_id=$paymentModeId');
+      apiLog.writeln('── POST /api/orders/$orderId/pay ──');
+      apiLog.writeln(
+        formatApiPayload({
+          'amount': amount,
+          'payment_mode_id': paymentModeId,
+        }),
+      );
+
+      _remote.lastApiLog = null;
+      await _remote.payOrder(
+        orderId: orderId,
+        amount: amount,
+        paymentModeId: paymentModeId,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      final updated = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, updated);
+      lastPaymentLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastPaymentLog = apiLog.toString();
+      rethrow;
     }
-
-    await _remote.payOrder(
-      orderId: orderId,
-      amount: amount,
-      paymentModeId: paymentModeId,
-    );
-
-    final updated = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, updated);
-    return OrderMapper.fromOrderDetail(updated);
   }
 
   Future<SessionOrder> _mutateOrderLine({

@@ -22,6 +22,8 @@ class ApiEndpoints {
   static String payOrder(int id) => '/api/orders/$id/pay';
   static const paymentModesForCheckout = '/api/payments/modes';
   static const activePaymentModes = '/api/payment-modes/active';
+  static const paymentModesList = '/api/payment-modes';
+  static const paymentSettings = '/api/payments/settings';
   static String dayStatistics(int dayId) => '/api/days/$dayId/statistics';
 
   static const categoriesLeafOnly = '/api/categories/leaf-only';

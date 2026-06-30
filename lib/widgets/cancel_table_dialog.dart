@@ -20,14 +20,22 @@ class CancelTableDialog extends StatefulWidget {
   static Future<void> show({
     required String title,
     required VoidCallback onConfirm,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      CancelTableDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (_) => CancelTableDialog(
         title: title,
         onConfirm: onConfirm,
       ),
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
     );
   }
 
@@ -118,7 +126,8 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                             ),
                           ),
                           child: IconButton(
-                            onPressed: () => Get.back(),
+                            onPressed: () =>
+                                Navigator.of(context, rootNavigator: true).pop(),
                             icon: Icon(
                               Icons.arrow_back_ios_new,
                               color: AppTheme.darkText,
@@ -191,7 +200,7 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                         ),
                         child: ElevatedButton(
                           onPressed: () {
-                            Get.back();
+                            Navigator.of(context, rootNavigator: true).pop();
                             widget.onConfirm();
                           },
                           style: ElevatedButton.styleFrom(

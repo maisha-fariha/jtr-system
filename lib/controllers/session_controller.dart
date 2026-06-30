@@ -338,9 +338,12 @@ class SessionController extends GetxController {
     return selected != null && selected.productIndex == null;
   }
 
-  void showTableNumberDialog() {
+  void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
-    TableNumberDialog.show(onConfirm: _onTableNumberConfirmed);
+    TableNumberDialog.show(
+      context: context,
+      onConfirm: (tableNumber) => _onTableNumberConfirmed(context, tableNumber),
+    );
   }
 
   void openTableDetails(String orderNumber, {int? orderId}) {
@@ -353,11 +356,13 @@ class SessionController extends GetxController {
     );
   }
 
-  void _onTableNumberConfirmed(String tableNumber) {
+  void _onTableNumberConfirmed(BuildContext context, String tableNumber) {
     TableNumberDialog.show(
+      context: context,
       title: 'NOMBRE DE COUVERTS',
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
+          context: context,
           tableNumber: tableNumber,
           couverts: couverts,
         ));
@@ -366,6 +371,7 @@ class SessionController extends GetxController {
   }
 
   Future<void> _createTableAndOpenDetails({
+    required BuildContext context,
     required String tableNumber,
     required String couverts,
   }) async {
@@ -386,10 +392,13 @@ class SessionController extends GetxController {
         return;
       }
       if (OrderMapper.isTableInUse(tables, tableNumber)) {
-        TableOccupiedDialog.show(
-          userName: _currentUserDisplayName,
-          tableNumber: tableNumber,
-        );
+        if (context.mounted) {
+          TableOccupiedDialog.show(
+            context: context,
+            userName: _currentUserDisplayName,
+            tableNumber: tableNumber,
+          );
+        }
         return;
       }
 
@@ -503,40 +512,55 @@ class SessionController extends GetxController {
     return null;
   }
 
-  Future<void> requestNextCourse() async {
+  Future<void> requestNextCourse({required BuildContext context}) async {
     selectAction(SessionAction.demanderSuite);
     final selected = tableUiState.value.selectedRow;
     if (selected == null || selected.productIndex != null) {
-      Get.snackbar(
+      _showSnack(
         'Sélection requise',
         'Veuillez sélectionner une table avant de demander la suite.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
+        context: context,
       );
       return;
     }
     final order = _orderByNumber(selected.orderNumber);
     if (order == null || order.isLocalOnly) {
-      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      _showSnack(
+        'Erreur',
+        'Commande introuvable pour cette table.',
+        context: context,
+      );
       return;
     }
 
     AppConfirmDialog.show(
+      context: context,
       title: 'Demander la suite',
       message:
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          await _orderRepository.requestNextCourses(order.id);
-          _showSnack(
-            'Suite demandée',
-            'La suite a été envoyée pour la table ${selected.orderNumber}.',
-          );
+          final updated = await _orderRepository.requestNextCourses(order.id);
+          _upsertOrderInList(updated.copyWith(number: order.number));
+          if (context.mounted) {
+            _showSnack(
+              'Suite demandée',
+              'La suite a été envoyée pour la table ${selected.orderNumber}.',
+              context: context,
+            );
+          }
         } on ApiException catch (e) {
-          _showSnack('Erreur', e.message);
+          if (context.mounted) {
+            _showSnack('Erreur', e.message, context: context);
+          }
         } catch (_) {
-          _showSnack('Erreur', 'Impossible d\'envoyer la demande de suite.');
+          if (context.mounted) {
+            _showSnack(
+              'Erreur',
+              'Impossible d\'envoyer la demande de suite.',
+              context: context,
+            );
+          }
         }
       },
     );
@@ -762,10 +786,12 @@ class SessionController extends GetxController {
     _replaceOrderProducts(orders[idx], products, idx);
   }
 
-  void requestDeleteOrder(String orderNumber) {
+  void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
     CancelTableDialog.show(
+      context: context,
       title: 'Annulation Table',
       onConfirm: () => CancelTableDialog.show(
+        context: context,
         title: 'Annulation après édition\nnote',
         onConfirm: () => deleteOrder(orderNumber),
       ),
@@ -808,8 +834,9 @@ class SessionController extends GetxController {
     tableUiState.value = nextState;
   }
 
-  void requestApplyOffer(String orderNumber) {
+  void requestApplyOffer(String orderNumber, {required BuildContext context}) {
     CancelTableDialog.show(
+      context: context,
       title: 'Table Offerte',
       onConfirm: () => applyOffer(orderNumber),
     );
@@ -831,8 +858,8 @@ class SessionController extends GetxController {
           products: offeredProducts,
         );
       } else {
-        await _orderRepository.applyTableOffer(order.id);
-        await loadSessionOrders(forceRefresh: true);
+        final updated = await _orderRepository.applyTableOffer(order.id);
+        _upsertOrderInList(updated.copyWith(number: order.number));
       }
 
       _showSnack(
@@ -846,14 +873,12 @@ class SessionController extends GetxController {
     }
   }
 
-  Future<void> printTicket() async {
+  Future<void> printTicket({required BuildContext context}) async {
     if (!hasTableSelected) {
-      Get.snackbar(
+      _showSnack(
         'Sélection requise',
         'Veuillez sélectionner une table avant d\'imprimer le ticket.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
+        context: context,
       );
       return;
     }
@@ -861,51 +886,76 @@ class SessionController extends GetxController {
     final selected = tableUiState.value.selectedRow!;
     final order = _orderByNumber(selected.orderNumber);
     if (order == null || order.isLocalOnly) {
-      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      _showSnack(
+        'Erreur',
+        'Commande introuvable pour cette table.',
+        context: context,
+      );
       return;
     }
 
     selectAction(SessionAction.ticket);
     isPrintingTicket.value = true;
 
-    Get.dialog(
-      const TicketLoadingDialog(),
+    if (!context.mounted) return;
+    showDialog<void>(
+      context: context,
+      useRootNavigator: true,
       barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (_) => const TicketLoadingDialog(),
     );
 
     try {
       final updated = await _orderRepository.markOrderPrinted(order.id);
-      final idx = orders.indexWhere((item) => item.id == order.id);
-      if (idx >= 0) {
-        orders[idx] = updated.copyWith(number: order.number);
-      }
+      _upsertOrderInList(updated.copyWith(number: order.number));
 
-      if (Get.isDialogOpen ?? false) {
-        Get.back();
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        await showDialog<void>(
+          context: context,
+          useRootNavigator: true,
+          barrierDismissible: false,
+          barrierColor: Colors.black.withValues(alpha: 0.45),
+          builder: (_) => const TicketSuccessDialog(),
+        );
       }
-
-      await Get.dialog(
-        const TicketSuccessDialog(),
-        barrierDismissible: false,
-        barrierColor: Colors.black.withValues(alpha: 0.45),
-      );
     } on ApiException catch (e) {
-      if (Get.isDialogOpen ?? false) {
-        Get.back();
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        _showSnack('Erreur', e.message, context: context);
       }
-      _showSnack('Erreur', e.message);
     } catch (_) {
-      if (Get.isDialogOpen ?? false) {
-        Get.back();
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        _showSnack(
+          'Erreur',
+          'Impossible d\'imprimer le ticket.',
+          context: context,
+        );
       }
-      _showSnack('Erreur', 'Impossible d\'imprimer le ticket.');
     } finally {
       isPrintingTicket.value = false;
     }
   }
 
-  void _showSnack(String title, String message) {
+  void _showSnack(
+    String title,
+    String message, {
+    BuildContext? context,
+  }) {
+    if (context != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$title — $message'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
     Get.snackbar(
       title,
       message,

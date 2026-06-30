@@ -17,14 +17,22 @@ class TableOccupiedDialog extends StatelessWidget {
   static Future<void> show({
     required String userName,
     required String tableNumber,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      TableOccupiedDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (_) => TableOccupiedDialog(
         userName: userName,
         tableNumber: tableNumber,
       ),
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
     );
   }
 
@@ -119,7 +127,8 @@ class TableOccupiedDialog extends StatelessWidget {
                   width: double.infinity,
                   height: JtrResponsive.getResponsiveHeight(context, 50),
                   child: ElevatedButton(
-                    onPressed: Get.back,
+                    onPressed: () =>
+                        Navigator.of(context, rootNavigator: true).pop(),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.primary,
                       foregroundColor: Colors.white,

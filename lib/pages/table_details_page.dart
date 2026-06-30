@@ -313,7 +313,7 @@ class _ProductLine extends GetView<TableDetailsController> {
         ),
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
-          extentRatio: 0.52,
+          extentRatio: 0.39,
           children: [
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
@@ -328,10 +328,6 @@ class _ProductLine extends GetView<TableDetailsController> {
             _ProductSlidableAction(
               icon: Icons.add,
               onPressed: () => controller.incrementProduct(productIndex),
-            ),
-            _ProductSlidableAction(
-              icon: Icons.edit_outlined,
-              onPressed: () => _showMessageDialog(context),
             ),
           ],
         ),
@@ -434,68 +430,6 @@ class _ProductLine extends GetView<TableDetailsController> {
       );
     });
   }
-
-  void _showMessageDialog(BuildContext context) {
-    final messageController = TextEditingController(text: product.message ?? '');
-
-    Get.dialog(
-      AlertDialog(
-        title: Text(
-          'Message',
-          style: TextStyle(
-            fontWeight: FontWeight.w700,
-            color: AppTheme.darkText,
-          ),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              product.name,
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                color: AppTheme.textSecondary,
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 16),
-            TextField(
-              controller: messageController,
-              maxLines: 3,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                hintText: 'Ex: À SUIVRE',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: Get.back,
-            child: Text('ANNULER', style: TextStyle(color: AppTheme.textSecondary)),
-          ),
-          TextButton(
-            onPressed: () {
-              controller.setProductMessage(
-                productIndex: productIndex,
-                message: messageController.text,
-              );
-              Get.back();
-            },
-            child: const Text(
-              'ENREGISTRER',
-              style: TextStyle(
-                color: AppTheme.primary,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-      barrierDismissible: false,
-    );
-  }
 }
 
 class _ProductSlidableAction extends StatelessWidget {
@@ -574,7 +508,6 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.grid_view,
     Icons.arrow_back,
     Icons.restaurant_menu,
-    Icons.message_outlined,
     Icons.receipt_long_outlined,
     Icons.payments_outlined,
     Icons.send_outlined,

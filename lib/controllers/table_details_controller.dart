@@ -522,18 +522,6 @@ class TableDetailsController extends GetxController {
         .applyOfferToOrderProduct(orderNumber, productIndex);
   }
 
-  void setProductMessage({
-    required int productIndex,
-    required String message,
-  }) {
-    if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>().setOrderProductMessage(
-      orderNumber,
-      productIndex,
-      message,
-    );
-  }
-
   Future<void> cancelOrderLine(int productIndex) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {

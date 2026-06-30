@@ -21,28 +21,75 @@ class SessionPage extends GetView<SessionController> {
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
-        child: Column(
+        child: Stack(
+          children: [
+            Column(
           children: [
             _SessionHeader(),
             Divider(height: 1, color: AppTheme.cardBorder),
             const _TableHeader(),
             Expanded(
               child: SlidableAutoCloseBehavior(
-                child: Obx(
-                  () => ListView.separated(
-                    padding: JtrResponsive.getResponsivePadding(
-                      context,
-                      top: 8,
-                      bottom: 8,
+                child: Obx(() {
+                  if (controller.isLoadingOrders.value &&
+                      controller.orders.isEmpty) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: AppTheme.primary),
+                    );
+                  }
+
+                  if (controller.orders.isEmpty) {
+                    return RefreshIndicator(
+                      color: AppTheme.primary,
+                      onRefresh: () => controller.loadSessionOrders(
+                        forceRefresh: true,
+                      ),
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          SizedBox(
+                            height: MediaQuery.of(context).size.height * 0.35,
+                            child: Center(
+                              child: Text(
+                                controller.ordersError.value ??
+                                    'Aucune commande ouverte',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    13,
+                                  ),
+                                  color: AppTheme.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  return RefreshIndicator(
+                    color: AppTheme.primary,
+                    onRefresh: () => controller.loadSessionOrders(
+                      forceRefresh: true,
                     ),
-                    itemCount: controller.orders.length,
-                    separatorBuilder: (context, index) =>
-                        JtrResponsive.getResponsiveSpacing(context, 8),
-                    itemBuilder: (context, index) {
-                      return _OrderRow(order: controller.orders[index]);
-                    },
-                  ),
-                ),
+                    child: ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        top: 8,
+                        bottom: 8,
+                      ),
+                      itemCount: controller.orders.length,
+                      separatorBuilder: (context, index) =>
+                          JtrResponsive.getResponsiveSpacing(context, 8),
+                      itemBuilder: (context, index) {
+                        return _OrderRow(order: controller.orders[index]);
+                      },
+                    ),
+                  );
+                }),
               ),
             ),
             const _ActionButtons(),
@@ -50,92 +97,109 @@ class SessionPage extends GetView<SessionController> {
             _BottomNavBar(),
           ],
         ),
+            Obx(() {
+              if (!controller.isCreatingOrder.value) {
+                return const SizedBox.shrink();
+              }
+              return const ColoredBox(
+                color: Color(0x33000000),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppTheme.primary),
+                ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _SessionHeader extends StatelessWidget {
+class _SessionHeader extends GetView<SessionController> {
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: JtrResponsive.getResponsivePadding(
-        context,
-        left: 16,
-        right: 16,
-        top: 12,
-        bottom: 12,
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: JtrResponsive.getResponsiveSize(context, 44),
-            height: JtrResponsive.getResponsiveSize(context, 44),
-            decoration: const BoxDecoration(
-              color: AppTheme.primary,
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              '1',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'MANAGER',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.8,
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-                JtrResponsive.getResponsiveSpacing(context, 2),
-                Text(
-                  'Vendredi 12 Juin 2026',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.darkText,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Container(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              horizontal: 14,
-              vertical: 8,
-            ),
-            decoration: BoxDecoration(
-              color: AppTheme.lightButton,
-              borderRadius: BorderRadius.circular(
-                JtrResponsive.getResponsiveRadius(context, 20),
-              ),
-            ),
-            child: Text(
-              'SUR PLACE',
-              style: TextStyle(
+    return Obx(() {
+      final day = controller.activeDay.value;
+
+      return Padding(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 16,
+          right: 16,
+          top: 12,
+          bottom: 12,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: JtrResponsive.getResponsiveSize(context, 44),
+              height: JtrResponsive.getResponsiveSize(context, 44),
+              decoration: const BoxDecoration(
                 color: AppTheme.primary,
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                day.sessionNumber ?? '${day.id}',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ),
-        ],
-      ),
-    );
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'SESSION ACTIVE',
+                    style: TextStyle(
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.8,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  JtrResponsive.getResponsiveSpacing(context, 2),
+                  Text(
+                    day.displayDate,
+                    style: TextStyle(
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.darkText,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 14,
+                vertical: 8,
+              ),
+              decoration: BoxDecoration(
+                color: AppTheme.lightButton,
+                borderRadius: BorderRadius.circular(
+                  JtrResponsive.getResponsiveRadius(context, 20),
+                ),
+              ),
+              child: Text(
+                day.salesZoneLabel,
+                style: TextStyle(
+                  color: AppTheme.primary,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -269,7 +333,10 @@ class _OrderRow extends GetView<SessionController> {
             ],
           ),
           child: GestureDetector(
-            onDoubleTap: () => controller.openTableDetails(order.number),
+            onDoubleTap: () => controller.openTableDetails(
+              order.number,
+              orderId: order.id > 0 ? order.id : null,
+            ),
             child: Container(
             decoration: BoxDecoration(
               color: AppTheme.background,
@@ -386,15 +453,48 @@ class _OrderRow extends GetView<SessionController> {
               ),
               if (isExpanded) ...[
                 Divider(height: 1, color: AppTheme.cardBorder),
-                for (var i = 0; i < order.products.length; i++) ...[
-                  _ProductRow(
-                    orderNumber: order.number,
-                    productIndex: i,
-                    product: order.products[i],
-                  ),
-                  if (i < order.products.length - 1)
-                    Divider(height: 1, color: AppTheme.subtleDivider),
-                ],
+                if (controller.isLoadingOrderDetail(order.number))
+                  Padding(
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 16,
+                    ),
+                    child: Center(
+                      child: SizedBox(
+                        width: JtrResponsive.getResponsiveSize(context, 20),
+                        height: JtrResponsive.getResponsiveSize(context, 20),
+                        child: const CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.primary,
+                        ),
+                      ),
+                    ),
+                  )
+                else if (order.products.isEmpty)
+                  Padding(
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 12,
+                    ),
+                    child: Text(
+                      'Aucun produit',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  )
+                else
+                  for (var i = 0; i < order.products.length; i++) ...[
+                    _ProductRow(
+                      orderNumber: order.number,
+                      productIndex: i,
+                      product: order.products[i],
+                    ),
+                    if (i < order.products.length - 1)
+                      Divider(height: 1, color: AppTheme.subtleDivider),
+                  ],
                 JtrResponsive.getResponsiveSpacing(context, 4),
               ],
             ],
@@ -606,8 +706,7 @@ class _ActionButtons extends GetView<SessionController> {
                     } else if (action == SessionAction.demanderSuite) {
                       controller.requestNextCourse();
                     } else if (action == SessionAction.statistics) {
-                      controller.selectAction(action);
-                      Get.toNamed(AppRoutes.statistics);
+                      controller.openStatistics();
                     } else {
                       controller.selectAction(action);
                     }

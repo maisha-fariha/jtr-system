@@ -1,26 +1,43 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../data/demo_preset_menus.dart';
+import '../core/network/api_exception.dart';
+import '../data/mappers/menu_mapper.dart';
+import '../data/repositories/catalog_repository.dart';
+import '../data/repositories/order_repository.dart';
 import '../models/menu_active_selection.dart';
 import '../models/menu_item.dart';
-import '../models/preset_menu.dart';
 import '../models/menu_message_target.dart';
+import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
+import '../widgets/api_debug_dialog.dart';
 import '../widgets/menu_choice_number_dialog.dart';
 import '../widgets/menu_message_picker_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
 import 'session_controller.dart';
 
 class MenuSelectionController extends GetxController {
+  MenuSelectionController({
+    required CatalogRepository catalogRepository,
+    required OrderRepository orderRepository,
+  })  : _catalogRepository = catalogRepository,
+        _orderRepository = orderRepository;
+
+  final CatalogRepository _catalogRepository;
+  final OrderRepository _orderRepository;
+
   final selectedMenuIndex = RxnInt();
   final activeSelection = Rxn<MenuActiveSelection>();
+  final menus = <PresetMenu>[].obs;
+  final isLoadingMenus = false.obs;
+  final isLoadingMenuDetail = false.obs;
+  final isSaving = false.obs;
+  final menusError = RxnString();
 
   late final String orderNumber;
+  int? orderId;
 
   static const successGreen = Color(0xFF27AE60);
-
-  List<PresetMenu> get menus => demoPresetMenus;
 
   bool get hasActiveSelection => activeSelection.value != null;
 
@@ -35,14 +52,82 @@ class MenuSelectionController extends GetxController {
     super.onInit();
     final args = Get.arguments;
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
+    final rawId = args is Map ? args['orderId'] : null;
+    orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    _resolveOrderIdFromSession();
+    _loadMenus();
   }
 
-  void selectMenu(int index) {
+  void _resolveOrderIdFromSession() {
+    if (orderId != null && orderId! > 0) return;
+    if (!Get.isRegistered<SessionController>()) return;
+
+    final sessionOrder = Get.find<SessionController>().findOrder(
+      orderNumber: orderNumber,
+      orderId: orderId,
+    );
+    if (sessionOrder != null && sessionOrder.id > 0) {
+      orderId = sessionOrder.id;
+    }
+  }
+
+  Future<void> _loadMenus() async {
+    isLoadingMenus.value = true;
+    menusError.value = null;
+
+    try {
+      final products = await _catalogRepository.getProducts();
+      final composed = products.where((product) => product.isComposed).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+
+      menus.assignAll([
+        for (var i = 0; i < composed.length; i++)
+          MenuMapper.thinPresetFromProduct(
+            composed[i],
+            badgeNumber: i + 1,
+          ),
+      ]);
+    } on ApiException catch (error) {
+      menusError.value = error.message;
+    } catch (_) {
+      menusError.value = 'Impossible de charger les menus.';
+    } finally {
+      isLoadingMenus.value = false;
+    }
+  }
+
+  Future<void> selectMenu(int index) async {
+    if (isLoadingMenuDetail.value || index < 0 || index >= menus.length) {
+      return;
+    }
+
     selectedMenuIndex.value = index;
-    final menu = menus[index];
+    var menu = menus[index];
+
     if (hasActiveSelection && activeSelection.value?.menu.number != menu.number) {
       activeSelection.value = null;
     }
+
+    if (menu.categories.isEmpty) {
+      try {
+        isLoadingMenuDetail.value = true;
+        final product = await _catalogRepository.getProductDetail(menu.number);
+        menu = MenuMapper.presetFromProduct(
+          product,
+          badgeNumber: menu.badgeNumber,
+        );
+        menus[index] = menu;
+      } on ApiException catch (error) {
+        Get.snackbar('Erreur', error.message);
+        return;
+      } catch (_) {
+        Get.snackbar('Erreur', 'Impossible de charger le menu.');
+        return;
+      } finally {
+        isLoadingMenuDetail.value = false;
+      }
+    }
+
     _showChoiceNumberDialog(menu);
   }
 
@@ -64,7 +149,7 @@ class MenuSelectionController extends GetxController {
       return;
     }
 
-    _showChoiceNumberDialog(menu);
+    selectMenu(selectedMenuIndex.value!);
   }
 
   void openCourseChoice(int courseNumber) {
@@ -152,7 +237,7 @@ class MenuSelectionController extends GetxController {
       AppRoutes.menu,
       arguments: {
         'table': orderNumber,
-        'presetMenu': menu.number,
+        'presetMenu': menu,
         'choiceNumber': choiceNumber,
         'returnToSelection': true,
         if (initialSelections != null)
@@ -174,22 +259,93 @@ class MenuSelectionController extends GetxController {
         menus.indexWhere((menu) => menu.number == result.menu.number);
   }
 
-  /// Returns to the preset-menu list without leaving this screen.
   void dismissActiveSelection() {
     activeSelection.value = null;
   }
 
-  void finalizeActiveSelection() {
+  Future<void> finalizeActiveSelection() async {
+    if (isSaving.value) return;
+
     final selection = activeSelection.value;
     if (selection == null) return;
 
-    if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>().addProductsToOrder(
-      orderNumber,
-      selection.allSelectedItems,
-      messagesByCourse: selection.messagesByCourse,
-    );
+    _resolveOrderIdFromSession();
 
-    Get.back();
+    if (orderId == null || orderId! <= 0) {
+      final diagnostic = StringBuffer()
+        ..writeln('orderNumber=$orderNumber')
+        ..writeln('orderId=$orderId')
+        ..writeln()
+        ..writeln('Aucune commande active trouvée pour cette table.');
+      debugPrint(diagnostic.toString());
+      ApiDebugDialog.show(
+        title: 'Commande introuvable',
+        body: diagnostic.toString(),
+      );
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final requiredCategories = selection.menu.categories
+        .where((category) => category.items.isNotEmpty)
+        .length;
+    if (selection.selectedItemsByCourse.length < requiredCategories) {
+      Get.snackbar(
+        'Sélection incomplète',
+        'Choisissez un article pour chaque choix du menu.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final menuSelections =
+        MenuMapper.menuSelectionsFromItems(selection.allSelectedItems);
+    if (menuSelections.isEmpty) {
+      Get.snackbar('Erreur', 'Aucune sélection menu valide.');
+      return;
+    }
+
+    final comment = selection.messagesByCourse.values
+        .where((message) => message.trim().isNotEmpty)
+        .join(' | ');
+
+    isSaving.value = true;
+    try {
+      final updated = await _orderRepository.addComposedProductToOrder(
+        orderId: orderId!,
+        productId: selection.menu.productId,
+        basePrice: selection.menu.priceValue,
+        menuSelections: menuSelections,
+        comment: comment,
+      );
+
+      if (Get.isRegistered<SessionController>()) {
+        Get.find<SessionController>().updateOrderRow(
+          updated.copyWith(number: orderNumber),
+        );
+      }
+
+      Get.back();
+    } on ApiException catch (error) {
+      final logBody =
+          '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}';
+      debugPrint(logBody);
+      ApiDebugDialog.show(
+        title: 'Erreur ajout menu',
+        body: logBody,
+      );
+    } catch (error) {
+      final logBody = _orderRepository.lastAddItemLog ??
+          'Erreur inconnue: $error';
+      debugPrint(logBody);
+      ApiDebugDialog.show(
+        title: 'Erreur ajout menu',
+        body: logBody,
+      );
+      Get.snackbar('Erreur', 'Impossible d\'ajouter le menu à la commande.');
+    } finally {
+      isSaving.value = false;
+    }
   }
 }

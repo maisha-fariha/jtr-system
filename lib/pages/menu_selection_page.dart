@@ -28,7 +28,10 @@ class MenuSelectionPage extends GetView<MenuSelectionController> {
             controller.dismissActiveSelection();
             return;
           }
-          AppNavigation.backToTableDetails(orderNumber: controller.orderNumber);
+          AppNavigation.backToTableDetails(
+            orderNumber: controller.orderNumber,
+            orderId: controller.orderId,
+          );
         },
         child: Scaffold(
           backgroundColor: AppTheme.background,
@@ -225,29 +228,44 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                             ),
                           ],
                         ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),
                 ),
               ),
               JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-              Material(
-                color: MenuSelectionController.successGreen,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  onTap: controller.finalizeActiveSelection,
-                  customBorder: const CircleBorder(),
-                  child: SizedBox(
-                    width: confirmSize,
-                    height: confirmSize,
-                    child: Icon(
-                      Icons.check,
-                      color: Colors.white,
-                      size: JtrResponsive.getResponsiveSize(context, 24),
+              Obx(() {
+                final saving = controller.isSaving.value;
+                return Material(
+                  color: MenuSelectionController.successGreen,
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    onTap: saving ? null : controller.finalizeActiveSelection,
+                    customBorder: const CircleBorder(),
+                    child: SizedBox(
+                      width: confirmSize,
+                      height: confirmSize,
+                      child: saving
+                          ? Padding(
+                              padding: EdgeInsets.all(
+                                JtrResponsive.getResponsiveSize(context, 10),
+                              ),
+                              child: const CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              Icons.check,
+                              color: Colors.white,
+                              size: JtrResponsive.getResponsiveSize(context, 24),
+                            ),
                     ),
                   ),
-                ),
-              ),
+                );
+              }),
             ],
           ),
         ),
@@ -345,9 +363,11 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                     children: [
                       Row(
                         children: [
-                          Flexible(
+                          Expanded(
                             child: Text(
                               selection.menu.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: JtrResponsive.getResponsiveFontSize(
                                   context,
@@ -356,8 +376,6 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                                 fontWeight: FontWeight.w700,
                                 color: AppTheme.darkText,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           Icon(
@@ -426,6 +444,8 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                         children: [
                           Text(
                             '1x ${item.name}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: JtrResponsive.getResponsiveFontSize(
                                 context,
@@ -435,17 +455,19 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                               color: AppTheme.darkText,
                               height: 1.25,
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
                           ),
                           if (selection.messageForCourse(item.courseNumber) !=
                               null) ...[
                             JtrResponsive.getResponsiveSpacing(context, 2),
                             Row(
                               children: [
-                                Flexible(
+                                Expanded(
                                   child: Text(
-                                    selection.messageForCourse(item.courseNumber)!,
+                                    selection.messageForCourse(
+                                      item.courseNumber,
+                                    )!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontSize:
                                           JtrResponsive.getResponsiveFontSize(
@@ -456,8 +478,6 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                                       color: AppTheme.primary,
                                       letterSpacing: 0.3,
                                     ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                                 Icon(
@@ -636,6 +656,7 @@ class _SelectionHeader extends GetView<MenuSelectionController> {
             IconButton(
               onPressed: () => AppNavigation.backToTableDetails(
                 orderNumber: controller.orderNumber,
+                orderId: controller.orderId,
               ),
               padding: EdgeInsets.zero,
               constraints: BoxConstraints(
@@ -789,6 +810,41 @@ class _MenuList extends GetView<MenuSelectionController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      if (controller.isLoadingMenus.value) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final error = controller.menusError.value;
+      if (error != null) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              error,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+        );
+      }
+
+      if (controller.menus.isEmpty) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Aucun menu composé disponible.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+        );
+      }
+
+      if (controller.isLoadingMenuDetail.value) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
       final selectedIndex = controller.selectedMenuIndex.value;
 
       return ListView.separated(
@@ -912,6 +968,8 @@ class _MenuCard extends StatelessWidget {
                   children: [
                     Text(
                       menu.label,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: JtrResponsive.getResponsiveFontSize(
                           context,
@@ -1024,6 +1082,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
           IconButton(
             onPressed: () => AppNavigation.backToTableDetails(
               orderNumber: controller.orderNumber,
+              orderId: controller.orderId,
             ),
             icon: Icon(
               Icons.arrow_back,

@@ -1,11 +1,17 @@
 import 'package:get/get.dart';
 
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 
 class AppNavigation {
   AppNavigation._();
 
-  static void logout() => Get.offAllNamed(AppRoutes.home);
+  static Future<void> logout() async {
+    if (Get.isRegistered<AuthRepository>()) {
+      await Get.find<AuthRepository>().logout();
+    }
+    Get.offAllNamed(AppRoutes.home);
+  }
 
   static void _closeOverlays() {
     while (Get.isDialogOpen == true || Get.isBottomSheetOpen == true) {
@@ -24,7 +30,10 @@ class AppNavigation {
   static void backToMenuSelection() => popUntilRoute(AppRoutes.menuSelection);
 
   /// From menu selection back to the table details screen.
-  static void backToTableDetails({String? orderNumber}) {
+  static void backToTableDetails({
+    String? orderNumber,
+    int? orderId,
+  }) {
     _closeOverlays();
 
     if (Get.currentRoute == AppRoutes.tableDetails) return;
@@ -41,7 +50,10 @@ class AppNavigation {
         orderNumber.isNotEmpty) {
       Get.offNamed(
         AppRoutes.tableDetails,
-        arguments: {'orderNumber': orderNumber},
+        arguments: {
+          'orderNumber': orderNumber,
+          if (orderId != null) 'orderId': orderId,
+        },
       );
     }
   }

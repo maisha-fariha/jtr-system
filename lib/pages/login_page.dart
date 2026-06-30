@@ -3,7 +3,6 @@ import 'package:get/get.dart';
 
 import '../controllers/login_controller.dart';
 import '../controllers/theme_controller.dart';
-import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_footer.dart';
@@ -65,9 +64,33 @@ class LoginPage extends GetView<LoginController> {
                     JtrResponsive.getResponsiveSpacing(context, 40),
                     const ThemedAssetImage.logo(),
                     JtrResponsive.getResponsiveSpacing(context, 48),
-                    UserIdentifiantField(
-                      controller: controller.identifiantFieldController,
-                      showFieldIcons: true,
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        UserIdentifiantField(
+                          controller: controller.identifiantFieldController,
+                          showFieldIcons: true,
+                        ),
+                        Obx(
+                          () => controller.isLoadingUsers.value
+                              ? ColoredBox(
+                                  color:
+                                      AppTheme.background.withValues(alpha: 0.7),
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    height: UserIdentifiantSuggestionsOverlay
+                                        .fieldHeight(context),
+                                    child: const Center(
+                                      child: CircularProgressIndicator(
+                                        color: AppTheme.primary,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                      ],
                     ),
                     JtrResponsive.getResponsiveSpacing(context, 16),
                     _buildPasswordField(context),
@@ -127,30 +150,46 @@ class LoginPage extends GetView<LoginController> {
   }
 
   Widget _buildLoginButton(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      height: JtrResponsive.getResponsiveHeight(context, 56),
-      child: ElevatedButton(
-        onPressed: () => Get.offNamed(AppRoutes.session),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.primary,
-          foregroundColor: Colors.white,
-          elevation: 4,
-          shadowColor: AppTheme.primary.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(
-              JtrResponsive.getResponsiveRadius(context, 16),
+    return Obx(
+      () {
+        final loading = controller.isLoading.value;
+        return SizedBox(
+          width: double.infinity,
+          height: JtrResponsive.getResponsiveHeight(context, 56),
+          child: ElevatedButton(
+            onPressed: loading ? null : controller.login,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primary,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor:
+                  AppTheme.primary.withValues(alpha: 0.45),
+              elevation: 4,
+              shadowColor: AppTheme.primary.withValues(alpha: 0.4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(
+                  JtrResponsive.getResponsiveRadius(context, 16),
+                ),
+              ),
             ),
+            child: loading
+                ? SizedBox(
+                    width: JtrResponsive.getResponsiveSize(context, 24),
+                    height: JtrResponsive.getResponsiveSize(context, 24),
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: Colors.white,
+                    ),
+                  )
+                : Text(
+                    'Se connecter',
+                    style: TextStyle(
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
           ),
-        ),
-        child: Text(
-          'Se connecter',
-          style: TextStyle(
-            fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 }

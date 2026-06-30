@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -6,7 +8,15 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
+import '../data/repositories/auth_repository.dart';
+import '../data/repositories/order_repository.dart';
+import '../data/repositories/session_repository.dart';
+import '../data/mappers/order_mapper.dart';
+import '../data/models/active_day_info.dart';
+import '../data/models/day_statistics_info.dart';
+import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
+import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -55,52 +65,183 @@ class SessionTableUiState {
 }
 
 class SessionController extends GetxController {
+  SessionController({
+    required OrderRepository orderRepository,
+    required SessionRepository sessionRepository,
+    required AuthRepository authRepository,
+  })  : _orderRepository = orderRepository,
+        _sessionRepository = sessionRepository,
+        _authRepository = authRepository;
+
+  final OrderRepository _orderRepository;
+  final SessionRepository _sessionRepository;
+  final AuthRepository _authRepository;
+
   final selectedAction = SessionAction.nouvelleCommande.obs;
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
-
-  static const _initialOrders = [
-    SessionOrder(
-      number: 'T5',
-      numberColor: AppTheme.primary,
-      group: '1',
-      poste: 'POC1',
-      profitCenter: 'SUR PLACE',
-      couverts: '0',
-      impressionCount: 0,
-      impressionColor: Color(0xFFE74C3C),
-      total: '630,00 €',
-      products: [
-        OrderProduct(quantity: '1', name: 'SALADE CAESAR', price: '110,00 €'),
-        OrderProduct(quantity: '1', name: 'BURGER CLASSIC', price: '150,00 €'),
-        OrderProduct(quantity: '2', name: 'FRITES MAISON', price: '80,00 €'),
-        OrderProduct(quantity: '2', name: 'COCA COLA', price: '40,00 €'),
-        OrderProduct(quantity: '1', name: 'DESSERT DU JOUR', price: '250,00 €'),
-      ],
-    ),
-    SessionOrder(
-      number: 'T6',
-      numberColor: Color(0xFF7EB8DA),
-      group: '1',
-      poste: 'POC1',
-      profitCenter: 'SUR PLACE',
-      couverts: '0',
-      impressionCount: 1,
-      impressionColor: Color(0xFFF1C40F),
-      total: '950,00 €',
-      products: [
-        OrderProduct(quantity: '1', name: 'SALADE DI MARE', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA VEGETARIEN', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA REGINA', price: '150,00 €'),
-        OrderProduct(quantity: '1', name: 'PIZZA PARMA', price: '150,00 €'),
-      ],
-    ),
-  ];
+  final isLoadingOrders = false.obs;
+  final loadingDetailOrderNumbers = <String>{}.obs;
+  final ordersError = RxnString();
+  final activeDay = ActiveDayInfo.fallback().obs;
+  final dayStatistics = Rxn<DayStatisticsInfo>();
+  final isLoadingStatistics = false.obs;
+  final isCreatingOrder = false.obs;
+  final isPrintingTicket = false.obs;
 
   @override
   void onInit() {
     super.onInit();
-    orders.assignAll(_initialOrders);
+    loadActiveDay();
+    loadSessionOrders();
+    _prefetchTables();
+  }
+
+  Future<void> loadActiveDay({bool forceRefresh = false}) async {
+    try {
+      activeDay.value =
+          await _sessionRepository.getActiveDay(forceRefresh: forceRefresh);
+    } catch (_) {
+      activeDay.value =
+          _sessionRepository.cachedActiveDay ?? ActiveDayInfo.fallback();
+    }
+  }
+
+  Future<void> _prefetchTables() async {
+    try {
+      await _sessionRepository.getTablesList();
+    } catch (_) {}
+  }
+
+  Future<void> loadDayStatistics({bool forceRefresh = false}) async {
+    isLoadingStatistics.value = true;
+    try {
+      dayStatistics.value = await _sessionRepository.getDayStatistics(
+        forceRefresh: forceRefresh,
+      );
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      dayStatistics.value = _sessionRepository.cachedDayStatistics;
+    } finally {
+      isLoadingStatistics.value = false;
+    }
+  }
+
+  Future<void> openStatistics() async {
+    selectAction(SessionAction.statistics);
+    await loadDayStatistics();
+    await Get.toNamed(AppRoutes.statistics);
+  }
+
+  Future<void> loadSessionOrders({bool forceRefresh = false}) async {
+    isLoadingOrders.value = true;
+    ordersError.value = null;
+
+    try {
+      if (forceRefresh) {
+        await loadActiveDay(forceRefresh: true);
+      }
+      final loaded = await _mergeThinOrderRows(
+        await _sessionRepository.getSessionOrders(
+          forceRefresh: forceRefresh,
+        ),
+      );
+      orders.assignAll(loaded);
+    } on ApiException catch (e) {
+      ordersError.value = e.message;
+      if (orders.isEmpty) {
+        _showSnack('Erreur', e.message);
+      }
+    } catch (_) {
+      ordersError.value = 'Impossible de charger les commandes.';
+      if (orders.isEmpty) {
+        _showSnack('Erreur', ordersError.value!);
+      }
+    } finally {
+      isLoadingOrders.value = false;
+    }
+  }
+
+  Future<List<SessionOrder>> _mergeThinOrderRows(
+    List<SessionOrder> summaries,
+  ) async {
+    final merged = <SessionOrder>[];
+
+    for (final summary in summaries) {
+      if (summary.id <= 0) {
+        merged.add(summary);
+        continue;
+      }
+
+      final needsDetail = summary.products.isEmpty ||
+          summary.total == OrderMapper.formatPrice('0');
+
+      if (!needsDetail) {
+        merged.add(summary);
+        continue;
+      }
+
+      try {
+        final detail = await _orderRepository.getOrderDetail(summary.id);
+        merged.add(detail.copyWith(number: summary.number));
+      } catch (_) {
+        merged.add(summary);
+      }
+    }
+
+    return merged;
+  }
+
+  void _upsertOrderInList(SessionOrder order) {
+    final idx = orders.indexWhere((item) => item.id == order.id);
+    if (idx >= 0) {
+      orders[idx] = order;
+      return;
+    }
+
+    final byNumber = orders.indexWhere(
+      (item) => _tableKeysMatch(item.number, order.number),
+    );
+    if (byNumber >= 0) {
+      orders[byNumber] = order;
+      return;
+    }
+
+    orders.insert(0, order);
+  }
+
+  void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
+
+  static String normalizeTableKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return trimmed;
+    return trimmed.replaceFirst(RegExp(r'^T'), '');
+  }
+
+  static bool _tableKeysMatch(String a, String b) {
+    if (a == b) return true;
+    return normalizeTableKey(a) == normalizeTableKey(b);
+  }
+
+  SessionOrder? findOrder({String? orderNumber, int? orderId}) {
+    if (orderId != null && orderId > 0) {
+      for (final order in orders) {
+        if (order.id == orderId) return order;
+      }
+    }
+
+    if (orderNumber == null || orderNumber.isEmpty) return null;
+
+    for (final order in orders) {
+      if (order.number == orderNumber) return order;
+    }
+
+    for (final order in orders) {
+      if (_tableKeysMatch(order.number, orderNumber)) return order;
+    }
+
+    return null;
   }
 
   void selectAction(SessionAction action) {
@@ -109,14 +250,22 @@ class SessionController extends GetxController {
 
   void toggleOrderExpansion(String orderNumber) {
     final current = tableUiState.value.expandedOrderNumber;
+    final willExpand = current != orderNumber;
     tableUiState.value = tableUiState.value.copyWith(
-      expandedOrderNumber: current == orderNumber ? null : orderNumber,
-      clearExpanded: current == orderNumber,
+      expandedOrderNumber: willExpand ? orderNumber : null,
+      clearExpanded: !willExpand,
     );
+    if (willExpand) {
+      loadOrderDetails(orderNumber);
+    }
   }
 
   bool isOrderExpanded(String orderNumber) {
     return tableUiState.value.expandedOrderNumber == orderNumber;
+  }
+
+  bool isLoadingOrderDetail(String orderNumber) {
+    return loadingDetailOrderNumbers.contains(orderNumber);
   }
 
   void selectRow({
@@ -126,6 +275,7 @@ class SessionController extends GetxController {
   }) {
     final current = tableUiState.value;
     final isExpanded = current.expandedOrderNumber == orderNumber;
+    final willExpand = expandOnNumberTap && !isExpanded;
 
     tableUiState.value = SessionTableUiState(
       expandedOrderNumber: expandOnNumberTap
@@ -136,6 +286,42 @@ class SessionController extends GetxController {
         productIndex: productIndex,
       ),
     );
+
+    if (willExpand) {
+      loadOrderDetails(orderNumber);
+    }
+  }
+
+  Future<void> loadOrderDetails(
+    String orderNumber, {
+    bool forceRefresh = false,
+    int? orderId,
+  }) async {
+    final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
+    if (existing == null) return;
+
+    final idx = orders.indexWhere((order) => order.id == existing.id);
+    if (idx < 0) return;
+    if (existing.isLocalOnly) return;
+
+    if (!forceRefresh && existing.products.isNotEmpty) return;
+
+    if (loadingDetailOrderNumbers.contains(orderNumber)) return;
+
+    loadingDetailOrderNumbers.add(orderNumber);
+    loadingDetailOrderNumbers.refresh();
+
+    try {
+      final detail = await _orderRepository.getOrderDetail(existing.id);
+      orders[idx] = detail.copyWith(number: existing.number);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible de charger les produits.');
+    } finally {
+      loadingDetailOrderNumbers.remove(orderNumber);
+      loadingDetailOrderNumbers.refresh();
+    }
   }
 
   bool isRowSelected({
@@ -157,58 +343,121 @@ class SessionController extends GetxController {
     TableNumberDialog.show(onConfirm: _onTableNumberConfirmed);
   }
 
-  void openTableDetails(String orderNumber) {
+  void openTableDetails(String orderNumber, {int? orderId}) {
     Get.toNamed(
       AppRoutes.tableDetails,
-      arguments: {'orderNumber': orderNumber},
+      arguments: {
+        'orderNumber': orderNumber,
+        if (orderId != null) 'orderId': orderId,
+      },
     );
   }
 
   void _onTableNumberConfirmed(String tableNumber) {
-    if (isTableOccupied(tableNumber)) {
-      TableOccupiedDialog.show(
-        userName: _currentUserDisplayName,
-        tableNumber: tableNumber,
-      );
-      return;
-    }
-
     TableNumberDialog.show(
       title: 'NOMBRE DE COUVERTS',
-      onConfirm: (couverts) => _createTableAndOpenDetails(
-        tableNumber: tableNumber,
-        couverts: couverts,
-      ),
+      onConfirm: (couverts) {
+        unawaited(_createTableAndOpenDetails(
+          tableNumber: tableNumber,
+          couverts: couverts,
+        ));
+      },
     );
   }
 
-  void _createTableAndOpenDetails({
+  Future<void> _createTableAndOpenDetails({
     required String tableNumber,
     required String couverts,
+  }) async {
+    final guests = int.tryParse(couverts.trim()) ?? 1;
+    final waiterId = _currentWaiterId;
+    if (waiterId <= 0) {
+      _showCreateOrderError('Utilisateur non connecté. Veuillez vous reconnecter.');
+      return;
+    }
+
+    isCreatingOrder.value = true;
+    try {
+      await loadActiveDay(forceRefresh: true);
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      if (target == null) {
+        _showCreateOrderError('Table $tableNumber introuvable.');
+        return;
+      }
+      if (OrderMapper.isTableInUse(tables, tableNumber)) {
+        TableOccupiedDialog.show(
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+        return;
+      }
+
+      final salesZoneId = OrderMapper.inferSalesZoneId(
+        tables,
+        preferred: activeDay.value.salesZoneId,
+        table: target,
+      );
+
+      final result = await _orderRepository.createTableOrder(
+        waiterId: waiterId,
+        tableNumber: tableNumber,
+        numberOfGuests: guests,
+        tables: tables,
+        salesZoneId: salesZoneId,
+      );
+      final created = result.order;
+      final orderToShow = created;
+
+      await loadSessionOrders(forceRefresh: true);
+      _upsertOrderInList(orderToShow);
+
+      openTableDetails(orderToShow.number, orderId: created.id);
+      unawaited(
+        loadOrderDetails(
+          orderToShow.number,
+          orderId: created.id,
+          forceRefresh: true,
+        ),
+      );
+    } on ApiException catch (e) {
+      _showCreateOrderError(e.message, apiLog: _orderRepository.lastCreateOrderLog);
+    } catch (e) {
+      _showCreateOrderError(
+        'Impossible de créer la commande.',
+        apiLog: _orderRepository.lastCreateOrderLog,
+        detail: '$e',
+      );
+    } finally {
+      isCreatingOrder.value = false;
+    }
+  }
+
+  void _showCreateOrderError(
+    String message, {
+    String? apiLog,
+    String? detail,
   }) {
-    final orderNumber = 'T$tableNumber';
-
-    orders.add(
-      SessionOrder(
-        number: orderNumber,
-        numberColor: AppTheme.primary,
-        group: '1',
-        poste: 'POC1',
-        profitCenter: 'SUR PLACE',
-        couverts: couverts,
-        impressionCount: 0,
-        impressionColor: const Color(0xFFE74C3C),
-        total: '0,00 €',
-        products: const [],
-      ),
-    );
-
-    openTableDetails(orderNumber);
+    final log = apiLog?.trim();
+    if (log != null && log.isNotEmpty) {
+      ApiDebugDialog.show(
+        title: 'Erreur création commande — API',
+        body: detail == null ? '$log\n\nMESSAGE: $message' : '$log\n\nMESSAGE: $message\n\n$detail',
+      );
+    }
+    _showSnack('Erreur', message);
   }
 
   bool isTableOccupied(String tableNumber) {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
+
+    if (OrderMapper.isTableInUse(
+      _sessionRepository.cachedTables,
+      normalized,
+    )) {
+      return true;
+    }
 
     return orders.any((order) {
       final orderTable = order.number.replaceFirst(RegExp(r'^T'), '');
@@ -217,6 +466,14 @@ class SessionController extends GetxController {
   }
 
   String get _currentUserDisplayName {
+    if (Get.isRegistered<AuthRepository>()) {
+      final session = Get.find<AuthRepository>().cachedSession;
+      final name = session?.user.name;
+      if (name != null && name.isNotEmpty) {
+        return name.split(' ').first;
+      }
+    }
+
     if (Get.isRegistered<LoginController>()) {
       final login = Get.find<LoginController>();
       final selected = login.selectedUser.value;
@@ -230,10 +487,23 @@ class SessionController extends GetxController {
       }
     }
 
-    return 'ABDALLAH';
+    return 'Utilisateur';
   }
 
-  void requestNextCourse() {
+  int get _currentWaiterId {
+    final session = _authRepository.cachedSession;
+    if (session != null) return session.user.id;
+    return 0;
+  }
+
+  SessionOrder? _orderByNumber(String orderNumber) {
+    for (final order in orders) {
+      if (order.number == orderNumber) return order;
+    }
+    return null;
+  }
+
+  Future<void> requestNextCourse() async {
     selectAction(SessionAction.demanderSuite);
     final selected = tableUiState.value.selectedRow;
     if (selected == null || selected.productIndex != null) {
@@ -246,20 +516,28 @@ class SessionController extends GetxController {
       );
       return;
     }
+    final order = _orderByNumber(selected.orderNumber);
+    if (order == null || order.isLocalOnly) {
+      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
     AppConfirmDialog.show(
       title: 'Demander la suite',
       message:
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
-      onConfirm: () {
-        Get.snackbar(
-          'Suite demandée',
-          'La suite a été envoyée pour la table ${selected.orderNumber}.',
-          snackPosition: SnackPosition.BOTTOM,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 2),
-          backgroundColor: AppTheme.lightButton,
-          colorText: AppTheme.darkText,
-        );
+      onConfirm: () async {
+        try {
+          await _orderRepository.requestNextCourses(order.id);
+          _showSnack(
+            'Suite demandée',
+            'La suite a été envoyée pour la table ${selected.orderNumber}.',
+          );
+        } on ApiException catch (e) {
+          _showSnack('Erreur', e.message);
+        } catch (_) {
+          _showSnack('Erreur', 'Impossible d\'envoyer la demande de suite.');
+        }
       },
     );
   }
@@ -287,21 +565,14 @@ class SessionController extends GetxController {
       final existing = orders[idx];
       final newTotal =
           _parseTotalString(existing.total) + _sumProducts(newProducts);
-      orders[idx] = SessionOrder(
-        number: existing.number,
-        numberColor: existing.numberColor,
-        group: existing.group,
-        poste: existing.poste,
-        profitCenter: existing.profitCenter,
-        couverts: existing.couverts,
-        impressionCount: existing.impressionCount,
-        impressionColor: existing.impressionColor,
+      orders[idx] = existing.copyWith(
         total: _formatTotal(newTotal),
         products: [...existing.products, ...newProducts],
       );
     } else {
       final total = _sumProducts(newProducts);
       orders.add(SessionOrder(
+        id: 0,
         number: tableNumber,
         numberColor: AppTheme.primary,
         group: '1',
@@ -416,15 +687,7 @@ class SessionController extends GetxController {
       (sum, product) => sum + _parsePriceString(product.price),
     );
 
-    orders[idx] = SessionOrder(
-      number: existing.number,
-      numberColor: existing.numberColor,
-      group: existing.group,
-      poste: existing.poste,
-      profitCenter: existing.profitCenter,
-      couverts: existing.couverts,
-      impressionCount: existing.impressionCount,
-      impressionColor: existing.impressionColor,
+    orders[idx] = existing.copyWith(
       total: _formatTotal(newTotal),
       products: products,
     );
@@ -509,9 +772,29 @@ class SessionController extends GetxController {
     );
   }
 
-  void deleteOrder(String orderNumber) {
-    orders.removeWhere((order) => order.number == orderNumber);
+  Future<void> deleteOrder(String orderNumber) async {
+    final idx = orders.indexWhere((order) => order.number == orderNumber);
+    if (idx < 0) return;
 
+    final order = orders[idx];
+
+    try {
+      if (!order.isLocalOnly) {
+        await _orderRepository.closeOrder(order.id);
+        await loadSessionOrders(forceRefresh: true);
+      } else {
+        orders.removeAt(idx);
+      }
+
+      _clearUiStateForOrder(orderNumber);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible d\'annuler la table.');
+    }
+  }
+
+  void _clearUiStateForOrder(String orderNumber) {
     final state = tableUiState.value;
     var nextState = state;
 
@@ -532,14 +815,35 @@ class SessionController extends GetxController {
     );
   }
 
-  void applyOffer(String orderNumber) {
-    Get.snackbar(
-      'Offre',
-      'Offre appliquée sur la table $orderNumber.',
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+  Future<void> applyOffer(String orderNumber) async {
+    final idx = orders.indexWhere((order) => order.number == orderNumber);
+    if (idx < 0) return;
+
+    final order = orders[idx];
+
+    try {
+      if (order.isLocalOnly) {
+        final offeredProducts = order.products
+            .map((product) => product.copyWith(price: '0,00 €'))
+            .toList();
+        orders[idx] = order.copyWith(
+          total: '0,00 €',
+          products: offeredProducts,
+        );
+      } else {
+        await _orderRepository.applyTableOffer(order.id);
+        await loadSessionOrders(forceRefresh: true);
+      }
+
+      _showSnack(
+        'Offre',
+        'Offre appliquée sur la table $orderNumber.',
+      );
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible d\'appliquer l\'offre.');
+    }
   }
 
   Future<void> printTicket() async {
@@ -554,7 +858,15 @@ class SessionController extends GetxController {
       return;
     }
 
+    final selected = tableUiState.value.selectedRow!;
+    final order = _orderByNumber(selected.orderNumber);
+    if (order == null || order.isLocalOnly) {
+      _showSnack('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
     selectAction(SessionAction.ticket);
+    isPrintingTicket.value = true;
 
     Get.dialog(
       const TicketLoadingDialog(),
@@ -562,16 +874,44 @@ class SessionController extends GetxController {
       barrierColor: Colors.black.withValues(alpha: 0.45),
     );
 
-    await Future.delayed(const Duration(seconds: 2));
+    try {
+      final updated = await _orderRepository.markOrderPrinted(order.id);
+      final idx = orders.indexWhere((item) => item.id == order.id);
+      if (idx >= 0) {
+        orders[idx] = updated.copyWith(number: order.number);
+      }
 
-    if (Get.isDialogOpen ?? false) {
-      Get.back();
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+
+      await Get.dialog(
+        const TicketSuccessDialog(),
+        barrierDismissible: false,
+        barrierColor: Colors.black.withValues(alpha: 0.45),
+      );
+    } on ApiException catch (e) {
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+      _showSnack('Erreur', e.message);
+    } catch (_) {
+      if (Get.isDialogOpen ?? false) {
+        Get.back();
+      }
+      _showSnack('Erreur', 'Impossible d\'imprimer le ticket.');
+    } finally {
+      isPrintingTicket.value = false;
     }
+  }
 
-    await Get.dialog(
-      const TicketSuccessDialog(),
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
+  void _showSnack(String title, String message) {
+    Get.snackbar(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
     );
   }
 }

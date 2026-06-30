@@ -8,13 +8,11 @@ import '../utils/responsive.dart';
 
 /// Statistics summary for the current session.
 /// Accessed via the STATISTICS action button on the session page.
-class StatisticsPage extends StatelessWidget {
+class StatisticsPage extends GetView<SessionController> {
   const StatisticsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final session = Get.find<SessionController>();
-
     return Scaffold(
       backgroundColor: AppTheme.connectBackground,
       appBar: AppBar(
@@ -42,86 +40,107 @@ class StatisticsPage extends StatelessWidget {
         ),
       ),
       body: Obx(() {
-        final orders = session.orders;
-        final totalRevenue = orders.fold<double>(
-          0,
-          (sum, o) => sum + _parseTotal(o.total),
-        );
-        final openTables = orders.length;
-        final printedTickets =
-            orders.where((o) => o.impressionCount > 0).length;
-        final avgPerTable =
-            openTables > 0 ? totalRevenue / openTables : 0.0;
+        if (controller.isLoadingStatistics.value &&
+            controller.dayStatistics.value == null) {
+          return const Center(
+            child: CircularProgressIndicator(color: AppTheme.primary),
+          );
+        }
 
-        return SingleChildScrollView(
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            horizontal: 20,
-            vertical: 24,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── KPI Cards row ─────────────────────────────────────────────
-              Row(
-                children: [
-                  Expanded(
-                    child: _KpiCard(
-                      label: 'REVENU TOTAL',
-                      value: _formatTotal(totalRevenue),
-                      icon: Icons.euro_symbol_rounded,
-                      iconColor: AppTheme.primary,
+        final stats = controller.dayStatistics.value;
+        final orders = controller.orders;
+        final totalRevenue = stats?.totalRevenue ??
+            orders.fold<double>(0, (sum, o) => sum + _parseTotal(o.total));
+        final openTables =
+            stats != null && stats.openTables > 0 ? stats.openTables : orders.length;
+        final printedTickets = stats?.printedTickets ??
+            orders.where((o) => o.impressionCount > 0).length;
+        final avgPerTable = stats?.averagePerTable ??
+            (openTables > 0 ? totalRevenue / openTables : 0.0);
+
+        return RefreshIndicator(
+          color: AppTheme.primary,
+          onRefresh: () => controller.loadDayStatistics(forceRefresh: true),
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              horizontal: 20,
+              vertical: 24,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: _KpiCard(
+                        label: 'REVENU TOTAL',
+                        value: _formatDisplayTotal(
+                          stats?.formattedTotalRevenue,
+                          totalRevenue,
+                        ),
+                        icon: Icons.euro_symbol_rounded,
+                        iconColor: AppTheme.primary,
+                      ),
                     ),
-                  ),
-                  JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-                  Expanded(
-                    child: _KpiCard(
-                      label: 'TABLES OUVERTES',
-                      value: '$openTables',
-                      icon: Icons.table_restaurant_outlined,
-                      iconColor: const Color(0xFF4A90D9),
+                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
+                    Expanded(
+                      child: _KpiCard(
+                        label: 'TABLES OUVERTES',
+                        value: '$openTables',
+                        icon: Icons.table_restaurant_outlined,
+                        iconColor: const Color(0xFF4A90D9),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              JtrResponsive.getResponsiveSpacing(context, 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _KpiCard(
-                      label: 'TICKETS IMPRIMÉS',
-                      value: '$printedTickets',
-                      icon: Icons.receipt_long_outlined,
-                      iconColor: const Color(0xFF5BAD6F),
+                  ],
+                ),
+                JtrResponsive.getResponsiveSpacing(context, 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _KpiCard(
+                        label: 'TICKETS IMPRIMÉS',
+                        value: '$printedTickets',
+                        icon: Icons.receipt_long_outlined,
+                        iconColor: const Color(0xFF5BAD6F),
+                      ),
                     ),
-                  ),
-                  JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-                  Expanded(
-                    child: _KpiCard(
-                      label: 'MOY. PAR TABLE',
-                      value: _formatTotal(avgPerTable),
-                      icon: Icons.bar_chart_rounded,
-                      iconColor: const Color(0xFFE8A838),
+                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
+                    Expanded(
+                      child: _KpiCard(
+                        label: 'MOY. PAR TABLE',
+                        value: _formatDisplayTotal(
+                          stats?.formattedAveragePerTable,
+                          avgPerTable,
+                        ),
+                        icon: Icons.bar_chart_rounded,
+                        iconColor: const Color(0xFFE8A838),
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              JtrResponsive.getResponsiveSpacing(context, 28),
-              // ── Per-table breakdown ───────────────────────────────────────
-              _SectionTitle(text: 'DÉTAIL PAR TABLE'),
-              JtrResponsive.getResponsiveSpacing(context, 12),
-              if (orders.isEmpty)
-                const _EmptyState()
-              else
-                for (final order in orders) ...[
-                  _OrderStatRow(order: order),
-                  JtrResponsive.getResponsiveSpacing(context, 10),
-                ],
-            ],
+                  ],
+                ),
+                JtrResponsive.getResponsiveSpacing(context, 28),
+                const _SectionTitle(text: 'DÉTAIL PAR TABLE'),
+                JtrResponsive.getResponsiveSpacing(context, 12),
+                if (orders.isEmpty)
+                  const _EmptyState()
+                else
+                  for (final order in orders) ...[
+                    _OrderStatRow(order: order),
+                    JtrResponsive.getResponsiveSpacing(context, 10),
+                  ],
+              ],
+            ),
           ),
         );
       }),
     );
+  }
+
+  String _formatDisplayTotal(String? fromApi, double fallback) {
+    if (fromApi != null && fromApi.isNotEmpty) return fromApi;
+    return _formatTotal(fallback);
   }
 
   double _parseTotal(String total) {
@@ -280,7 +299,6 @@ class _OrderStatRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Table badge
           Container(
             width: badgeSize,
             height: badgeSize,
@@ -301,7 +319,6 @@ class _OrderStatRow extends StatelessWidget {
             ),
           ),
           JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-          // Details
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,7 +345,6 @@ class _OrderStatRow extends StatelessWidget {
             ),
           ),
           JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-          // Total + impression badge
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [

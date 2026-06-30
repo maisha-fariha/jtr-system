@@ -13,6 +13,10 @@ import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../controllers/table_details_controller.dart';
+import '../data/repositories/auth_repository.dart';
+import '../data/repositories/catalog_repository.dart';
+import '../data/repositories/order_repository.dart';
+import '../data/repositories/session_repository.dart';
 import '../pages/table_details_page.dart';
 
 class AppRoutes {
@@ -43,21 +47,27 @@ class AppPages {
       name: AppRoutes.connect,
       page: () => const ConnectPage(),
       binding: BindingsBuilder(() {
-        Get.put(ConnectController());
+        Get.put(ConnectController(authRepository: Get.find<AuthRepository>()));
       }),
     ),
     GetPage(
       name: AppRoutes.login,
       page: () => const LoginPage(),
       binding: BindingsBuilder(() {
-        Get.put(LoginController());
+        Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
       }),
     ),
     GetPage(
       name: AppRoutes.session,
       page: () => const SessionPage(),
       binding: BindingsBuilder(() {
-        Get.put(SessionController());
+        Get.put(
+          SessionController(
+            orderRepository: Get.find<OrderRepository>(),
+            sessionRepository: Get.find<SessionRepository>(),
+            authRepository: Get.find<AuthRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(
@@ -71,14 +81,24 @@ class AppPages {
       name: AppRoutes.menuSelection,
       page: () => const MenuSelectionPage(),
       binding: BindingsBuilder(() {
-        Get.put(MenuSelectionController());
+        Get.put(
+          MenuSelectionController(
+            catalogRepository: Get.find<CatalogRepository>(),
+            orderRepository: Get.find<OrderRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(
       name: AppRoutes.tableDetails,
       page: () => const TableDetailsPage(),
       binding: BindingsBuilder(() {
-        Get.put(TableDetailsController());
+        Get.put(
+          TableDetailsController(
+            catalogRepository: Get.find<CatalogRepository>(),
+            orderRepository: Get.find<OrderRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(

@@ -2,16 +2,15 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../data/demo_users.dart';
 import '../models/user_suggestion.dart';
 
 class UserIdentifiantFieldController extends ChangeNotifier {
   UserIdentifiantFieldController({
     required this.textController,
-    this.users = demoUsers,
+    List<UserSuggestion>? initialUsers,
     this.hideSuggestionsFocusNode,
-  }) {
-    _filteredUsers = List.of(users);
+  }) : _users = List.of(initialUsers ?? const []) {
+    _filteredUsers = List.of(_users);
     textController.addListener(_filterUsers);
     identifiantFocusNode.addListener(_onIdentifiantFocusChanged);
     hideSuggestionsFocusNode?.addListener(_onSiblingFocusChanged);
@@ -20,7 +19,7 @@ class UserIdentifiantFieldController extends ChangeNotifier {
   final identifiantLayerLink = LayerLink();
   final identifiantFocusNode = FocusNode();
   final TextEditingController textController;
-  final List<UserSuggestion> users;
+  final List<UserSuggestion> _users;
   final FocusNode? hideSuggestionsFocusNode;
 
   bool showSuggestions = false;
@@ -28,6 +27,13 @@ class UserIdentifiantFieldController extends ChangeNotifier {
   Timer? _suppressToggleTimer;
 
   List<UserSuggestion> get filteredUsers => _filteredUsers;
+
+  void updateUsers(List<UserSuggestion> newUsers) {
+    _users
+      ..clear()
+      ..addAll(newUsers);
+    _filterUsers();
+  }
 
   bool get _isSuppressingToggle => _suppressToggleTimer?.isActive ?? false;
 
@@ -47,9 +53,9 @@ class UserIdentifiantFieldController extends ChangeNotifier {
   void _filterUsers() {
     final query = textController.text.trim().toLowerCase();
     if (query.isEmpty) {
-      _filteredUsers = List.of(users);
+      _filteredUsers = List.of(_users);
     } else {
-      _filteredUsers = users
+      _filteredUsers = _users
           .where(
             (user) =>
                 user.name.toLowerCase().contains(query) ||

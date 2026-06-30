@@ -539,6 +539,50 @@ class OrderRepository {
     }
   }
 
+  Future<SessionOrder> cancelOrderLineAtIndex({
+    required int orderId,
+    required int lineIndex,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Annulation article ──');
+    apiLog.writeln('order_id=$orderId line_index=$lineIndex');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.cancelOrderLineAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
   void _ensureAddItemCourse(
     Map<String, dynamic> detail,
     StringBuffer apiLog,

@@ -992,6 +992,48 @@ class OrderMapper {
     );
   }
 
+  static Map<String, dynamic> cancelOrderLineAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    var currentIndex = 0;
+    var cancelled = false;
+
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) {
+      return buildOrderUpdatePayload(working);
+    }
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+
+          if (currentIndex == lineIndex) {
+            item['status'] = 'cancelled';
+            cancelled = true;
+            break;
+          }
+          currentIndex++;
+        }
+        if (cancelled) break;
+      }
+      if (cancelled) break;
+    }
+
+    return buildOrderUpdatePayload(working);
+  }
+
   static Map<String, dynamic> removeSimpleProductFromOrder({
     required Map<String, dynamic> orderDetail,
     required int productId,

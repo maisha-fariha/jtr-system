@@ -533,4 +533,43 @@ class TableDetailsController extends GetxController {
       message,
     );
   }
+
+  Future<void> cancelOrderLine(int productIndex) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder == null ||
+        productIndex < 0 ||
+        productIndex >= currentOrder.products.length) {
+      return;
+    }
+
+    final line = currentOrder.products[productIndex];
+    final catalog = catalogProductByName(line.name);
+    if (catalog != null && selectedProductId.value == catalog.id) {
+      selectedProductId.value = null;
+    }
+
+    isAddingProduct.value = true;
+    try {
+      final updated = await _orderRepository.cancelOrderLineAtIndex(
+        orderId: id,
+        lineIndex: productIndex,
+      );
+      _syncOrderInSession(updated, orderNumber);
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur annulation',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible d\'annuler l\'article.');
+    } finally {
+      isAddingProduct.value = false;
+    }
+  }
 }

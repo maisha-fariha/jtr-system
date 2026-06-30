@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
@@ -296,6 +297,20 @@ class _ProductLine extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
+        startActionPane: ActionPane(
+          motion: const ScrollMotion(),
+          extentRatio: 0.14,
+          children: [
+            SlidableAction(
+              onPressed: (_) => controller.cancelOrderLine(productIndex),
+              backgroundColor: AppTheme.background,
+              foregroundColor: const Color(0xFFE74C3C),
+              icon: CupertinoIcons.delete,
+              spacing: 0,
+              padding: EdgeInsets.zero,
+            ),
+          ],
+        ),
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.52,

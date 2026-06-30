@@ -375,13 +375,6 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.restaurant) {
-      showPaymentOptions.value = false;
-      isBottomPanelExpanded.value = true;
-      activeToolbarIcon.value = icon;
-      return;
-    }
-
     if (icon == Icons.restaurant_menu) {
       final id = resolvedOrderId;
       if (id == null || id <= 0) {

@@ -19,8 +19,6 @@ class ApiEndpoints {
   static String orderById(int id) => '/api/orders/$id';
   static String closeOrder(int id) => '/api/orders/$id/close';
   static String requestCourses(int id) => '/api/orders/$id/request-courses';
-  static String requestAllCourses(int id) =>
-      '/api/orders/$id/request-all-courses';
   static String payOrder(int id) => '/api/orders/$id/pay';
   static const paymentModesForCheckout = '/api/payments/modes';
   static const activePaymentModes = '/api/payment-modes/active';

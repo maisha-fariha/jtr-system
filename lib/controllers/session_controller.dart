@@ -13,6 +13,7 @@ import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
+import '../utils/api_log.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -393,11 +394,15 @@ class SessionController extends GetxController {
   }
 
   void openTableDetails(String orderNumber, {int? orderId}) {
+    logOrderFlow(
+      'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'}',
+    );
+    final resolvedId = orderId != null && orderId > 0 ? orderId : null;
     Get.toNamed(
       AppRoutes.tableDetails,
       arguments: {
         'orderNumber': orderNumber,
-        if (orderId != null) 'orderId': orderId,
+        if (resolvedId != null) 'orderId': resolvedId,
       },
     );
   }
@@ -423,9 +428,11 @@ class SessionController extends GetxController {
     required String tableNumber,
     required String couverts,
   }) async {
+    logOrderFlow('_createTableAndOpenDetails START table=$tableNumber couverts=$couverts');
     final guests = int.tryParse(couverts.trim()) ?? 1;
     final waiterId = _currentWaiterId;
     if (waiterId <= 0) {
+      logOrderFlow('_createTableAndOpenDetails ABORT not logged in');
       _showSnack('Erreur', 'Utilisateur non connecté. Veuillez vous reconnecter.');
       return;
     }
@@ -436,12 +443,20 @@ class SessionController extends GetxController {
 
     try {
       final tables = await _sessionRepository.getTablesList();
+      logOrderFlow(
+        OrderMapper.buildTablesPostOrderAvailabilityLog(
+          tables,
+          targetTableNumber: tableNumber,
+        ),
+      );
       final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
       if (target == null) {
+        logOrderFlow('_createTableAndOpenDetails ABORT table not found');
         _showSnack('Erreur', 'Table $tableNumber introuvable.');
         return;
       }
       if (OrderMapper.isTableInUse(tables, tableNumber)) {
+        logOrderFlow('_createTableAndOpenDetails ABORT table occupied');
         if (context.mounted) {
           TableOccupiedDialog.show(
             context: context,
@@ -479,12 +494,55 @@ class SessionController extends GetxController {
     } finally {
       isCreatingOrder.value = false;
       if (attemptedCreate) {
+        if (created != null && created.id <= 0) {
+          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
+            tableNumber,
+          );
+          if (resolved != null && resolved > 0) {
+            try {
+              final detail = await _orderRepository.getOrderDetail(resolved);
+              created = detail.copyWith(
+                number: OrderMapper.tableDisplayNumber(tableNumber),
+                id: resolved,
+              );
+            } catch (_) {
+              // Keep session placeholder — order will be POSTed on first item.
+            }
+          }
+        }
+
+        if (created == null) {
+          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
+            tableNumber,
+          );
+          if (resolved != null && resolved > 0) {
+            try {
+              final detail = await _orderRepository.getOrderDetail(resolved);
+              created = detail.copyWith(
+                number: OrderMapper.tableDisplayNumber(tableNumber),
+                id: resolved,
+              );
+            } catch (_) {}
+          }
+        }
+
         if (created != null) {
-          _upsertOrderInList(created);
-          openTableDetails(created.number, orderId: created.id);
+          if (created.id > 0) {
+            _upsertOrderInList(created);
+          }
+          logOrderFlow(
+            '_createTableAndOpenDetails OPEN table=${created.number} orderId=${created.id}',
+          );
+          openTableDetails(
+            created.number,
+            orderId: created.id > 0 ? created.id : null,
+          );
         }
         unawaited(
-          refreshOrderList(pinOrder: created, background: true),
+          refreshOrderList(
+            pinOrder: created != null && created.id > 0 ? created : null,
+            background: true,
+          ),
         );
       }
     }

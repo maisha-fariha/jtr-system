@@ -40,53 +40,6 @@ class OrderMapper {
     return trimmed.replaceFirst(RegExp(r'^T'), '');
   }
 
-  /// Builds session rows from [GET /api/tables/list]:
-  /// tables with [active_order] and open tables with [session] only.
-  static List<SessionOrder> sessionOrdersFromTables(
-    List<Map<String, dynamic>> tables,
-  ) {
-    final byDisplay = <String, SessionOrder>{};
-    final sortMillisByDisplay = <String, int>{};
-
-    // Pass 1: rows with active_order always win (e.g. separated T25 vs parent session).
-    for (final table in tables) {
-      final activeOrder = table['active_order'];
-      if (activeOrder is! Map<String, dynamic>) continue;
-
-      final orderId = (activeOrder['id'] as num?)?.toInt();
-      if (orderId == null || orderId <= 0) continue;
-
-      final tableNumber = (table['table_number'] as num?)?.toInt();
-      final displayNumber = tableDisplayNumber(
-        '${tableNumber ?? tableNumberFromDetail(activeOrder) ?? orderId}',
-      );
-
-      byDisplay[displayNumber] =
-          fromOrderDetail(activeOrder).copyWith(number: displayNumber);
-      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
-    }
-
-    // Pass 2: session-only tables not already represented by an order.
-    for (final table in tables) {
-      if (!_hasOpenSession(table)) continue;
-
-      final sessionOrder = fromTableSession(table);
-      final displayNumber = sessionOrder.number;
-      if (byDisplay.containsKey(displayNumber)) continue;
-
-      byDisplay[displayNumber] = sessionOrder;
-      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
-    }
-
-    final displayNumbers = byDisplay.keys.toList()
-      ..sort(
-        (a, b) => (sortMillisByDisplay[b] ?? 0)
-            .compareTo(sortMillisByDisplay[a] ?? 0),
-      );
-
-    return displayNumbers.map((number) => byDisplay[number]!).toList();
-  }
-
   /// Resolves the waiter user id on an order or table-session payload.
   static int? waiterIdFromOrderMap(Map<String, dynamic> data) {
     final direct = data['waiter_id'];
@@ -160,55 +113,21 @@ class OrderMapper {
     return status != 'closed' && status != 'cancelled';
   }
 
-  /// Union of order maps by id (fresh wins on duplicate keys).
+  /// Union of [GET /api/orders] pages/lists by id (later list wins on duplicate).
   static List<Map<String, dynamic>> mergeOrderMapLists(
-    List<Map<String, dynamic>> cached,
-    List<Map<String, dynamic>> fresh,
+    List<Map<String, dynamic>> first,
+    List<Map<String, dynamic>> second,
   ) {
     final byId = <int, Map<String, dynamic>>{};
-    for (final order in fresh) {
+    for (final order in first) {
       final id = orderIdFromDetail(order);
       if (id > 0) byId[id] = order;
     }
-    for (final order in cached) {
+    for (final order in second) {
       final id = orderIdFromDetail(order);
-      if (id > 0 && !byId.containsKey(id)) {
-        byId[id] = order;
-      }
+      if (id > 0) byId[id] = order;
     }
     return byId.values.toList(growable: false);
-  }
-
-  /// Merges API orders with tables that have an open session but no order yet.
-  static List<SessionOrder> mergeOrdersWithOpenTableSessions(
-    List<SessionOrder> orders,
-    List<Map<String, dynamic>> tables,
-  ) {
-    final byDisplay = <String, SessionOrder>{
-      for (final order in orders) order.number: order,
-    };
-    final sortMillisByDisplay = <String, int>{
-      for (final order in orders) order.number: _sessionOrderSortMillis(order),
-    };
-
-    for (final table in tables) {
-      if (!_hasOpenSession(table)) continue;
-
-      final sessionOrder = fromTableSession(table);
-      final displayNumber = sessionOrder.number;
-      if (byDisplay.containsKey(displayNumber)) continue;
-
-      byDisplay[displayNumber] = sessionOrder;
-      sortMillisByDisplay[displayNumber] = _tableSortMillis(table);
-    }
-
-    final displayNumbers = byDisplay.keys.toList()
-      ..sort(
-        (a, b) => (sortMillisByDisplay[b] ?? 0)
-            .compareTo(sortMillisByDisplay[a] ?? 0),
-      );
-
-    return displayNumbers.map((number) => byDisplay[number]!).toList();
   }
 
   static int _orderSortMillis(Map<String, dynamic> order) {
@@ -219,10 +138,6 @@ class OrderMapper {
     return 0;
   }
 
-  static int _sessionOrderSortMillis(SessionOrder order) {
-    return order.id;
-  }
-
   static bool _hasOpenSession(Map<String, dynamic> table) {
     if (_activeOrderId(table) != null) return false;
 
@@ -231,58 +146,6 @@ class OrderMapper {
     if (table['is_locked'] == true) return true;
 
     return false;
-  }
-
-  static SessionOrder fromTableSession(Map<String, dynamic> table) {
-    final tableId = (table['id'] as num?)?.toInt() ?? 0;
-    final tableNumber = (table['table_number'] as num?)?.toInt() ?? tableId;
-    final session = table['session'];
-    final sessionMap =
-        session is Map<String, dynamic> ? session : const <String, dynamic>{};
-
-    final waiterName = sessionMap['waiter_name'] as String? ?? '—';
-    final guests = sessionMap['number_of_guests'];
-    final floorName = table['floor_name'] as String? ?? 'SUR PLACE';
-
-    return SessionOrder(
-      id: -tableId,
-      number: tableDisplayNumber('$tableNumber'),
-      numberColor: AppTheme.primary,
-      group: '1',
-      poste: _shortPoste(waiterName),
-      profitCenter: floorName.toUpperCase(),
-      couverts: '${guests ?? 0}',
-      impressionCount: 0,
-      impressionColor: impressionColorFor(0),
-      total: formatPrice('0'),
-      products: const [],
-      waiterId: waiterIdFromOrderMap(sessionMap),
-    );
-  }
-
-  static int _tableSortMillis(Map<String, dynamic> table) {
-    final activeOrder = table['active_order'];
-    if (activeOrder is Map<String, dynamic>) {
-      final createdAt = activeOrder['created_at'];
-      if (createdAt is String) {
-        return DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
-      }
-    }
-
-    final session = table['session'];
-    if (session is Map<String, dynamic>) {
-      final lockedAt = session['locked_at'];
-      if (lockedAt is String) {
-        return DateTime.tryParse(lockedAt)?.millisecondsSinceEpoch ?? 0;
-      }
-    }
-
-    final tableLockedAt = table['locked_at'];
-    if (tableLockedAt is String) {
-      return DateTime.tryParse(tableLockedAt)?.millisecondsSinceEpoch ?? 0;
-    }
-
-    return 0;
   }
 
   static bool isTableOccupied(
@@ -329,6 +192,99 @@ class OrderMapper {
     if (matches.isEmpty) return null;
 
     return _toResolvedTable(_pickTableForNewOrder(matches));
+  }
+
+  /// True when this table row can accept [POST /api/orders] (new order).
+  static bool canPostNewOrderOnTable(Map<String, dynamic> table) =>
+      reasonCannotPostNewOrderOnTable(table) == null;
+
+  /// Human-readable blocker, or `null` when POST is allowed on this row.
+  static String? reasonCannotPostNewOrderOnTable(Map<String, dynamic> table) {
+    final activeId = _activeOrderId(table);
+    if (activeId != null) return 'active_order=$activeId';
+
+    if (_hasOpenSession(table)) {
+      if (table['session'] is Map<String, dynamic>) return 'open session';
+      if (table['status'] == 'open') return 'status=open';
+      if (table['is_locked'] == true) return 'is_locked';
+      return 'in use';
+    }
+
+    if (table['status'] != 'available') {
+      return 'status=${table['status'] ?? '—'}';
+    }
+
+    return null;
+  }
+
+  /// Multi-line summary for console: which table rows can receive POST /api/orders.
+  static String buildTablesPostOrderAvailabilityLog(
+    List<Map<String, dynamic>> tables, {
+    String? targetTableNumber,
+  }) {
+    final buffer = StringBuffer(
+      'Tables for POST /api/orders (${tables.length} rows from GET /api/tables/list):',
+    );
+
+    final sorted = List<Map<String, dynamic>>.from(tables);
+    sorted.sort((a, b) {
+      final an = (a['table_number'] as num?)?.toInt() ??
+          (a['id'] as num?)?.toInt() ??
+          0;
+      final bn = (b['table_number'] as num?)?.toInt() ??
+          (b['id'] as num?)?.toInt() ??
+          0;
+      return an.compareTo(bn);
+    });
+
+    final targetId = targetTableNumber == null
+        ? null
+        : resolveTableForNewOrder(tables, targetTableNumber)?.id;
+
+    for (final table in sorted) {
+      final id = (table['id'] as num?)?.toInt() ?? 0;
+      final tableNum = (table['table_number'] as num?)?.toInt() ?? id;
+      final status = table['status'] ?? '—';
+      final activeId = _activeOrderId(table);
+      final hasSession = table['session'] is Map<String, dynamic>;
+      final locked = table['is_locked'] == true;
+      final separated = table['is_separated'] == true;
+      final reason = reasonCannotPostNewOrderOnTable(table);
+      final targetMark = targetId != null && id == targetId ? ' [TARGET]' : '';
+      final verdict = reason == null ? '→ OK' : '→ SKIP ($reason)';
+
+      buffer.writeln(
+        '  id=$id T$tableNum status=$status '
+        'active_order=${activeId ?? 'null'} '
+        'session=${hasSession ? 'yes' : 'no'} '
+        'locked=${locked ? 'yes' : 'no'}'
+        '${separated ? ' separated' : ''}$targetMark $verdict',
+      );
+    }
+
+    final okCount = sorted.where(canPostNewOrderOnTable).length;
+    buffer.writeln('  Summary: $okCount/${sorted.length} rows OK for POST');
+
+    if (targetTableNumber != null) {
+      final resolved = resolveTableForNewOrder(tables, targetTableNumber);
+      if (resolved == null) {
+        buffer.writeln('  Target T$targetTableNumber: NOT FOUND');
+      } else {
+        final blocked = reasonCannotPostNewOrderOnTable(
+          _pickTableForNewOrder(
+            _tablesMatchingNumber(tables, targetTableNumber.trim()),
+          ),
+        );
+        buffer.writeln(
+          '  Target T$targetTableNumber → id=${resolved.id} '
+          'status=${resolved.status ?? '—'} '
+          'active_order=${resolved.existingOrderId ?? 'null'} '
+          '${blocked == null ? '→ will POST' : '→ blocked ($blocked)'}',
+        );
+      }
+    }
+
+    return buffer.toString().trimRight();
   }
 
   static SessionOrder fromOrderDetail(Map<String, dynamic> data) {
@@ -567,63 +523,92 @@ class OrderMapper {
     return buildOrderUpdatePayload(copy);
   }
 
-  /// Header-only POST /api/orders body (empty table, no lines yet).
-  static Map<String, dynamic> buildCreateOrderPayload({
+  /// Header POST /api/orders (table + waiter, no lines).
+  static Map<String, dynamic> buildCreateOrderHeaderPayload({
     required int waiterId,
     required int numberOfGuests,
     required int tableId,
     int? salesZoneId,
   }) {
-    return _createOrderBasePayload(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: tableId,
-      salesZoneId: salesZoneId,
-    );
+    final payload = <String, dynamic>{
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+      'table_id': tableId,
+    };
+    if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    return payload;
   }
 
-  /// POST /api/orders with seat shell (no product lines).
-  static Map<String, dynamic> buildCreateOrderSeatShellPayload({
+  /// POST /api/orders with seat/course shell and one default line item.
+  static Map<String, dynamic> buildCreateOrderSeatCoursePayload({
     required int waiterId,
     required int numberOfGuests,
     required int tableId,
+    required int productId,
+    required double unitPrice,
     int? salesZoneId,
+    int qty = 1,
   }) {
     const seatNumber = 1;
-    return _createOrderBasePayload(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: tableId,
-      salesZoneId: salesZoneId,
-      seatOrders: [
+    final item = _buildNewItemPayload(
+      seatNumber: seatNumber,
+      courseId: 0,
+      productId: productId,
+      qty: qty,
+      subTotal: unitPrice * qty,
+      status: 'to_be_continued',
+      comment: '',
+      forCreate: true,
+    );
+    final payload = <String, dynamic>{
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+      'table_id': tableId,
+      'seat_orders': [
         {
           'seat_number': seatNumber,
           'courses': [
             {
+              'id': 0,
               'course_number': 1,
               'seat_number': seatNumber,
+              'items': [item],
             },
           ],
         },
       ],
-    );
+    };
+    if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    return payload;
   }
 
-  /// Candidate POST bodies for an empty table (tried in order after session).
+  /// Payload candidates for POST /api/orders when opening a table.
   static List<Map<String, dynamic>> createOrderPayloadCandidates({
     required int waiterId,
     required int numberOfGuests,
     required int tableId,
+    required int productId,
+    required double unitPrice,
     int? salesZoneId,
   }) {
     return [
-      buildCreateOrderPayload(
+      buildCreateOrderWithItemPayload(
         waiterId: waiterId,
         numberOfGuests: numberOfGuests,
+        productId: productId,
+        unitPrice: unitPrice,
         tableId: tableId,
         salesZoneId: salesZoneId,
       ),
-      buildCreateOrderSeatShellPayload(
+      buildCreateOrderSeatCoursePayload(
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        tableId: tableId,
+        productId: productId,
+        unitPrice: unitPrice,
+        salesZoneId: salesZoneId,
+      ),
+      buildCreateOrderHeaderPayload(
         waiterId: waiterId,
         numberOfGuests: numberOfGuests,
         tableId: tableId,
@@ -632,30 +617,27 @@ class OrderMapper {
     ];
   }
 
-  static Map<String, dynamic> _createOrderBasePayload({
-    required int waiterId,
+  /// Session-only placeholder until POST /api/orders succeeds.
+  static SessionOrder buildSessionPlaceholderOrder({
+    required int tableNumber,
     required int numberOfGuests,
-    required int tableId,
-    int? salesZoneId,
-    List<Map<String, dynamic>>? seatOrders,
   }) {
-    final payload = <String, dynamic>{
-      'waiter_id': waiterId,
-      'number_of_guests': numberOfGuests,
-      'table_id': tableId,
-    };
-
-    if (salesZoneId != null) {
-      payload['sales_zone_id'] = salesZoneId;
-    }
-    if (seatOrders != null) {
-      payload['seat_orders'] = seatOrders;
-    }
-
-    return payload;
+    return SessionOrder(
+      id: 0,
+      number: tableDisplayNumber('$tableNumber'),
+      numberColor: AppTheme.primary,
+      group: '1',
+      poste: '—',
+      profitCenter: 'SUR PLACE',
+      couverts: '$numberOfGuests',
+      impressionCount: 0,
+      impressionColor: impressionColorFor(0),
+      total: formatPrice('0'),
+      products: const [],
+    );
   }
 
-  /// Full POST body when creating an order with an initial line (Orders API).
+  /// Valid POST /api/orders body per Orders API spec (requires ≥1 item).
   static Map<String, dynamic> buildCreateOrderWithItemPayload({
     required int waiterId,
     required int numberOfGuests,
@@ -873,6 +855,23 @@ class OrderMapper {
       return _activeOrderId(table);
     }
     return null;
+  }
+
+  static int guestsForTable(List<Map<String, dynamic>> tables, int tableId) {
+    for (final table in tables) {
+      if ((table['id'] as num?)?.toInt() != tableId) continue;
+      final session = table['session'];
+      if (session is Map<String, dynamic>) {
+        final guests = session['number_of_guests'];
+        if (guests is num && guests > 0) return guests.toInt();
+      }
+      final activeOrder = table['active_order'];
+      if (activeOrder is Map<String, dynamic>) {
+        final guests = activeOrder['number_of_guests'];
+        if (guests is num && guests > 0) return guests.toInt();
+      }
+    }
+    return 1;
   }
 
   static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {
@@ -1973,10 +1972,8 @@ class OrderMapper {
       'status': status,
       'comment': comment,
       'is_loss': false,
-      if (hasMenus) ...{
-        'menu_selections': sanitizedMenus,
-        'is_still_menu_missing': isStillMenuMissing,
-      },
+      'is_still_menu_missing': isStillMenuMissing,
+      if (hasMenus) 'menu_selections': sanitizedMenus,
     };
   }
 

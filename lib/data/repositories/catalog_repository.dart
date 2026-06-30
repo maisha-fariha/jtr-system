@@ -175,4 +175,19 @@ class CatalogRepository {
         .toList()
       ..sort((a, b) => a.name.compareTo(b.name));
   }
+
+  /// First active simple product used to satisfy POST /api/orders item validation.
+  Future<CatalogProductModel?> resolveDefaultOrderProduct() async {
+    try {
+      final products = await getProducts();
+      final matches = products
+          .where((p) => p.isActive && !p.isComposed && p.id > 0)
+          .toList()
+        ..sort((a, b) => a.id.compareTo(b.id));
+      if (matches.isEmpty) return null;
+      return matches.first;
+    } catch (_) {
+      return null;
+    }
+  }
 }

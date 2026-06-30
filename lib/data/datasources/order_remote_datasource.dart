@@ -123,6 +123,7 @@ class OrderRemoteDataSource {
         request: body,
         response: response.data,
         statusCode: response.statusCode,
+        writeToConsole: false,
       );
 
       final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
@@ -146,10 +147,20 @@ class OrderRemoteDataSource {
 
   Future<Map<String, dynamic>> createOrder(Map<String, dynamic> body) async {
     const path = ApiEndpoints.createOrder;
+    logOrderFlow('OrderRemoteDataSource.createOrder CALLED');
+    logOrderPost(phase: 'sending', request: body);
+
     try {
       final response = await _client.post<Map<String, dynamic>>(
         path,
         data: body,
+      );
+
+      logOrderPost(
+        phase: 'response',
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
       );
       _recordApiLog(
         method: 'POST',
@@ -157,6 +168,7 @@ class OrderRemoteDataSource {
         request: body,
         response: response.data,
         statusCode: response.statusCode,
+        writeToConsole: false,
       );
 
       final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
@@ -173,7 +185,20 @@ class OrderRemoteDataSource {
 
       return OrderMapper.unwrapOrderDetail(envelope.data!);
     } on ApiException catch (error) {
-      _appendApiError(error);
+      logOrderPost(
+        phase: 'error',
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
       rethrow;
     }
   }
@@ -185,6 +210,7 @@ class OrderRemoteDataSource {
     Object? response,
     int? statusCode,
     String? error,
+    bool writeToConsole = true,
   }) {
     final buffer = StringBuffer()
       ..writeln('$method $path'
@@ -213,14 +239,16 @@ class OrderRemoteDataSource {
 
     lastApiLog = buffer.toString();
 
-    logApiCall(
-      method: method,
-      path: path,
-      request: request,
-      response: response,
-      statusCode: statusCode,
-      error: error,
-    );
+    if (writeToConsole) {
+      logApiCall(
+        method: method,
+        path: path,
+        request: request,
+        response: response,
+        statusCode: statusCode,
+        error: error,
+      );
+    }
   }
 
   void _appendApiError(ApiException error) {

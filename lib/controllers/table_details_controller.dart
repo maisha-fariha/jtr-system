@@ -1,16 +1,19 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
 import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
+import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
+import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/composed_product_picker_sheet.dart';
@@ -55,9 +58,17 @@ class TableDetailsController extends GetxController {
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    logOrderFlow(
+      'TableDetailsController.onInit table=$orderNumber orderId=${orderId ?? 'none'}',
+    );
 
     _loadCatalog();
-    _refreshOrder();
+    unawaited(_bootstrapOrder());
+  }
+
+  Future<void> _bootstrapOrder() async {
+    await _ensureResolvedOrderId();
+    await _refreshOrder();
   }
 
   Future<void> _loadCatalog() async {
@@ -104,6 +115,51 @@ class TableDetailsController extends GetxController {
     final current = order;
     if (current != null && current.id > 0) return current.id;
     return null;
+  }
+
+  int get _currentWaiterId {
+    if (Get.isRegistered<AuthRepository>()) {
+      return Get.find<AuthRepository>().cachedSession?.user.id ?? 0;
+    }
+    return 0;
+  }
+
+  Future<int?> _ensureResolvedOrderId() async {
+    if (orderId != null && orderId! > 0) {
+      if (await _verifyOrderExists(orderId!)) return orderId;
+      orderId = null;
+    }
+
+    final current = order;
+    if (current != null && current.id > 0) {
+      if (await _verifyOrderExists(current.id)) {
+        orderId = current.id;
+        return orderId;
+      }
+    }
+
+    final resolved =
+        await _orderRepository.resolveOrderIdForTableNumber(orderNumber);
+    if (resolved == null || resolved <= 0) return null;
+
+    try {
+      final detail = await _orderRepository.getOrderDetail(resolved);
+      orderId = resolved;
+      _syncOrderInSession(detail.copyWith(number: orderNumber), orderNumber);
+      return orderId;
+    } catch (_) {
+      orderId = null;
+      return null;
+    }
+  }
+
+  Future<bool> _verifyOrderExists(int id) async {
+    try {
+      await _orderRepository.getOrderDetail(id);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   List<CategoryTreeNode> get currentLevelCategories {
@@ -648,13 +704,13 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> onProductTap(CatalogProductModel product) async {
+    logOrderFlow(
+      'onProductTap product=${product.id} ${product.name} table=$orderNumber',
+    );
     if (isAddingProduct.value) return;
 
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
-      return;
-    }
+    var id = await _ensureResolvedOrderId();
+    logOrderFlow('onProductTap resolvedOrderId=${id ?? 'none'}');
 
     final wasAlreadySelected = selectedProductId.value == product.id;
     selectedProductId.value = product.id;
@@ -665,16 +721,50 @@ class TableDetailsController extends GetxController {
     try {
       if (product.isComposed) {
         final detail = await _catalogRepository.getProductDetail(product.id);
+        List<Map<String, dynamic>>? selections;
         await ComposedProductPickerSheet.show(
           product: detail,
-          onConfirm: (selections) => _addComposedProduct(
+          onConfirm: (picked) => selections = picked,
+        );
+        if (selections == null) return;
+
+        id = await _ensureResolvedOrderId();
+        if (id == null || id <= 0) {
+          final created =
+              await _orderRepository.createOrderWithFirstComposedProduct(
+            tableNumber: orderNumber,
+            waiterId: _currentWaiterId,
+            productId: detail.id,
+            basePrice: detail.unitPrice,
+            menuSelections: selections!,
+          );
+          orderId = created.id;
+          _syncOrderInSession(created, orderNumber);
+        } else {
+          await _addComposedProduct(
             orderId: id,
             product: detail,
-            menuSelections: selections,
+            menuSelections: selections!,
             displayNumber: orderNumber,
-          ),
+          );
+        }
+      } else if (id == null || id <= 0) {
+        if (kDebugMode) {
+          print('ORDER POST: no order id — creating with first item ${product.id}');
+        }
+        final created = await _orderRepository.createOrderWithFirstSimpleProduct(
+          tableNumber: orderNumber,
+          waiterId: _currentWaiterId,
+          productId: product.id,
+          unitPrice: product.unitPrice,
+          qty: 1,
         );
+        orderId = created.id;
+        _syncOrderInSession(created, orderNumber);
       } else {
+        if (kDebugMode) {
+          print('ORDER PUT: adding item to existing order $id');
+        }
         final updated = await _orderRepository.addSimpleProductToOrder(
           orderId: id,
           productId: product.id,

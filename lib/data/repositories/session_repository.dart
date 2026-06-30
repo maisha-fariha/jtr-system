@@ -149,65 +149,22 @@ class SessionRepository {
   }
 
   List<SessionOrder> _sessionOrdersFromCache({int? waiterId}) {
-    var orders = OrderMapper.sessionOrdersFromOrdersList(
+    return OrderMapper.sessionOrdersFromOrdersList(
       _local.readOpenOrdersList(),
       waiterId: waiterId,
     );
-    final tables = _local.readTablesList();
-    if (tables.isNotEmpty) {
-      orders = OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
-      if (waiterId != null && waiterId > 0) {
-        orders = orders
-            .where(
-              (order) =>
-                  order.id > 0 ||
-                  order.waiterId == null ||
-                  order.waiterId == waiterId,
-            )
-            .toList(growable: false);
-      }
-    }
-    return orders;
   }
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
   }) async {
     final orderMaps = await _loadOrderMaps(waiterId: waiterId);
-    final mergedMaps = OrderMapper.mergeOrderMapLists(
-      _local.readOpenOrdersList(),
-      orderMaps,
-    );
 
-    await _local.saveOpenOrdersList(mergedMaps);
-    var orders = OrderMapper.sessionOrdersFromOrdersList(
-      mergedMaps,
+    await _local.saveOpenOrdersList(orderMaps);
+    return OrderMapper.sessionOrdersFromOrdersList(
+      orderMaps,
       waiterId: waiterId,
     );
-
-    try {
-      final tables = await _remote.fetchTablesList();
-      await _local.saveTablesList(tables);
-      orders = OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
-    } catch (_) {
-      final tables = _local.readTablesList();
-      if (tables.isNotEmpty) {
-        orders = OrderMapper.mergeOrdersWithOpenTableSessions(orders, tables);
-      }
-    }
-
-    if (waiterId != null && waiterId > 0) {
-      orders = orders
-          .where(
-            (order) =>
-                order.id > 0 ||
-                order.waiterId == null ||
-                order.waiterId == waiterId,
-          )
-          .toList(growable: false);
-    }
-
-    return orders;
   }
 
   Future<List<Map<String, dynamic>>> _loadOrderMaps({int? waiterId}) async {
@@ -221,16 +178,9 @@ class SessionRepository {
 
     try {
       final all = await _remote.fetchOrdersList();
-      final merged = OrderMapper.mergeOrderMapLists(scoped, all);
-      if (merged.isNotEmpty) return merged;
-    } catch (_) {}
-
-    if (scoped.isNotEmpty) return scoped;
-
-    try {
-      return await _remote.fetchOpenOrdersList();
+      return OrderMapper.mergeOrderMapLists(scoped, all);
     } catch (_) {
-      return const [];
+      return scoped;
     }
   }
 

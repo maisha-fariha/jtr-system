@@ -290,110 +290,134 @@ class _ProductLine extends GetView<TableDetailsController> {
 
   @override
   Widget build(BuildContext context) {
-    return Slidable(
-      key: ValueKey('$orderNumber-$productIndex-${product.name}'),
-      groupTag: groupTag,
-      endActionPane: ActionPane(
-        motion: const ScrollMotion(),
-        extentRatio: 0.52,
-        children: [
-          _ProductSlidableAction(
-            icon: Icons.card_giftcard_outlined,
-            backgroundColor: AppTheme.lightButton,
-            iconColor: AppTheme.primary,
-            onPressed: () => controller.offerProduct(productIndex),
-          ),
-          _ProductSlidableAction(
-            icon: Icons.remove,
-            onPressed: () => controller.decrementProduct(productIndex),
-          ),
-          _ProductSlidableAction(
-            icon: Icons.add,
-            onPressed: () => controller.incrementProduct(productIndex),
-          ),
-          _ProductSlidableAction(
-            icon: Icons.edit_outlined,
-            onPressed: () => _showMessageDialog(context),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Obx(() {
+      final isSelected = controller.isOrderLineSelected(product);
+
+      return Slidable(
+        key: ValueKey('$orderNumber-$productIndex-${product.name}'),
+        groupTag: groupTag,
+        endActionPane: ActionPane(
+          motion: const ScrollMotion(),
+          extentRatio: 0.52,
           children: [
-            Expanded(
-              flex: 1,
-              child: Text(
-                product.quantity,
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.primary,
-                ),
-              ),
+            _ProductSlidableAction(
+              icon: Icons.card_giftcard_outlined,
+              backgroundColor: AppTheme.lightButton,
+              iconColor: AppTheme.primary,
+              onPressed: () => controller.offerProduct(productIndex),
             ),
-            Expanded(
-              flex: 5,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    style: TextStyle(
-                      fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.darkText,
-                      letterSpacing: 0.2,
-                    ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (product.message != null &&
-                      product.message!.isNotEmpty) ...[
-                    JtrResponsive.getResponsiveSpacing(context, 2),
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            product.message!,
-                            style: TextStyle(
-                              fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                              fontWeight: FontWeight.w600,
-                              color: AppTheme.primary,
-                              letterSpacing: 0.3,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Icon(
-                          Icons.keyboard_arrow_down,
-                          size: JtrResponsive.getResponsiveSize(context, 14),
-                          color: AppTheme.primary,
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
+            _ProductSlidableAction(
+              icon: Icons.remove,
+              onPressed: () => controller.decrementProduct(productIndex),
             ),
-            Expanded(
-              flex: 2,
-              child: Text(
-                product.price,
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.darkText,
-                ),
-              ),
+            _ProductSlidableAction(
+              icon: Icons.add,
+              onPressed: () => controller.incrementProduct(productIndex),
+            ),
+            _ProductSlidableAction(
+              icon: Icons.edit_outlined,
+              onPressed: () => _showMessageDialog(context),
             ),
           ],
         ),
-      ),
-    );
+        child: Material(
+          color: isSelected
+              ? AppTheme.primary.withValues(alpha: 0.08)
+              : Colors.transparent,
+          child: InkWell(
+            onTap: () => controller.selectOrderLine(product),
+            child: Padding(
+              padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 1,
+                    child: Text(
+                      product.quantity,
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 14),
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          product.name,
+                          style: TextStyle(
+                            fontSize:
+                                JtrResponsive.getResponsiveFontSize(context, 13),
+                            fontWeight: FontWeight.w600,
+                            color: isSelected
+                                ? AppTheme.primary
+                                : AppTheme.darkText,
+                            letterSpacing: 0.2,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (product.message != null &&
+                            product.message!.isNotEmpty) ...[
+                          JtrResponsive.getResponsiveSpacing(context, 2),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  product.message!,
+                                  style: TextStyle(
+                                    fontSize:
+                                        JtrResponsive.getResponsiveFontSize(
+                                      context,
+                                      11,
+                                    ),
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.primary,
+                                    letterSpacing: 0.3,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Icon(
+                                Icons.keyboard_arrow_down,
+                                size: JtrResponsive.getResponsiveSize(
+                                  context,
+                                  14,
+                                ),
+                                color: AppTheme.primary,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      product.price,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 13),
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.darkText,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    });
   }
 
   void _showMessageDialog(BuildContext context) {
@@ -534,7 +558,6 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.keyboard_return_outlined,
     Icons.grid_view,
     Icons.arrow_back,
-    Icons.dialpad_outlined,
     Icons.restaurant_menu,
     Icons.message_outlined,
     Icons.receipt_long_outlined,
@@ -559,7 +582,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     final controller = Get.find<TableDetailsController>();
     final isLarge = JtrResponsive.isLargeDevice(context);
 
-    Widget buildIconRow() {
+    Widget buildIconRow(BuildContext toolbarContext) {
       return Obx(() {
         final expanded = controller.isBottomPanelExpanded.value;
 
@@ -572,7 +595,8 @@ class _ActionToolbarState extends State<_ActionToolbar> {
                 icon: icon,
                 isActive: controller.isToolbarIconActive(icon),
                 isEnabled: controller.isToolbarIconEnabled(icon),
-                onPressed: () => controller.onToolbarIconTap(icon),
+                onPressed: () =>
+                    controller.onToolbarIconTap(icon, context: toolbarContext),
                 compact: isLarge,
               ),
             _ToolbarIconButton(
@@ -606,7 +630,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
                 context,
                 horizontal: 12,
               ),
-              child: buildIconRow(),
+              child: buildIconRow(context),
             )
           : Scrollbar(
               controller: _scrollController,
@@ -620,7 +644,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
                   context,
                   horizontal: 12,
                 ),
-                child: buildIconRow(),
+                child: buildIconRow(context),
               ),
             ),
     );
@@ -650,17 +674,26 @@ class _ToolbarIconButton extends StatelessWidget {
             ? AppTheme.primary
             : AppTheme.textSecondary;
 
-    return IconButton(
-      onPressed: isEnabled ? onPressed : null,
-      icon: Icon(
-        icon,
-        size: _toolbarIconSize(context),
-        color: color,
+    final tapSize = JtrResponsive.getResponsiveSize(context, 44);
+
+    return SizedBox(
+      width: tapSize,
+      height: tapSize,
+      child: IconButton(
+        onPressed: isEnabled ? onPressed : null,
+        icon: Icon(
+          icon,
+          size: _toolbarIconSize(context),
+          color: color,
+        ),
+        padding: compact
+            ? EdgeInsets.zero
+            : JtrResponsive.getResponsivePadding(context, horizontal: 4),
+        constraints: BoxConstraints(
+          minWidth: tapSize,
+          minHeight: tapSize,
+        ),
       ),
-      padding: compact
-          ? EdgeInsets.zero
-          : JtrResponsive.getResponsivePadding(context, horizontal: 10),
-      constraints: const BoxConstraints(),
     );
   }
 }

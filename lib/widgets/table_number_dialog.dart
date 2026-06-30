@@ -27,17 +27,25 @@ class TableNumberDialog extends StatefulWidget {
     bool integerOnly = false,
     int? maxDigits,
     ValueChanged<String>? onConfirm,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      TableNumberDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: AppTheme.dialogBarrier,
+      builder: (_) => TableNumberDialog(
         title: title,
         initialValue: initialValue,
         integerOnly: integerOnly,
         maxDigits: maxDigits,
         onConfirm: onConfirm,
       ),
-      barrierDismissible: false,
-      barrierColor: AppTheme.dialogBarrier,
     );
   }
 

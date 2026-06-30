@@ -8,6 +8,7 @@ import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../widgets/api_debug_dialog.dart';
@@ -162,6 +163,16 @@ class TableDetailsController extends GetxController {
     return _catalogRepository.productsForCategory(products, category.id);
   }
 
+  CatalogProductModel? catalogProductByName(String orderLineName) {
+    final normalized = orderLineName.trim().toUpperCase();
+    if (normalized.isEmpty) return null;
+
+    for (final product in products) {
+      if (product.name.trim().toUpperCase() == normalized) return product;
+    }
+    return null;
+  }
+
   CatalogProductModel? get selectedCatalogProduct {
     final id = selectedProductId.value;
     if (id == null) return null;
@@ -185,6 +196,29 @@ class TableDetailsController extends GetxController {
 
   bool isProductSelected(CatalogProductModel product) =>
       selectedProductId.value == product.id;
+
+  bool isOrderLineSelected(OrderProduct line) {
+    final catalog = catalogProductByName(line.name);
+    return catalog != null && selectedProductId.value == catalog.id;
+  }
+
+  void selectOrderLine(OrderProduct line) {
+    final catalog = catalogProductByName(line.name);
+    if (catalog == null) {
+      Get.snackbar(
+        'Article non sélectionnable',
+        'Cet article ne peut pas être modifié via le clavier.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 2),
+      );
+      return;
+    }
+    selectedProductId.value = catalog.id;
+  }
+
+  void selectCatalogProduct(CatalogProductModel product) {
+    selectedProductId.value = product.id;
+  }
 
   void selectCategory(int index) {
     if (index < 0 || index >= currentLevelCategories.length) return;
@@ -254,37 +288,44 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  void showQuantityDialog() {
+  void showQuantityDialog({required BuildContext context}) {
     final product = selectedCatalogProduct;
-    final currentQty =
-        product != null ? productQuantityInOrder(product) : 0;
+    if (product == null) {
+      isBottomPanelExpanded.value = true;
+      showPaymentOptions.value = false;
+      Get.snackbar(
+        'Sélectionnez un produit',
+        'Touchez un article dans la commande ou la grille avant le clavier.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 3),
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    if (product.isComposed) {
+      Get.snackbar(
+        'Produit composé',
+        'Ce produit se configure via le sélecteur de menu.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 2),
+      );
+      return;
+    }
+
+    final currentQty = productQuantityInOrder(product);
 
     TableNumberDialog.show(
-      title: product?.name.toUpperCase() ?? 'QUANTITÉ',
+      context: context,
+      title: product.name.toUpperCase(),
       initialValue: currentQty > 0 ? '$currentQty' : null,
+      integerOnly: true,
+      maxDigits: 3,
       onConfirm: (value) {
         final selected = selectedCatalogProduct;
-        if (selected == null) {
-          Get.snackbar(
-            'Sélectionnez un produit',
-            'Touchez un article dans la grille, puis validez la quantité.',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 2),
-          );
-          return;
-        }
+        if (selected == null) return;
 
-        if (selected.isComposed) {
-          Get.snackbar(
-            'Produit composé',
-            'Ce produit se configure via le sélecteur de menu.',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 2),
-          );
-          return;
-        }
-
-        final parsed = int.tryParse(value.trim().split('.').first);
+        final parsed = int.tryParse(value.trim());
         if (parsed == null || parsed < 0) return;
 
         unawaited(_setProductQuantity(selected, parsed));
@@ -292,7 +333,7 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  void onToolbarIconTap(IconData icon) {
+  void onToolbarIconTap(IconData icon, {required BuildContext context}) {
     if (icon == Icons.home_outlined) {
       Get.offAllNamed(AppRoutes.session);
       return;
@@ -303,8 +344,11 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.dialpad_outlined) {
-      showQuantityDialog();
+    if (icon == Icons.grid_view) {
+      showPaymentOptions.value = false;
+      isBottomPanelExpanded.value = true;
+      activeToolbarIcon.value = Icons.grid_view;
+      showQuantityDialog(context: context);
       return;
     }
 
@@ -313,7 +357,7 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.grid_view || icon == Icons.restaurant) {
+    if (icon == Icons.restaurant) {
       showPaymentOptions.value = false;
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = icon;
@@ -352,7 +396,10 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    final wasAlreadySelected = selectedProductId.value == product.id;
     selectedProductId.value = product.id;
+
+    if (wasAlreadySelected) return;
 
     isAddingProduct.value = true;
     try {

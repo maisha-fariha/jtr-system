@@ -160,6 +160,25 @@ class OrderMapper {
     return status != 'closed' && status != 'cancelled';
   }
 
+  /// Union of order maps by id (fresh wins on duplicate keys).
+  static List<Map<String, dynamic>> mergeOrderMapLists(
+    List<Map<String, dynamic>> cached,
+    List<Map<String, dynamic>> fresh,
+  ) {
+    final byId = <int, Map<String, dynamic>>{};
+    for (final order in fresh) {
+      final id = orderIdFromDetail(order);
+      if (id > 0) byId[id] = order;
+    }
+    for (final order in cached) {
+      final id = orderIdFromDetail(order);
+      if (id > 0 && !byId.containsKey(id)) {
+        byId[id] = order;
+      }
+    }
+    return byId.values.toList(growable: false);
+  }
+
   /// Merges API orders with tables that have an open session but no order yet.
   static List<SessionOrder> mergeOrdersWithOpenTableSessions(
     List<SessionOrder> orders,

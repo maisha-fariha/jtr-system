@@ -263,13 +263,21 @@ class TableDetailsController extends GetxController {
   }
 
   /// Category hierarchy first; only leaves the table when already at root.
-  void navigateBackOrExitTable() {
+  Future<void> navigateBackOrExitTable() async {
     if (canNavigateCategoryBack) {
       navigateCategoryBack();
       activeToolbarIcon.value = Icons.grid_view;
       return;
     }
 
+    final orderNumber = this.orderNumber;
+    final orderId = this.orderId;
+    if (Get.isRegistered<SessionController>()) {
+      await Get.find<SessionController>().refreshOrderList(
+        ensureOrderNumber: orderNumber,
+        ensureOrderId: orderId,
+      );
+    }
     Get.back();
   }
 
@@ -385,7 +393,7 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.keyboard_return_outlined) {
-      navigateBackOrExitTable();
+      unawaited(navigateBackOrExitTable());
       return;
     }
 

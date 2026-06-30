@@ -13,7 +13,6 @@ import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
-import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -131,34 +130,81 @@ class SessionController extends GetxController {
     await Get.toNamed(AppRoutes.statistics);
   }
 
-  Future<void> loadSessionOrders({bool forceRefresh = false}) async {
-    isLoadingOrders.value = true;
+  Future<void> loadSessionOrders({
+    bool forceRefresh = false,
+    Iterable<SessionOrder>? retainOrders,
+    bool showLoading = true,
+    bool enrichDetails = true,
+  }) async {
+    if (showLoading) {
+      isLoadingOrders.value = true;
+    }
     ordersError.value = null;
 
     try {
-      if (forceRefresh) {
+      if (forceRefresh && showLoading) {
         await loadActiveDay(forceRefresh: true);
       }
-      final loaded = await _mergeThinOrderRows(
-        await _sessionRepository.getSessionOrders(
-          forceRefresh: forceRefresh,
-          waiterId: _currentWaiterId,
-        ),
+      final summaries = await _sessionRepository.getSessionOrders(
+        forceRefresh: forceRefresh,
+        waiterId: _currentWaiterId,
       );
+      final loaded = enrichDetails
+          ? await _mergeThinOrderRows(summaries)
+          : summaries;
       orders.assignAll(loaded);
+      if (retainOrders != null) {
+        for (final order in retainOrders) {
+          _upsertOrderInList(order);
+        }
+      }
+      orders.refresh();
     } on ApiException catch (e) {
       ordersError.value = e.message;
-      if (orders.isEmpty) {
+      if (orders.isEmpty && showLoading) {
         _showSnack('Erreur', e.message);
       }
     } catch (_) {
       ordersError.value = 'Impossible de charger les commandes.';
-      if (orders.isEmpty) {
+      if (orders.isEmpty && showLoading) {
         _showSnack('Erreur', ordersError.value!);
       }
     } finally {
-      isLoadingOrders.value = false;
+      if (showLoading) {
+        isLoadingOrders.value = false;
+      }
     }
+  }
+
+  /// Reloads open orders for the session screen after create/edit on a table.
+  Future<void> refreshOrderList({
+    SessionOrder? pinOrder,
+    String? ensureOrderNumber,
+    int? ensureOrderId,
+    bool background = false,
+  }) async {
+    SessionOrder? pinned = pinOrder;
+
+    if (pinned == null && ensureOrderId != null && ensureOrderId > 0) {
+      try {
+        final detail = await _orderRepository.getOrderDetail(ensureOrderId);
+        pinned = detail.copyWith(
+          number: ensureOrderNumber ?? detail.number,
+        );
+      } catch (_) {
+        pinned = findOrder(
+          orderNumber: ensureOrderNumber,
+          orderId: ensureOrderId,
+        );
+      }
+    }
+
+    await loadSessionOrders(
+      forceRefresh: true,
+      retainOrders: pinned != null ? [pinned] : null,
+      showLoading: !background,
+      enrichDetails: !background,
+    );
   }
 
   Future<List<SessionOrder>> _mergeThinOrderRows(
@@ -195,6 +241,7 @@ class SessionController extends GetxController {
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
       orders[idx] = order;
+      orders.refresh();
       return;
     }
 
@@ -203,10 +250,12 @@ class SessionController extends GetxController {
     );
     if (byNumber >= 0) {
       orders[byNumber] = order;
+      orders.refresh();
       return;
     }
 
     orders.insert(0, order);
+    orders.refresh();
   }
 
   void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
@@ -377,17 +426,19 @@ class SessionController extends GetxController {
     final guests = int.tryParse(couverts.trim()) ?? 1;
     final waiterId = _currentWaiterId;
     if (waiterId <= 0) {
-      _showCreateOrderError('Utilisateur non connecté. Veuillez vous reconnecter.');
+      _showSnack('Erreur', 'Utilisateur non connecté. Veuillez vous reconnecter.');
       return;
     }
 
     isCreatingOrder.value = true;
+    SessionOrder? created;
+    var attemptedCreate = false;
+
     try {
-      await loadActiveDay(forceRefresh: true);
-      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final tables = await _sessionRepository.getTablesList();
       final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
       if (target == null) {
-        _showCreateOrderError('Table $tableNumber introuvable.');
+        _showSnack('Erreur', 'Table $tableNumber introuvable.');
         return;
       }
       if (OrderMapper.isTableInUse(tables, tableNumber)) {
@@ -407,53 +458,36 @@ class SessionController extends GetxController {
         table: target,
       );
 
-      final result = await _orderRepository.createTableOrder(
-        waiterId: waiterId,
-        tableNumber: tableNumber,
-        numberOfGuests: guests,
-        tables: tables,
-        salesZoneId: salesZoneId,
-      );
-      final created = result.order;
-      final orderToShow = created;
-
-      await loadSessionOrders(forceRefresh: true);
-      _upsertOrderInList(orderToShow);
-
-      openTableDetails(orderToShow.number, orderId: created.id);
-      unawaited(
-        loadOrderDetails(
-          orderToShow.number,
-          orderId: created.id,
-          forceRefresh: true,
-        ),
-      );
-    } on ApiException catch (e) {
-      _showCreateOrderError(e.message, apiLog: _orderRepository.lastCreateOrderLog);
-    } catch (e) {
-      _showCreateOrderError(
-        'Impossible de créer la commande.',
-        apiLog: _orderRepository.lastCreateOrderLog,
-        detail: '$e',
-      );
+      attemptedCreate = true;
+      try {
+        final result = await _orderRepository.createTableOrder(
+          waiterId: waiterId,
+          tableNumber: tableNumber,
+          numberOfGuests: guests,
+          tables: tables,
+          salesZoneId: salesZoneId,
+        );
+        created = result.order;
+      } on ApiException {
+        final recovered = await _orderRepository.tryRecoverCreatedOrder(
+          tableNumber: tableNumber,
+        );
+        created = recovered?.order;
+      }
+    } catch (_) {
+      // Background refresh may still surface the order if the backend created it.
     } finally {
       isCreatingOrder.value = false;
+      if (attemptedCreate) {
+        if (created != null) {
+          _upsertOrderInList(created);
+          openTableDetails(created.number, orderId: created.id);
+        }
+        unawaited(
+          refreshOrderList(pinOrder: created, background: true),
+        );
+      }
     }
-  }
-
-  void _showCreateOrderError(
-    String message, {
-    String? apiLog,
-    String? detail,
-  }) {
-    final log = apiLog?.trim();
-    if (log != null && log.isNotEmpty) {
-      ApiDebugDialog.show(
-        title: 'Erreur création commande — API',
-        body: detail == null ? '$log\n\nMESSAGE: $message' : '$log\n\nMESSAGE: $message\n\n$detail',
-      );
-    }
-    _showSnack('Erreur', message);
   }
 
   bool isTableOccupied(String tableNumber) {

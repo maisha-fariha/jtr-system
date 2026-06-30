@@ -22,6 +22,7 @@ class ApiEndpoints {
   static String dayStatistics(int dayId) => '/api/days/$dayId/statistics';
 
   static const categoriesLeafOnly = '/api/categories/leaf-only';
+  static const categoriesTree = '/api/categories/tree';
   static const productsList = '/api/products/list';
   static String productById(int id) => '/api/products/$id';
   static const menuCategories = '/api/menu-categories';

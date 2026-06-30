@@ -3,6 +3,7 @@ import '../../services/connectivity_service.dart';
 import '../datasources/catalog_local_datasource.dart';
 import '../datasources/catalog_remote_datasource.dart';
 import '../models/catalog/catalog_product_model.dart';
+import '../models/catalog/category_tree_node.dart';
 import '../models/catalog/leaf_category_model.dart';
 
 class CatalogRepository {
@@ -40,6 +41,45 @@ class CatalogRepository {
     final categories = await _remote.fetchLeafCategories();
     await _local.saveLeafCategories(categories);
     return categories;
+  }
+
+  Future<List<CategoryTreeNode>> getCategoryTree({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh) {
+      final cachedLeaves = _local.readLeafCategories();
+      if (cachedLeaves != null && cachedLeaves.isNotEmpty) {
+        final cachedTree = CategoryTreeNode.fromLeafCategories(cachedLeaves);
+        if (cachedTree.isNotEmpty) {
+          _refreshCategoryTreeInBackground();
+          return cachedTree;
+        }
+      }
+    }
+
+    if (!await _connectivity.isOnline) {
+      final cachedLeaves = _local.readLeafCategories();
+      if (cachedLeaves != null && cachedLeaves.isNotEmpty) {
+        return CategoryTreeNode.fromLeafCategories(cachedLeaves);
+      }
+      throw ApiException(
+        message: 'Catégories indisponibles hors ligne.',
+      );
+    }
+
+    try {
+      return await _remote.fetchCategoryTree();
+    } on ApiException {
+      final leaves = await getLeafCategories(forceRefresh: forceRefresh);
+      return CategoryTreeNode.fromLeafCategories(leaves);
+    }
+  }
+
+  Future<void> _refreshCategoryTreeInBackground() async {
+    try {
+      if (!await _connectivity.isOnline) return;
+      await _remote.fetchCategoryTree();
+    } catch (_) {}
   }
 
   Future<void> _refreshLeafCategoriesInBackground() async {

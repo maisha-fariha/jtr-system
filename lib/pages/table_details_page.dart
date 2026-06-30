@@ -2,22 +2,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
+import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
+import '../widgets/quantity_keypad_panel.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: SafeArea(
-        child: Obx(() {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        controller.navigateBackOrExitTable();
+      },
+      child: Scaffold(
+        backgroundColor: AppTheme.background,
+        body: SafeArea(
+          child: Obx(() {
           if (!Get.isRegistered<SessionController>()) {
             return const SizedBox.shrink();
           }
@@ -45,6 +53,8 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
+                  final showKeypad = controller.showQuantityKeypad.value;
+                  final qtyInput = controller.quantityInput.value;
                   SessionOrder? currentOrder = session.findOrder(
                     orderNumber: controller.orderNumber,
                     orderId: controller.orderId,
@@ -55,6 +65,12 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                     children: [
                       Expanded(child: _OrderSummary(order: currentOrder)),
                       const _ActionToolbar(),
+                      if (showKeypad)
+                        QuantityKeypadPanel(
+                          value: qtyInput,
+                          onChanged: (value) => controller.quantityInput.value = value,
+                          onClose: controller.toggleQuantityKeypad,
+                        ),
                       if (showPayment)
                         const _PaymentButtons()
                       else if (expanded) ...[
@@ -69,6 +85,7 @@ class TableDetailsPage extends GetView<TableDetailsController> {
           );
         }),
       ),
+    ),
     );
   }
 }
@@ -525,8 +542,8 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.home_outlined,
     Icons.keyboard_return_outlined,
     Icons.grid_view,
-    Icons.arrow_forward,
-    Icons.restaurant,
+    Icons.arrow_back,
+    Icons.dialpad_outlined,
     Icons.restaurant_menu,
     Icons.message_outlined,
     Icons.receipt_long_outlined,
@@ -563,6 +580,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
               _ToolbarIconButton(
                 icon: icon,
                 isActive: controller.isToolbarIconActive(icon),
+                isEnabled: controller.isToolbarIconEnabled(icon),
                 onPressed: () => controller.onToolbarIconTap(icon),
                 compact: isLarge,
               ),
@@ -623,22 +641,30 @@ class _ToolbarIconButton extends StatelessWidget {
     required this.icon,
     required this.isActive,
     required this.onPressed,
+    this.isEnabled = true,
     this.compact = false,
   });
 
   final IconData icon;
   final bool isActive;
+  final bool isEnabled;
   final VoidCallback onPressed;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final color = !isEnabled
+        ? AppTheme.textSecondary.withValues(alpha: 0.25)
+        : isActive
+            ? AppTheme.primary
+            : AppTheme.textSecondary;
+
     return IconButton(
-      onPressed: onPressed,
+      onPressed: isEnabled ? onPressed : null,
       icon: Icon(
         icon,
         size: _toolbarIconSize(context),
-        color: isActive ? AppTheme.primary : AppTheme.textSecondary,
+        color: color,
       ),
       padding: compact
           ? EdgeInsets.zero
@@ -737,14 +763,14 @@ class _CategoryTabs extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (controller.isCatalogLoading.value && controller.categories.isEmpty) {
+      if (controller.isCatalogLoading.value && controller.categoryRoots.isEmpty) {
         return const SizedBox(
           height: 44,
           child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
         );
       }
 
-      if (controller.categories.isEmpty) {
+      if (controller.categoryRoots.isEmpty) {
         return SizedBox(
           height: 44,
           child: Center(
@@ -756,6 +782,7 @@ class _CategoryTabs extends GetView<TableDetailsController> {
         );
       }
 
+      final levelCategories = controller.currentLevelCategories;
       final selectedIndex = controller.selectedCategoryIndex.value;
 
       return SizedBox(
@@ -763,9 +790,9 @@ class _CategoryTabs extends GetView<TableDetailsController> {
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
           padding: JtrResponsive.getResponsivePadding(context, horizontal: 16),
-          itemCount: controller.categories.length,
+          itemCount: levelCategories.length,
           itemBuilder: (context, index) {
-            final category = controller.categories[index];
+            final category = levelCategories[index];
             final isSelected = selectedIndex == index;
 
             return GestureDetector(
@@ -814,6 +841,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
       }
 
       if (controller.catalogError.value != null &&
+          controller.categoryRoots.isEmpty &&
           controller.products.isEmpty) {
         return Center(
           child: Padding(
@@ -824,6 +852,13 @@ class _MenuGrid extends GetView<TableDetailsController> {
               style: TextStyle(color: AppTheme.textSecondary),
             ),
           ),
+        );
+      }
+
+      if (controller.showingChildCategories) {
+        return _CategoryGrid(
+          categories: controller.childCategoriesForGrid,
+          onCategoryTap: controller.openChildCategory,
         );
       }
 
@@ -892,11 +927,11 @@ class _MenuGrid extends GetView<TableDetailsController> {
                       JtrResponsive.getResponsiveRadius(context, 10);
 
                   return GestureDetector(
-                    onTap: isAdding || isInOrder
+                    onTap: isAdding
                         ? null
                         : () => controller.onProductTap(product),
                     child: Opacity(
-                      opacity: isInOrder ? 0.45 : 1,
+                      opacity: isAdding ? 0.55 : 1,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
                         decoration: BoxDecoration(
@@ -922,7 +957,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                   fontSize: _categoryPartFontSize(context, 11),
                                   fontWeight: FontWeight.w600,
                                   color: AppTheme.darkText.withValues(
-                                    alpha: isInOrder ? 0.5 : 0.85,
+                                    alpha: isInOrder ? 0.7 : 0.85,
                                   ),
                                   height: 1.25,
                                 ),
@@ -1005,6 +1040,118 @@ class _MenuGrid extends GetView<TableDetailsController> {
         ],
       );
     });
+  }
+}
+
+class _CategoryGrid extends StatelessWidget {
+  const _CategoryGrid({
+    required this.categories,
+    required this.onCategoryTap,
+  });
+
+  final List<CategoryTreeNode> categories;
+  final ValueChanged<CategoryTreeNode> onCategoryTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final isCompact = JtrResponsive.isCompactSquare(context);
+    final isLarge = JtrResponsive.isLargeDevice(context);
+    final crossAxisCount = JtrResponsive.gridColumns(
+      context,
+      small: 3,
+      medium: 4,
+      large: 4,
+    );
+    final gridSpacing = JtrResponsive.getResponsiveSize(context, 10);
+    final gridPadding = JtrResponsive.getResponsivePadding(
+      context,
+      left: 16,
+      right: 16,
+      top: 12,
+      bottom: 16,
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final fixedRowCount = isCompact ? 3 : (isLarge ? 4 : null);
+        var childAspectRatio = 1.05;
+
+        if (fixedRowCount != null) {
+          final availableHeight = constraints.maxHeight -
+              gridPadding.vertical -
+              gridSpacing * (fixedRowCount - 1);
+          final availableWidth = constraints.maxWidth -
+              gridPadding.horizontal -
+              gridSpacing * (crossAxisCount - 1);
+          final cellWidth = availableWidth / crossAxisCount;
+          final cellHeight = availableHeight / fixedRowCount;
+          if (cellHeight > 0) {
+            childAspectRatio = cellWidth / cellHeight;
+          }
+        }
+
+        return GridView.builder(
+          padding: gridPadding,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            mainAxisSpacing: gridSpacing,
+            crossAxisSpacing: gridSpacing,
+            childAspectRatio: childAspectRatio,
+          ),
+          itemCount: categories.length,
+          itemBuilder: (context, index) {
+            final category = categories[index];
+            final itemRadius = JtrResponsive.getResponsiveRadius(context, 10);
+
+            return GestureDetector(
+              onTap: () => onCategoryTap(category),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                decoration: BoxDecoration(
+                  color: _menuGridItemBackground(false),
+                  borderRadius: BorderRadius.circular(itemRadius),
+                  border: _menuGridItemBorder(false),
+                  boxShadow: _menuGridItemShadow(false),
+                ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        all: 10,
+                      ),
+                      child: Text(
+                        category.name,
+                        textAlign: TextAlign.center,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: _categoryPartFontSize(context, 11),
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.darkText.withValues(alpha: 0.85),
+                          height: 1.25,
+                        ),
+                      ),
+                    ),
+                    if (category.hasChildren)
+                      Positioned(
+                        top: JtrResponsive.getResponsiveHeight(context, 6),
+                        right: JtrResponsive.getResponsiveWidth(context, 6),
+                        child: Icon(
+                          Icons.chevron_right,
+                          size: JtrResponsive.getResponsiveSize(context, 16),
+                          color: AppTheme.primary.withValues(alpha: 0.8),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 }
 

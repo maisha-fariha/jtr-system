@@ -14,7 +14,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppBinding().dependencies();
   await Get.find<HiveStorage>().init();
-  await Get.find<AuthRepository>().clearSessionOnAppStart();
+  await Get.find<AuthRepository>().restoreSessionOnAppStart();
   runApp(const JtrSystemApp());
 }
 

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -94,7 +95,14 @@ class HomePage extends StatelessWidget {
                       width: double.infinity,
                       height: JtrResponsive.getResponsiveHeight(context, 56),
                       child: ElevatedButton(
-                        onPressed: () => Get.toNamed(AppRoutes.connect),
+                        onPressed: () {
+                          final auth = Get.find<AuthRepository>();
+                          if (auth.isAuthenticated) {
+                            Get.offNamed(AppRoutes.session);
+                            return;
+                          }
+                          Get.toNamed(AppRoutes.connect);
+                        },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppTheme.primary,
                           foregroundColor: Colors.white,

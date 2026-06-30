@@ -121,11 +121,18 @@ class SessionRepository {
     } catch (_) {}
   }
 
+  Future<void> clearOpenOrdersCache() async {
+    await _local.clearOpenOrdersList();
+  }
+
   /// Open orders for the session screen — primary [GET /api/orders], not tables.
-  Future<List<SessionOrder>> getSessionOrders({bool forceRefresh = false}) async {
+  Future<List<SessionOrder>> getSessionOrders({
+    bool forceRefresh = false,
+    int? waiterId,
+  }) async {
     if (!forceRefresh && _local.readOpenOrdersList().isNotEmpty) {
-      _refreshSessionOrdersInBackground();
-      return _sessionOrdersFromCache();
+      _refreshSessionOrdersInBackground(waiterId: waiterId);
+      return _sessionOrdersFromCache(waiterId: waiterId);
     }
 
     if (!await _connectivity.isOnline) {
@@ -135,26 +142,39 @@ class SessionRepository {
           message: 'Liste des commandes indisponible hors ligne.',
         );
       }
-      return _sessionOrdersFromCache();
+      return _sessionOrdersFromCache(waiterId: waiterId);
     }
 
-    return _fetchSessionOrdersFromNetwork();
+    return _fetchSessionOrdersFromNetwork(waiterId: waiterId);
   }
 
-  List<SessionOrder> _sessionOrdersFromCache() {
+  List<SessionOrder> _sessionOrdersFromCache({int? waiterId}) {
     return OrderMapper.sessionOrdersFromOrdersList(
       _local.readOpenOrdersList(),
+      waiterId: waiterId,
     );
   }
 
-  Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork() async {
-    final orderMaps = await _loadOrderMaps();
+  Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
+    int? waiterId,
+  }) async {
+    final orderMaps = await _loadOrderMaps(waiterId: waiterId);
 
     await _local.saveOpenOrdersList(orderMaps);
-    return OrderMapper.sessionOrdersFromOrdersList(orderMaps);
+    return OrderMapper.sessionOrdersFromOrdersList(
+      orderMaps,
+      waiterId: waiterId,
+    );
   }
 
-  Future<List<Map<String, dynamic>>> _loadOrderMaps() async {
+  Future<List<Map<String, dynamic>>> _loadOrderMaps({int? waiterId}) async {
+    if (waiterId != null && waiterId > 0) {
+      try {
+        final scoped = await _remote.fetchOrdersList(waiterId: waiterId);
+        if (scoped.isNotEmpty) return scoped;
+      } catch (_) {}
+    }
+
     try {
       final orders = await _remote.fetchOrdersList();
       if (orders.isNotEmpty) return orders;
@@ -167,10 +187,10 @@ class SessionRepository {
     }
   }
 
-  Future<void> _refreshSessionOrdersInBackground() async {
+  Future<void> _refreshSessionOrdersInBackground({int? waiterId}) async {
     try {
       if (!await _connectivity.isOnline) return;
-      await _fetchSessionOrdersFromNetwork();
+      await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
     } catch (_) {}
   }
 }

@@ -1,12 +1,16 @@
 import 'package:get/get.dart';
 
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
 
 class AppNavigation {
   AppNavigation._();
 
   static Future<void> logout() async {
+    if (Get.isRegistered<SessionRepository>()) {
+      await Get.find<SessionRepository>().clearOpenOrdersCache();
+    }
     if (Get.isRegistered<AuthRepository>()) {
       await Get.find<AuthRepository>().logout();
     }

@@ -16,11 +16,15 @@ class SessionOrder {
     required this.impressionColor,
     required this.total,
     required this.products,
+    this.waiterId,
     List<OrderDisplayEntry>? displayEntries,
   }) : displayEntries = displayEntries ?? _entriesFromProducts(products);
 
   /// API order id. `0` for locally created orders not yet synced.
   final int id;
+
+  /// Assigned waiter user id from the API, when known.
+  final int? waiterId;
   final String number;
   final Color numberColor;
   final String group;
@@ -54,6 +58,7 @@ class SessionOrder {
     Color? impressionColor,
     String? total,
     List<OrderProduct>? products,
+    int? waiterId,
     List<OrderDisplayEntry>? displayEntries,
   }) {
     final nextProducts = products ?? this.products;
@@ -68,6 +73,7 @@ class SessionOrder {
       impressionCount: impressionCount ?? this.impressionCount,
       impressionColor: impressionColor ?? this.impressionColor,
       total: total ?? this.total,
+      waiterId: waiterId ?? this.waiterId,
       products: nextProducts,
       displayEntries:
           displayEntries ?? (products != null ? null : this.displayEntries),

@@ -71,19 +71,26 @@ class SessionRemoteDataSource {
   }
 
   /// Open orders for the active business day only ([active_day]=true).
-  Future<List<Map<String, dynamic>>> fetchOrdersList() async {
+  Future<List<Map<String, dynamic>>> fetchOrdersList({
+    int? waiterId,
+  }) async {
     final allOrders = <Map<String, dynamic>>[];
     var page = 1;
     var lastPage = 1;
 
     while (page <= lastPage && page <= 25) {
+      final queryParameters = <String, dynamic>{
+        'active_day': true,
+        'per_page': 100,
+        'page': page,
+      };
+      if (waiterId != null && waiterId > 0) {
+        queryParameters['waiter_id'] = waiterId;
+      }
+
       final response = await _client.get<Map<String, dynamic>>(
         ApiEndpoints.orders,
-        queryParameters: {
-          'active_day': true,
-          'per_page': 100,
-          'page': page,
-        },
+        queryParameters: queryParameters,
       );
       final envelope = ApiEnvelope<dynamic>.fromJson(
         response.data!,
@@ -386,5 +393,9 @@ class SessionLocalDataSource {
     if (decoded is! List) return const [];
 
     return decoded.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> clearOpenOrdersList() async {
+    await _storage.delete(StorageConstants.openOrdersKey);
   }
 }

@@ -142,6 +142,7 @@ class SessionController extends GetxController {
       final loaded = await _mergeThinOrderRows(
         await _sessionRepository.getSessionOrders(
           forceRefresh: forceRefresh,
+          waiterId: _currentWaiterId,
         ),
       );
       orders.assignAll(loaded);

@@ -81,16 +81,57 @@ class OrderMapper {
     return displayNumbers.map((number) => byDisplay[number]!).toList();
   }
 
+  /// Resolves the waiter user id on an order or table-session payload.
+  static int? waiterIdFromOrderMap(Map<String, dynamic> data) {
+    final direct = data['waiter_id'];
+    if (direct is num) return direct.toInt();
+
+    final waiter = data['waiter'];
+    if (waiter is Map<String, dynamic>) {
+      final id = waiter['id'];
+      if (id is num) return id.toInt();
+    }
+
+    final session = data['session'];
+    if (session is Map<String, dynamic>) {
+      final sessionWaiterId = session['waiter_id'];
+      if (sessionWaiterId is num) return sessionWaiterId.toInt();
+
+      final sessionWaiter = session['waiter'];
+      if (sessionWaiter is Map<String, dynamic>) {
+        final id = sessionWaiter['id'];
+        if (id is num) return id.toInt();
+      }
+    }
+
+    return null;
+  }
+
+  static bool orderBelongsToWaiter(
+    Map<String, dynamic> order,
+    int waiterId,
+  ) {
+    if (waiterId <= 0) return true;
+    final orderWaiterId = waiterIdFromOrderMap(order);
+    return orderWaiterId != null && orderWaiterId == waiterId;
+  }
+
   /// Builds session rows from [GET /api/orders] (active-day open orders).
   static List<SessionOrder> sessionOrdersFromOrdersList(
-    List<Map<String, dynamic>> orders,
-  ) {
+    List<Map<String, dynamic>> orders, {
+    int? waiterId,
+  }) {
     final sortMillisById = <int, int>{};
     final rows = <SessionOrder>[];
     final seenOrderIds = <int>{};
 
     for (final order in orders) {
       if (!isActiveDayOpenOrder(order)) continue;
+      if (waiterId != null &&
+          waiterId > 0 &&
+          !orderBelongsToWaiter(order, waiterId)) {
+        continue;
+      }
 
       final orderId = orderIdFromDetail(order);
       if (orderId <= 0 || seenOrderIds.contains(orderId)) continue;
@@ -190,6 +231,7 @@ class OrderMapper {
       impressionColor: impressionColorFor(0),
       total: formatPrice('0'),
       products: const [],
+      waiterId: waiterIdFromOrderMap(sessionMap),
     );
   }
 
@@ -298,6 +340,7 @@ class OrderMapper {
       ),
       products: extractProducts(data),
       displayEntries: extractOrderDisplayEntries(data),
+      waiterId: waiterIdFromOrderMap(data),
     );
   }
 

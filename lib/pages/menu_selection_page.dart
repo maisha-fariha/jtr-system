@@ -510,9 +510,7 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
               right: 12,
               bottom: 12,
             ),
-            child: _SidebarToolbar(
-              onEditTap: controller.showMessagePicker,
-            ),
+            child: const _SidebarToolbar(compact: true),
           ),
         ],
       );
@@ -704,47 +702,57 @@ class _SelectionHeader extends GetView<MenuSelectionController> {
   }
 }
 
-class _SidebarToolbar extends StatelessWidget {
-  const _SidebarToolbar({this.onEditTap});
+class _SidebarToolbar extends GetView<MenuSelectionController> {
+  const _SidebarToolbar({this.compact = false});
 
-  final VoidCallback? onEditTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: JtrResponsive.getResponsivePadding(
         context,
-        left: 12,
-        top: 12,
-        right: 12,
-        bottom: 8,
+        left: compact ? 0 : 12,
+        top: compact ? 0 : 12,
+        right: compact ? 0 : 12,
+        bottom: compact ? 0 : 8,
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final gap = JtrResponsive.getResponsiveWidth(context, 8);
-          final preferredButtonSize =
-              JtrResponsive.getResponsiveSize(context, 40);
-          final maxButtonSize = (constraints.maxWidth - gap * 2) / 3;
-          final buttonSize = preferredButtonSize <= maxButtonSize
-              ? preferredButtonSize
-              : maxButtonSize;
+          final gap = JtrResponsive.getResponsiveWidth(context, 6);
+          final availableWidth = constraints.maxWidth - gap * 2;
+          final buttonSize = (availableWidth / 3).clamp(28.0, 40.0);
 
           return Row(
             children: [
-              _SidebarToolButton(
-                icon: Icons.restaurant,
-                size: buttonSize,
+              Expanded(
+                child: _SidebarToolButton(
+                  icon: Icons.restaurant,
+                  size: buttonSize,
+                  onTap: () {
+                    if (controller.hasActiveSelection) {
+                      controller.openActiveMenuChoices();
+                      return;
+                    }
+                    controller.requestNextCourse(context: context);
+                  },
+                ),
               ),
               SizedBox(width: gap),
-              _SidebarToolButton(
-                icon: Icons.edit_outlined,
-                onTap: onEditTap,
-                size: buttonSize,
+              Expanded(
+                child: _SidebarToolButton(
+                  icon: Icons.edit_outlined,
+                  onTap: () => controller.showMessagePicker(context: context),
+                  size: buttonSize,
+                ),
               ),
               SizedBox(width: gap),
-              _SidebarToolButton(
-                icon: Icons.keyboard_arrow_down,
-                size: buttonSize,
+              Expanded(
+                child: _SidebarToolButton(
+                  icon: Icons.keyboard_arrow_down,
+                  onTap: () => controller.requestNextCourse(context: context),
+                  size: buttonSize,
+                ),
               ),
             ],
           );
@@ -778,27 +786,33 @@ class _SidebarToolButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(buttonRadius),
-        child: Container(
-          width: buttonSize,
+        child: SizedBox(
           height: buttonSize,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(buttonRadius),
-            border: Border.all(color: AppTheme.cardBorder),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: JtrResponsive.getResponsiveSize(context, 4),
-                offset: Offset(
-                  0,
-                  JtrResponsive.getResponsiveHeight(context, 1),
-                ),
+          width: double.infinity,
+          child: Center(
+            child: Container(
+              width: buttonSize,
+              height: buttonSize,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(buttonRadius),
+                border: Border.all(color: AppTheme.cardBorder),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: JtrResponsive.getResponsiveSize(context, 4),
+                    offset: Offset(
+                      0,
+                      JtrResponsive.getResponsiveHeight(context, 1),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Icon(
-            icon,
-            size: iconSize,
-            color: AppTheme.textSecondary,
+              child: Icon(
+                icon,
+                size: iconSize,
+                color: AppTheme.textSecondary,
+              ),
+            ),
           ),
         ),
       ),

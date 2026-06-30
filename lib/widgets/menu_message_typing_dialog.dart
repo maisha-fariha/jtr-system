@@ -22,15 +22,23 @@ class MenuMessageTypingDialog extends StatefulWidget {
     required String itemLabel,
     String initialMessage = '',
     MenuMessageSaveCallback? onSave,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      MenuMessageTypingDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: AppTheme.dialogBarrier,
+      builder: (_) => MenuMessageTypingDialog(
         itemLabel: itemLabel,
         initialMessage: initialMessage,
         onSave: onSave,
       ),
-      barrierDismissible: false,
-      barrierColor: AppTheme.dialogBarrier,
     );
   }
 
@@ -55,7 +63,7 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
   }
 
   void _save() {
-    Get.back();
+    Navigator.of(context, rootNavigator: true).pop();
     widget.onSave?.call(_controller.text);
   }
 
@@ -103,7 +111,8 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                 child: Row(
                   children: [
                     _HeaderIconButton(
-                      onTap: () => Get.back(),
+                      onTap: () =>
+                          Navigator.of(context, rootNavigator: true).pop(),
                       child: Icon(
                         Icons.chevron_left,
                         color: AppTheme.darkText,

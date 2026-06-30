@@ -11,6 +11,7 @@ import '../models/menu_message_target.dart';
 import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
 import '../widgets/api_debug_dialog.dart';
+import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_choice_number_dialog.dart';
 import '../widgets/menu_message_picker_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
@@ -164,15 +165,29 @@ class MenuSelectionController extends GetxController {
     );
   }
 
-  void showMessagePicker() {
+  void openActiveMenuChoices() {
+    final selection = activeSelection.value;
+    if (selection == null) return;
+
+    for (final category in selection.menu.categories) {
+      if (!selection.isCourseComplete(category.number)) {
+        openCourseChoice(category.number);
+        return;
+      }
+    }
+
+    if (selection.menu.categories.isNotEmpty) {
+      openCourseChoice(selection.menu.categories.first.number);
+    }
+  }
+
+  void showMessagePicker({required BuildContext context}) {
     final selection = activeSelection.value;
     if (selection == null || selection.allSelectedItems.isEmpty) {
-      Get.snackbar(
-        'Aucun article',
-        'Sélectionnez d\'abord un menu et des articles.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
+      _showSnack(
+        context,
+        title: 'Aucun article',
+        message: 'Sélectionnez d\'abord un menu et des articles.',
       );
       return;
     }
@@ -187,16 +202,21 @@ class MenuSelectionController extends GetxController {
         .toList();
 
     MenuMessagePickerDialog.show(
+      context: context,
       items: targets,
-      onItemSelected: _showMessageTypingDialog,
+      onItemSelected: (target) => _showMessageTypingDialog(context, target),
     );
   }
 
-  void _showMessageTypingDialog(MenuMessageTarget target) {
+  void _showMessageTypingDialog(
+    BuildContext context,
+    MenuMessageTarget target,
+  ) {
     final selection = activeSelection.value;
     if (selection == null) return;
 
     MenuMessageTypingDialog.show(
+      context: context,
       itemLabel: target.label,
       initialMessage: selection.messageForCourse(target.courseNumber) ?? '',
       onSave: (message) => setItemMessage(
@@ -261,6 +281,87 @@ class MenuSelectionController extends GetxController {
 
   void dismissActiveSelection() {
     activeSelection.value = null;
+  }
+
+  Future<void> requestNextCourse({required BuildContext context}) async {
+    _resolveOrderIdFromSession();
+
+    final id = orderId;
+    if (id == null || id <= 0) {
+      _showSnack(
+        context,
+        title: 'Erreur',
+        message: 'Commande introuvable pour cette table.',
+      );
+      return;
+    }
+
+    AppConfirmDialog.show(
+      context: context,
+      title: 'Demander la suite',
+      message:
+          'Envoyer la demande À SUIVRE pour la table $orderNumber ?\n'
+          'La cuisine préparera la suite (ex. plats, desserts).',
+      onConfirm: () async {
+        isSaving.value = true;
+        try {
+          final updated = await _orderRepository.requestNextCourses(id);
+          if (Get.isRegistered<SessionController>()) {
+            Get.find<SessionController>().updateOrderRow(
+              updated.copyWith(number: orderNumber),
+            );
+          }
+          if (context.mounted) {
+            _showSnack(
+              context,
+              title: 'Suite demandée',
+              message: 'Demande envoyée pour la table $orderNumber.',
+            );
+          }
+        } on ApiException catch (error) {
+          ApiDebugDialog.show(
+            title: 'Erreur suite',
+            body: error.message,
+          );
+        } catch (_) {
+          if (context.mounted) {
+            _showSnack(
+              context,
+              title: 'Erreur',
+              message: 'Impossible d\'envoyer la demande de suite.',
+            );
+          }
+        } finally {
+          isSaving.value = false;
+        }
+      },
+    );
+  }
+
+  void _showSnack(
+    BuildContext context, {
+    required String title,
+    required String message,
+  }) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$title — $message'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    Get.snackbar(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 2),
+      margin: const EdgeInsets.all(16),
+    );
   }
 
   Future<void> finalizeActiveSelection() async {

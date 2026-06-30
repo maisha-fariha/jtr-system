@@ -354,7 +354,7 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.arrow_forward) {
-      requestNextCourse();
+      requestNextCourse(context: context);
       return;
     }
 
@@ -393,7 +393,7 @@ class TableDetailsController extends GetxController {
 
   bool isToolbarIconEnabled(IconData icon) => true;
 
-  Future<void> requestNextCourse() async {
+  Future<void> requestNextCourse({BuildContext? context}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
@@ -401,6 +401,7 @@ class TableDetailsController extends GetxController {
     }
 
     AppConfirmDialog.show(
+      context: context,
       title: 'Demander la suite',
       message:
           'Envoyer la demande À SUIVRE pour les articles de cette table ?\n'

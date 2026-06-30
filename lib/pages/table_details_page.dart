@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
+import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
@@ -228,15 +229,25 @@ class _OrderSummary extends StatelessWidget {
                 context,
                 horizontal: 20,
               ),
-              itemCount: order.products.length,
+              itemCount: order.displayEntries.length,
               separatorBuilder: (_, _) =>
                   JtrResponsive.getResponsiveSpacing(context, 4),
-              itemBuilder: (context, index) => _ProductLine(
-                orderNumber: order.number,
-                productIndex: index,
-                product: order.products[index],
-                groupTag: _productSlidableGroupTag,
-              ),
+              itemBuilder: (context, index) {
+                final entry = order.displayEntries[index];
+                if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+                  return const _SuivreSeparator();
+                }
+
+                final product = entry.product!;
+                final lineIndex = entry.lineIndex!;
+
+                return _ProductLine(
+                  orderNumber: order.number,
+                  productIndex: lineIndex,
+                  product: product,
+                  groupTag: _productSlidableGroupTag,
+                );
+              },
             ),
           ),
         ),
@@ -272,6 +283,37 @@ class _OrderSummary extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _SuivreSeparator extends StatelessWidget {
+  const _SuivreSeparator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            'À SUIVRE',
+            style: TextStyle(
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+              fontWeight: FontWeight.w700,
+              color: AppTheme.primary,
+              letterSpacing: 0.6,
+            ),
+          ),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+          Icon(
+            Icons.arrow_drop_down,
+            color: AppTheme.primary,
+            size: JtrResponsive.getResponsiveSize(context, 20),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -506,7 +548,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.home_outlined,
     Icons.keyboard_return_outlined,
     Icons.grid_view,
-    Icons.arrow_back,
+    Icons.arrow_forward,
     Icons.restaurant_menu,
     Icons.receipt_long_outlined,
     Icons.payments_outlined,

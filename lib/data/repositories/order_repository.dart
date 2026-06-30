@@ -297,7 +297,7 @@ class OrderRepository {
     return null;
   }
 
-  Future<void> requestNextCourses(int orderId) async {
+  Future<SessionOrder> requestNextCourses(int orderId) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
@@ -311,7 +311,9 @@ class OrderRepository {
     }
 
     await _remote.requestCourses(orderId, courseIds);
-    await _local.saveOrderDetail(orderId, detail);
+    final updated = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, updated);
+    return OrderMapper.fromOrderDetail(updated);
   }
 
   Future<SessionOrder> markOrderPrinted(int orderId) async {

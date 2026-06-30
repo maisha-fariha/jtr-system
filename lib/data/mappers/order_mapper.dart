@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/order_display_entry.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
 import '../../utils/app_theme.dart';
@@ -296,6 +297,7 @@ class OrderMapper {
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
       products: extractProducts(data),
+      displayEntries: extractOrderDisplayEntries(data),
     );
   }
 
@@ -360,6 +362,72 @@ class OrderMapper {
     }
 
     return products;
+  }
+
+  static List<OrderDisplayEntry> extractOrderDisplayEntries(
+    Map<String, dynamic> data,
+  ) {
+    final entries = <OrderDisplayEntry>[];
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return entries;
+
+    var lineIndex = 0;
+    var previousCourseHadItems = false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        final visibleItems = <Map<String, dynamic>>[];
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          visibleItems.add(item);
+        }
+
+        if (visibleItems.isEmpty) continue;
+
+        if (previousCourseHadItems) {
+          entries.add(const OrderDisplayEntry.suivre());
+        }
+
+        for (final item in visibleItems) {
+          final product = item['product'];
+          final name = product is Map<String, dynamic>
+              ? (product['name'] as String? ?? 'Article')
+              : 'Article';
+          final qty = item['qty'] ?? 1;
+          final subTotal = item['sub_total']?.toString() ?? '0';
+          final isOffer = item['is_offer'] == true;
+          final comment = item['comment'];
+          final message = comment is String && comment.trim().isNotEmpty
+              ? comment.trim()
+              : null;
+
+          entries.add(
+            OrderDisplayEntry.product(
+              product: OrderProduct(
+                quantity: '$qty',
+                name: name,
+                price: isOffer ? '0,00 €' : formatPrice(subTotal),
+                message: message,
+              ),
+              lineIndex: lineIndex++,
+            ),
+          );
+        }
+
+        previousCourseHadItems = true;
+      }
+    }
+
+    return entries;
   }
 
   static String displayKey({

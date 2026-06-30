@@ -12,6 +12,7 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../widgets/api_debug_dialog.dart';
+import '../widgets/app_confirm_dialog.dart';
 import '../widgets/composed_product_picker_sheet.dart';
 import '../widgets/table_number_dialog.dart';
 import 'session_controller.dart';
@@ -339,7 +340,7 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.keyboard_return_outlined || icon == Icons.arrow_back) {
+    if (icon == Icons.keyboard_return_outlined) {
       navigateBackOrExitTable();
       return;
     }
@@ -349,6 +350,11 @@ class TableDetailsController extends GetxController {
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = Icons.grid_view;
       showQuantityDialog(context: context);
+      return;
+    }
+
+    if (icon == Icons.arrow_forward) {
+      requestNextCourse();
       return;
     }
 
@@ -386,6 +392,49 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
   bool isToolbarIconEnabled(IconData icon) => true;
+
+  Future<void> requestNextCourse() async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    AppConfirmDialog.show(
+      title: 'Demander la suite',
+      message:
+          'Envoyer la demande À SUIVRE pour les articles de cette table ?\n'
+          'Les prochains articles seront ajoutés à la suite suivante.',
+      onConfirm: () async {
+        isAddingProduct.value = true;
+        try {
+          final updated = await _orderRepository.requestNextCourses(id);
+          _syncOrderInSession(updated, orderNumber);
+          Get.snackbar(
+            'Suite demandée',
+            'La demande À SUIVRE a été envoyée.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+            margin: const EdgeInsets.all(16),
+          );
+        } on ApiException catch (e) {
+          ApiDebugDialog.show(
+            title: 'Erreur suite',
+            body: e.message,
+          );
+        } catch (_) {
+          Get.snackbar(
+            'Erreur',
+            'Impossible d\'envoyer la demande de suite.',
+            snackPosition: SnackPosition.BOTTOM,
+            margin: const EdgeInsets.all(16),
+          );
+        } finally {
+          isAddingProduct.value = false;
+        }
+      },
+    );
+  }
 
   Future<void> onProductTap(CatalogProductModel product) async {
     if (isAddingProduct.value) return;

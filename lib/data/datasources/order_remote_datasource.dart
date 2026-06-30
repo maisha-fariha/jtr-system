@@ -2,6 +2,7 @@ import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
 import '../../core/network/api_exception.dart';
 import '../../utils/api_log.dart';
+import '../mappers/order_mapper.dart';
 import '../models/api_envelope.dart';
 
 class OrderRemoteDataSource {
@@ -28,7 +29,7 @@ class OrderRemoteDataSource {
       );
     }
 
-    return envelope.data!;
+    return OrderMapper.unwrapOrderDetail(envelope.data!);
   }
 
   Future<void> closeOrder(int orderId) async {
@@ -53,23 +54,38 @@ class OrderRemoteDataSource {
     int orderId,
     Map<String, dynamic> body,
   ) async {
-    final response = await _client.put<Map<String, dynamic>>(
-      ApiEndpoints.orderById(orderId),
-      data: body,
-    );
-    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
-      response.data!,
-      (json) => json as Map<String, dynamic>,
-    );
-
-    if (!envelope.success) {
-      throw ApiException(
-        message: envelope.message ?? 'Failed to update order.',
-        statusCode: envelope.status,
+    final path = ApiEndpoints.orderById(orderId);
+    try {
+      final response = await _client.put<Map<String, dynamic>>(
+        path,
+        data: body,
       );
-    }
+      _recordApiLog(
+        method: 'PUT',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
 
-    return envelope.data ?? body;
+      final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+        response.data!,
+        (json) => json as Map<String, dynamic>,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to update order.',
+          statusCode: envelope.status,
+        );
+      }
+
+      final data = envelope.data ?? body;
+      return OrderMapper.unwrapOrderDetail(data);
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>> startTableSession(
@@ -136,7 +152,7 @@ class OrderRemoteDataSource {
         );
       }
 
-      return envelope.data!;
+      return OrderMapper.unwrapOrderDetail(envelope.data!);
     } on ApiException catch (error) {
       _appendApiError(error);
       rethrow;
@@ -228,41 +244,6 @@ class OrderRemoteDataSource {
         message: envelope.message ?? 'Failed to mark order as printed.',
         statusCode: envelope.status,
       );
-    }
-  }
-
-  Future<void> addSeatOrderItems({
-    required int orderId,
-    required int seatNumber,
-    required Map<String, dynamic> body,
-  }) async {
-    final path = ApiEndpoints.addSeatOrderItems(orderId, seatNumber);
-    try {
-      final response = await _client.post<Map<String, dynamic>>(
-        path,
-        data: body,
-      );
-      _recordApiLog(
-        method: 'POST',
-        path: path,
-        request: body,
-        response: response.data,
-        statusCode: response.statusCode,
-      );
-
-      final raw = response.data;
-      if (raw is Map<String, dynamic>) {
-        final envelope = ApiEnvelope<dynamic>.fromJson(raw, (json) => json);
-        if (!envelope.success) {
-          throw ApiException(
-            message: envelope.message ?? 'Impossible d\'ajouter l\'article.',
-            statusCode: envelope.status,
-          );
-        }
-      }
-    } on ApiException catch (error) {
-      _appendApiError(error);
-      rethrow;
     }
   }
 }

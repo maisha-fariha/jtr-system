@@ -199,7 +199,7 @@ class OrderRepository {
 
     var orderId = created == null
         ? null
-        : OrderMapper.extractOrderIdFromPayload(_unwrapOrderResponse(created));
+        : OrderMapper.extractOrderIdFromPayload(created);
 
     if (orderId != null && orderId > 0) {
       return orderId;
@@ -219,7 +219,7 @@ class OrderRepository {
 
     orderId = created == null
         ? null
-        : OrderMapper.extractOrderIdFromPayload(_unwrapOrderResponse(created));
+        : OrderMapper.extractOrderIdFromPayload(created);
 
     if (orderId != null && orderId > 0) {
       return orderId;
@@ -267,25 +267,6 @@ class OrderRepository {
       apiLog.writeln('Raison: ${sessionError.message}');
       rethrow;
     }
-  }
-
-  Map<String, dynamic> _unwrapOrderResponse(Map<String, dynamic> data) {
-    final order = data['order'];
-    if (order is Map<String, dynamic>) return order;
-
-    final activeOrder = data['active_order'] ?? data['current_order'];
-    if (activeOrder is Map<String, dynamic>) return activeOrder;
-
-    final orderId = data['order_id'];
-    if (orderId is num) {
-      return {
-        'id': orderId.toInt(),
-        'table_id': data['table_id'],
-        'number_of_guests': data['number_of_guests'],
-      };
-    }
-
-    return data;
   }
 
   Future<int?> _resolveOrderIdForTable({
@@ -370,27 +351,24 @@ class OrderRepository {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
 
-      final body = _buildPostAddBody(
-        detail: detail,
+      _ensureAddItemCourse(detail, apiLog);
+
+      final payload = OrderMapper.appendSimpleItem(
+        orderDetail: detail,
         productId: productId,
         unitPrice: unitPrice,
         qty: qty,
         comment: comment,
-        apiLog: apiLog,
       );
 
-      await _postSeatOrderItems(
+      final updated = await _putOrderUpdate(
         orderId: orderId,
-        detail: detail,
-        body: body,
+        payload: payload,
         apiLog: apiLog,
       );
-
-      apiLog.writeln('── GET /api/orders/$orderId (refresh) ──');
-      final refreshed = await _remote.fetchOrderDetail(orderId);
-      await _local.saveOrderDetail(orderId, refreshed);
+      await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(refreshed);
+      return OrderMapper.fromOrderDetail(updated);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -435,29 +413,24 @@ class OrderRepository {
         },
       );
 
-      final body = _buildPostAddBody(
-        detail: detail,
+      _ensureAddItemCourse(detail, apiLog);
+
+      final payload = OrderMapper.appendComposedItem(
+        orderDetail: detail,
         productId: productId,
-        unitPrice: basePrice,
-        qty: 1,
-        comment: comment,
-        menuSelections: menuSelections,
         subTotal: basePrice + supplement,
-        apiLog: apiLog,
+        menuSelections: menuSelections,
+        comment: comment,
       );
 
-      await _postSeatOrderItems(
+      final updated = await _putOrderUpdate(
         orderId: orderId,
-        detail: detail,
-        body: body,
+        payload: payload,
         apiLog: apiLog,
       );
-
-      apiLog.writeln('── GET /api/orders/$orderId (refresh) ──');
-      final refreshed = await _remote.fetchOrderDetail(orderId);
-      await _local.saveOrderDetail(orderId, refreshed);
+      await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(refreshed);
+      return OrderMapper.fromOrderDetail(updated);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -468,22 +441,15 @@ class OrderRepository {
     }
   }
 
-  Map<String, dynamic> _buildPostAddBody({
-    required Map<String, dynamic> detail,
-    required int productId,
-    required double unitPrice,
-    required int qty,
-    required String comment,
-    required StringBuffer apiLog,
-    List<Map<String, dynamic>>? menuSelections,
-    double? subTotal,
-  }) {
+  void _ensureAddItemCourse(
+    Map<String, dynamic> detail,
+    StringBuffer apiLog,
+  ) {
     final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
     final course = OrderMapper.resolveActiveCourse(
       detail,
       seatNumber: seatNumber,
     );
-    final postCourseNumber = OrderMapper.resolvePostCourseNumber(course);
 
     if (course.id == null) {
       apiLog.writeln(
@@ -498,67 +464,22 @@ class OrderRepository {
 
     apiLog.writeln(
       'seat_number=$seatNumber course_id=${course.id} '
-      'course_sequence=$postCourseNumber',
-    );
-
-    return OrderMapper.buildAddSeatOrderItemsPayload(
-      courseNumber: postCourseNumber,
-      productId: productId,
-      unitPrice: unitPrice,
-      qty: qty,
-      comment: comment,
-      menuSelections: menuSelections,
-      subTotal: subTotal,
+      'course_sequence=${course.number}',
     );
   }
 
-  Future<void> _postSeatOrderItems({
+  Future<Map<String, dynamic>> _putOrderUpdate({
     required int orderId,
-    required Map<String, dynamic> detail,
-    required Map<String, dynamic> body,
+    required Map<String, dynamic> payload,
     required StringBuffer apiLog,
   }) async {
-    final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-    final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
-      detail,
-      seatNumber: seatNumber,
-    );
+    apiLog.writeln('── PUT /api/orders/$orderId ──');
+    apiLog.writeln(formatApiPayload(payload));
 
-    final seatKeys = <int>{
-      if (seatRecordId != null && seatRecordId > 0) seatRecordId,
-      seatNumber,
-    }.toList();
-
-    ApiException? lastError;
-    for (var i = 0; i < seatKeys.length; i++) {
-      final seatKey = seatKeys[i];
-
-      apiLog.writeln(
-        '── POST /api/orders/$orderId/seat-orders/$seatKey/items ──',
-      );
-      if (i == 0) apiLog.writeln(formatApiPayload(body));
-
-      try {
-        await _remote.addSeatOrderItems(
-          orderId: orderId,
-          seatNumber: seatKey,
-          body: body,
-        );
-        if (_remote.lastApiLog != null) {
-          apiLog.writeln(_remote.lastApiLog);
-        }
-        return;
-      } on ApiException catch (error) {
-        lastError = error;
-        if (i < seatKeys.length - 1) {
-          apiLog.writeln(
-            'POST échoué (seat-orders/$seatKey): ${error.message}',
-          );
-        }
-      }
+    final updated = await _remote.updateOrder(orderId, payload);
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
     }
-
-    throw lastError ??
-        ApiException(message: 'Impossible d\'ajouter l\'article à la commande.');
+    return updated;
   }
 }

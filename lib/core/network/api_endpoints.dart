@@ -25,7 +25,4 @@ class ApiEndpoints {
   static const productsList = '/api/products/list';
   static String productById(int id) => '/api/products/$id';
   static const menuCategories = '/api/menu-categories';
-
-  static String addSeatOrderItems(int orderId, int seatNumber) =>
-      '/api/orders/$orderId/seat-orders/$seatNumber/items';
 }

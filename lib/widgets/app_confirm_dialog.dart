@@ -1,34 +1,40 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../models/menu_message_target.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 
-typedef MenuMessageTargetCallback = void Function(MenuMessageTarget target);
-
-class MenuMessagePickerDialog extends StatelessWidget {
-  const MenuMessagePickerDialog({
+class AppConfirmDialog extends StatelessWidget {
+  const AppConfirmDialog({
     super.key,
-    required this.items,
-    this.onItemSelected,
+    required this.title,
+    required this.message,
+    this.onConfirm,
   });
 
-  final List<MenuMessageTarget> items;
-  final MenuMessageTargetCallback? onItemSelected;
+  final String title;
+  final String message;
+  final VoidCallback? onConfirm;
 
   static Future<void> show({
-    required List<MenuMessageTarget> items,
-    MenuMessageTargetCallback? onItemSelected,
+    required String title,
+    required String message,
+    VoidCallback? onConfirm,
   }) {
     return Get.dialog(
-      MenuMessagePickerDialog(
-        items: items,
-        onItemSelected: onItemSelected,
+      AppConfirmDialog(
+        title: title,
+        message: message,
+        onConfirm: onConfirm,
       ),
       barrierDismissible: false,
       barrierColor: AppTheme.dialogBarrier,
     );
+  }
+
+  void _confirm() {
+    Get.back();
+    onConfirm?.call();
   }
 
   @override
@@ -81,10 +87,10 @@ class MenuMessagePickerDialog extends StatelessWidget {
                         size: JtrResponsive.getResponsiveSize(context, 22),
                       ),
                     ),
-                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
                     Expanded(
                       child: Text(
-                        'Message pour ?',
+                        title,
+                        textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: JtrResponsive.getResponsiveFontSize(
                             context,
@@ -95,30 +101,36 @@ class MenuMessagePickerDialog extends StatelessWidget {
                         ),
                       ),
                     ),
+                    _HeaderIconButton(
+                      onTap: _confirm,
+                      backgroundColor: AppTheme.lightButton,
+                      child: Icon(
+                        Icons.check,
+                        color: AppTheme.primary,
+                        size: JtrResponsive.getResponsiveSize(context, 22),
+                      ),
+                    ),
                   ],
                 ),
               ),
               Padding(
                 padding: JtrResponsive.getResponsivePadding(
                   context,
-                  left: 16,
-                  right: 16,
-                  bottom: 18,
+                  left: 20,
+                  right: 20,
+                  bottom: 22,
                 ),
-                child: Column(
-                  children: [
-                    for (var i = 0; i < items.length; i++) ...[
-                      if (i > 0)
-                        JtrResponsive.getResponsiveSpacing(context, 12),
-                      _MessageTargetButton(
-                        label: items[i].label,
-                        onTap: () {
-                          Get.back();
-                          onItemSelected?.call(items[i]);
-                        },
-                      ),
-                    ],
-                  ],
+                child: Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      15,
+                    ),
+                    height: 1.45,
+                    color: AppTheme.darkText.withValues(alpha: 0.85),
+                  ),
                 ),
               ),
               Container(
@@ -133,64 +145,23 @@ class MenuMessagePickerDialog extends StatelessWidget {
   }
 }
 
-class _MessageTargetButton extends StatelessWidget {
-  const _MessageTargetButton({
-    required this.label,
-    required this.onTap,
-  });
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 16);
-
-    return Material(
-      color: AppTheme.dialogItemBackground,
-      borderRadius: BorderRadius.circular(radius),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(radius),
-        child: Container(
-          width: double.infinity,
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            horizontal: 18,
-            vertical: 18,
-          ),
-          alignment: Alignment.centerLeft,
-          child: Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.2,
-              color: AppTheme.darkText,
-              height: 1.2,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _HeaderIconButton extends StatelessWidget {
   const _HeaderIconButton({
     required this.onTap,
     required this.child,
+    this.backgroundColor,
   });
 
   final VoidCallback onTap;
   final Widget child;
+  final Color? backgroundColor;
 
   @override
   Widget build(BuildContext context) {
     final size = JtrResponsive.getResponsiveSize(context, 40);
 
     return Material(
-      color: AppTheme.dialogItemBackground,
+      color: backgroundColor ?? AppTheme.dialogItemBackground,
       shape: const CircleBorder(),
       child: InkWell(
         onTap: onTap,

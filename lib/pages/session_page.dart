@@ -9,6 +9,7 @@ import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class SessionPage extends GetView<SessionController> {
   const SessionPage({super.key});
@@ -54,7 +55,10 @@ class SessionPage extends GetView<SessionController> {
                                     'Aucune commande ouverte',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  fontSize: 13,
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    13,
+                                  ),
                                   color: AppTheme.textSecondary,
                                 ),
                               ),
@@ -72,10 +76,14 @@ class SessionPage extends GetView<SessionController> {
                     ),
                     child: ListView.separated(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        top: 8,
+                        bottom: 8,
+                      ),
                       itemCount: controller.orders.length,
                       separatorBuilder: (context, index) =>
-                          const SizedBox(height: 8),
+                          JtrResponsive.getResponsiveSpacing(context, 8),
                       itemBuilder: (context, index) {
                         return _OrderRow(order: controller.orders[index]);
                       },
@@ -114,12 +122,18 @@ class _SessionHeader extends GetView<SessionController> {
       final day = controller.activeDay.value;
 
       return Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 16,
+          right: 16,
+          top: 12,
+          bottom: 12,
+        ),
         child: Row(
           children: [
             Container(
-              width: 44,
-              height: 44,
+              width: JtrResponsive.getResponsiveSize(context, 44),
+              height: JtrResponsive.getResponsiveSize(context, 44),
               decoration: const BoxDecoration(
                 color: AppTheme.primary,
                 shape: BoxShape.circle,
@@ -127,14 +141,14 @@ class _SessionHeader extends GetView<SessionController> {
               alignment: Alignment.center,
               child: Text(
                 day.sessionNumber ?? '${day.id}',
-                style: const TextStyle(
+                style: TextStyle(
                   color: Colors.white,
-                  fontSize: 18,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ),
-            const SizedBox(width: 12),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -142,17 +156,17 @@ class _SessionHeader extends GetView<SessionController> {
                   Text(
                     'SESSION ACTIVE',
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                       fontWeight: FontWeight.w500,
                       letterSpacing: 0.8,
                       color: AppTheme.textSecondary,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  JtrResponsive.getResponsiveSpacing(context, 2),
                   Text(
                     day.displayDate,
                     style: TextStyle(
-                      fontSize: 16,
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
                       fontWeight: FontWeight.bold,
                       color: AppTheme.darkText,
                     ),
@@ -161,16 +175,22 @@ class _SessionHeader extends GetView<SessionController> {
               ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 14,
+                vertical: 8,
+              ),
               decoration: BoxDecoration(
                 color: AppTheme.lightButton,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(
+                  JtrResponsive.getResponsiveRadius(context, 20),
+                ),
               ),
               child: Text(
                 day.salesZoneLabel,
-                style: const TextStyle(
+                style: TextStyle(
                   color: AppTheme.primary,
-                  fontSize: 11,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.5,
                 ),
@@ -186,19 +206,22 @@ class _SessionHeader extends GetView<SessionController> {
 class _SessionTableLayout {
   _SessionTableLayout._();
 
-  static const outerPadding = EdgeInsets.symmetric(horizontal: 12);
-  static const innerPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 12);
+  static EdgeInsets outerPadding(BuildContext context) =>
+      JtrResponsive.getResponsivePadding(context, horizontal: 8);
 
-  static TextStyle get headerStyle => TextStyle(
-        fontSize: 9,
+  static EdgeInsets innerPadding(BuildContext context) =>
+      JtrResponsive.getResponsivePadding(context, horizontal: 0, vertical: 12);
+
+  static TextStyle headerStyle(BuildContext context) => TextStyle(
+        fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
         fontWeight: FontWeight.w600,
         letterSpacing: 0.3,
         color: AppTheme.textSecondary,
         height: 1.2,
       );
 
-  static TextStyle get cellStyle => TextStyle(
-        fontSize: 11,
+  static TextStyle cellStyle(BuildContext context) => TextStyle(
+        fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
         fontWeight: FontWeight.w500,
         color: AppTheme.darkText,
       );
@@ -207,20 +230,20 @@ class _SessionTableLayout {
 class _SessionTableRow extends StatelessWidget {
   const _SessionTableRow({
     required this.cells,
-    this.padding = _SessionTableLayout.innerPadding,
+    this.padding,
   });
 
   final List<Widget> cells;
-  final EdgeInsets padding;
+  final EdgeInsets? padding;
 
   @override
   Widget build(BuildContext context) {
     assert(cells.length == 7);
 
     return Padding(
-      padding: _SessionTableLayout.outerPadding,
+      padding: _SessionTableLayout.outerPadding(context),
       child: Padding(
-        padding: padding,
+        padding: padding ?? _SessionTableLayout.innerPadding(context),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -241,17 +264,21 @@ class _TableHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 10, bottom: 4),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        top: 10,
+        bottom: 4,
+      ),
       child: _SessionTableRow(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: JtrResponsive.getResponsivePadding(context, horizontal: 12),
         cells: [
-          Text('N°', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('G.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('POSTE', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('CTR.\nPROFIT', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('CVT.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('IMP.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
-          Text('TOTAL', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle),
+          Text('N°', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('G.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('POSTE', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('CTR.\nPROFIT', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('CVT.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('IMP.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('TOTAL', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
         ],
       ),
     );
@@ -270,9 +297,10 @@ class _OrderRow extends GetView<SessionController> {
       final isExpanded = state.expandedOrderNumber == order.number;
       final isRowSelected = state.selectedRow?.orderNumber == order.number &&
           state.selectedRow?.productIndex == null;
+      final cardRadius = JtrResponsive.getResponsiveRadius(context, 12);
 
       return Padding(
-        padding: _SessionTableLayout.outerPadding,
+        padding: _SessionTableLayout.outerPadding(context),
         child: Slidable(
           key: ValueKey(order.number),
           groupTag: SessionPage._orderSlidableGroupTag,
@@ -312,7 +340,7 @@ class _OrderRow extends GetView<SessionController> {
             child: Container(
             decoration: BoxDecoration(
               color: AppTheme.background,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(cardRadius),
               border: Border.all(color: AppTheme.cardBorder),
               boxShadow: [
                 BoxShadow(
@@ -328,12 +356,12 @@ class _OrderRow extends GetView<SessionController> {
                 decoration: BoxDecoration(
                   color: isRowSelected ? AppTheme.lightButton : Colors.transparent,
                   borderRadius: BorderRadius.vertical(
-                    top: const Radius.circular(12),
-                    bottom: isExpanded ? Radius.zero : const Radius.circular(12),
+                    top: Radius.circular(cardRadius),
+                    bottom: isExpanded ? Radius.zero : Radius.circular(cardRadius),
                   ),
                 ),
                 child: Padding(
-                  padding: _SessionTableLayout.innerPadding,
+                  padding: _SessionTableLayout.innerPadding(context),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
@@ -344,7 +372,7 @@ class _OrderRow extends GetView<SessionController> {
                           order.number,
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                             fontWeight: FontWeight.bold,
                             color: order.numberColor,
                           ),
@@ -355,7 +383,7 @@ class _OrderRow extends GetView<SessionController> {
                         child: Text(
                           order.group,
                           textAlign: TextAlign.center,
-                          style: _SessionTableLayout.cellStyle,
+                          style: _SessionTableLayout.cellStyle(context),
                         ),
                       ),
                       _OrderTableCell(
@@ -363,7 +391,7 @@ class _OrderRow extends GetView<SessionController> {
                         child: Text(
                           order.poste,
                           textAlign: TextAlign.center,
-                          style: _SessionTableLayout.cellStyle,
+                          style: _SessionTableLayout.cellStyle(context),
                         ),
                       ),
                       _OrderTableCell(
@@ -371,8 +399,8 @@ class _OrderRow extends GetView<SessionController> {
                         child: Text(
                           order.profitCenter,
                           textAlign: TextAlign.center,
-                          style: _SessionTableLayout.cellStyle.copyWith(
-                            fontSize: 9,
+                          style: _SessionTableLayout.cellStyle(context).copyWith(
+                            fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
                             height: 1.2,
                           ),
                         ),
@@ -382,24 +410,26 @@ class _OrderRow extends GetView<SessionController> {
                         child: Text(
                           order.couverts,
                           textAlign: TextAlign.center,
-                          style: _SessionTableLayout.cellStyle,
+                          style: _SessionTableLayout.cellStyle(context),
                         ),
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
                         child: Container(
-                          width: 22,
-                          height: 22,
+                          width: JtrResponsive.getResponsiveSize(context, 22),
+                          height: JtrResponsive.getResponsiveSize(context, 22),
                           decoration: BoxDecoration(
                             color: order.impressionColor,
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(
+                              JtrResponsive.getResponsiveRadius(context, 6),
+                            ),
                           ),
                           alignment: Alignment.center,
                           child: Text(
                             '${order.impressionCount}',
-                            style: const TextStyle(
+                            style: TextStyle(
                               color: Colors.white,
-                              fontSize: 11,
+                              fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -411,7 +441,7 @@ class _OrderRow extends GetView<SessionController> {
                           order.total,
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 12,
+                            fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                             fontWeight: FontWeight.bold,
                             color: AppTheme.darkText,
                           ),
@@ -425,12 +455,15 @@ class _OrderRow extends GetView<SessionController> {
                 Divider(height: 1, color: AppTheme.cardBorder),
                 if (controller.isLoadingOrderDetail(order.number))
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 16,
+                    ),
                     child: Center(
                       child: SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
+                        width: JtrResponsive.getResponsiveSize(context, 20),
+                        height: JtrResponsive.getResponsiveSize(context, 20),
+                        child: const CircularProgressIndicator(
                           strokeWidth: 2,
                           color: AppTheme.primary,
                         ),
@@ -439,12 +472,15 @@ class _OrderRow extends GetView<SessionController> {
                   )
                 else if (order.products.isEmpty)
                   Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 12,
+                    ),
                     child: Text(
                       'Aucun produit',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 10,
+                        fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
                         color: AppTheme.textSecondary,
                       ),
                     ),
@@ -459,7 +495,7 @@ class _OrderRow extends GetView<SessionController> {
                     if (i < order.products.length - 1)
                       Divider(height: 1, color: AppTheme.subtleDivider),
                   ],
-                const SizedBox(height: 4),
+                JtrResponsive.getResponsiveSpacing(context, 4),
               ],
             ],
             ),
@@ -511,7 +547,7 @@ class _ProductRow extends GetView<SessionController> {
   @override
   Widget build(BuildContext context) {
     final productStyle = TextStyle(
-      fontSize: 10,
+      fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
       fontWeight: FontWeight.w500,
       color: AppTheme.textSecondary,
       letterSpacing: 0.2,
@@ -525,7 +561,11 @@ class _ProductRow extends GetView<SessionController> {
       return ColoredBox(
         color: isRowSelected ? AppTheme.lightButton : Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 12,
+            vertical: 2,
+          ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -537,7 +577,10 @@ class _ProductRow extends GetView<SessionController> {
                   ),
                   behavior: HitTestBehavior.opaque,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 8,
+                    ),
                     child: Text(
                       product.quantity,
                       textAlign: TextAlign.center,
@@ -555,7 +598,10 @@ class _ProductRow extends GetView<SessionController> {
                   ),
                   behavior: HitTestBehavior.opaque,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 8,
+                    ),
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
@@ -577,7 +623,10 @@ class _ProductRow extends GetView<SessionController> {
                   ),
                   behavior: HitTestBehavior.opaque,
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      vertical: 8,
+                    ),
                     child: Text(
                       product.price,
                       textAlign: TextAlign.center,
@@ -630,12 +679,18 @@ class _ActionButtons extends GetView<SessionController> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        left: 12,
+        right: 12,
+        top: 8,
+        bottom: 8,
+      ),
       child: Obx(
         () => Row(
           children: [
             for (var i = 0; i < _actions.length; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
+              if (i > 0) JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
               Expanded(
                 child: _ActionButton(
                   label: _actions[i].label,
@@ -687,16 +742,23 @@ class _ActionButton extends StatelessWidget {
         isActive ? AppTheme.primary : AppTheme.inactiveSurface;
     final labelColor = isActive ? Colors.white : AppTheme.darkText;
     final iconColor = isActive ? Colors.white : AppTheme.actionIcon;
+    final responsiveIconSize = JtrResponsive.getResponsiveSize(context, iconSize);
 
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        height: 110,
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+        height: JtrResponsive.adaptiveHeight(context, 110, compact: 78),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 6,
+          vertical: 10,
+        ),
         decoration: BoxDecoration(
           color: backgroundColor,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 16),
+          ),
           boxShadow: isActive
               ? [
                   BoxShadow(
@@ -718,22 +780,24 @@ class _ActionButton extends StatelessWidget {
           children: [
             if (isActive)
               Container(
-                width: 44,
-                height: 44,
+                width: JtrResponsive.getResponsiveSize(context, 44),
+                height: JtrResponsive.getResponsiveSize(context, 44),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(
+                    JtrResponsive.getResponsiveRadius(context, 12),
+                  ),
                 ),
-                child: Icon(icon, color: iconColor, size: iconSize),
+                child: Icon(icon, color: iconColor, size: responsiveIconSize),
               )
             else
-              Icon(icon, color: iconColor, size: iconSize),
-            const SizedBox(height: 8),
+              Icon(icon, color: iconColor, size: responsiveIconSize),
+            JtrResponsive.getResponsiveSpacing(context, 8),
             Text(
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 9,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
                 fontWeight: FontWeight.bold,
                 height: 1.2,
                 letterSpacing: 0.3,
@@ -750,25 +814,31 @@ class _ActionButton extends StatelessWidget {
 class _BottomNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final iconSize = JtrResponsive.getResponsiveSize(context, 28);
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 10),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 32,
+        vertical: 10,
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           IconButton(
             onPressed: () => Get.offAllNamed(AppRoutes.session),
-            icon: const Icon(Icons.home, color: AppTheme.primary, size: 28),
+            icon: Icon(Icons.home, color: AppTheme.primary, size: iconSize),
           ),
           IconButton(
             onPressed: () => Get.back(),
-            icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
+            icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: iconSize),
           ),
           IconButton(
             onPressed: AppNavigation.logout,
-            icon: const Icon(
+            icon: Icon(
               Icons.logout,
-              color: Color(0xFF2EC4B6),
-              size: 28,
+              color: const Color(0xFF2EC4B6),
+              size: iconSize,
             ),
           ),
         ],

@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../controllers/session_controller.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 /// Statistics summary for the current session.
 /// Accessed via the STATISTICS action button on the session page.
@@ -24,15 +25,15 @@ class StatisticsPage extends GetView<SessionController> {
           icon: Icon(
             Icons.arrow_back_ios_new,
             color: AppTheme.darkText,
-            size: 20,
+            size: JtrResponsive.getResponsiveSize(context, 20),
           ),
           onPressed: () => Get.back(),
         ),
-        title: const Text(
+        title: Text(
           'STATISTIQUES',
           style: TextStyle(
             color: AppTheme.primary,
-            fontSize: 18,
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
             fontWeight: FontWeight.bold,
             letterSpacing: 1.2,
           ),
@@ -62,7 +63,11 @@ class StatisticsPage extends GetView<SessionController> {
           onRefresh: () => controller.loadDayStatistics(forceRefresh: true),
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              horizontal: 20,
+              vertical: 24,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -79,7 +84,7 @@ class StatisticsPage extends GetView<SessionController> {
                         iconColor: AppTheme.primary,
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
                     Expanded(
                       child: _KpiCard(
                         label: 'TABLES OUVERTES',
@@ -90,7 +95,7 @@ class StatisticsPage extends GetView<SessionController> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                JtrResponsive.getResponsiveSpacing(context, 12),
                 Row(
                   children: [
                     Expanded(
@@ -101,7 +106,7 @@ class StatisticsPage extends GetView<SessionController> {
                         iconColor: const Color(0xFF5BAD6F),
                       ),
                     ),
-                    const SizedBox(width: 12),
+                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
                     Expanded(
                       child: _KpiCard(
                         label: 'MOY. PAR TABLE',
@@ -115,15 +120,15 @@ class StatisticsPage extends GetView<SessionController> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 28),
+                JtrResponsive.getResponsiveSpacing(context, 28),
                 const _SectionTitle(text: 'DÉTAIL PAR TABLE'),
-                const SizedBox(height: 12),
+                JtrResponsive.getResponsiveSpacing(context, 12),
                 if (orders.isEmpty)
                   const _EmptyState()
                 else
                   for (final order in orders) ...[
                     _OrderStatRow(order: order),
-                    const SizedBox(height: 10),
+                    JtrResponsive.getResponsiveSpacing(context, 10),
                   ],
               ],
             ),
@@ -168,17 +173,28 @@ class _KpiCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final iconBoxSize = JtrResponsive.getResponsiveSize(context, 36);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 16,
+        vertical: 16,
+      ),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 16),
+        ),
         border: Border.all(color: const Color(0xFFE8E8E8)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
+            blurRadius: JtrResponsive.getResponsiveSize(context, 8),
+            offset: Offset(
+              0,
+              JtrResponsive.getResponsiveHeight(context, 2),
+            ),
           ),
         ],
       ),
@@ -186,29 +202,35 @@ class _KpiCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: iconBoxSize,
+            height: iconBoxSize,
             decoration: BoxDecoration(
               color: iconColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(
+                JtrResponsive.getResponsiveRadius(context, 10),
+              ),
             ),
-            child: Icon(icon, color: iconColor, size: 20),
+            child: Icon(
+              icon,
+              color: iconColor,
+              size: JtrResponsive.getResponsiveSize(context, 20),
+            ),
           ),
-          const SizedBox(height: 12),
+          JtrResponsive.getResponsiveSpacing(context, 12),
           Text(
             value,
             style: TextStyle(
-              fontSize: 18,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
               fontWeight: FontWeight.bold,
               color: AppTheme.darkText,
               height: 1.1,
             ),
           ),
-          const SizedBox(height: 4),
+          JtrResponsive.getResponsiveSpacing(context, 4),
           Text(
             label,
             style: TextStyle(
-              fontSize: 9,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
               fontWeight: FontWeight.w600,
               letterSpacing: 0.5,
               color: AppTheme.textSecondary.withValues(alpha: 0.7),
@@ -232,7 +254,7 @@ class _SectionTitle extends StatelessWidget {
     return Text(
       text,
       style: TextStyle(
-        fontSize: 11,
+        fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
         fontWeight: FontWeight.w700,
         letterSpacing: 0.8,
         color: AppTheme.textSecondary.withValues(alpha: 0.8),
@@ -250,40 +272,53 @@ class _OrderStatRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final badgeSize = JtrResponsive.getResponsiveSize(context, 40);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 16,
+        vertical: 14,
+      ),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 12),
+        ),
         border: Border.all(color: const Color(0xFFE8E8E8)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 4,
-            offset: const Offset(0, 1),
+            blurRadius: JtrResponsive.getResponsiveSize(context, 4),
+            offset: Offset(
+              0,
+              JtrResponsive.getResponsiveHeight(context, 1),
+            ),
           ),
         ],
       ),
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: badgeSize,
+            height: badgeSize,
             decoration: BoxDecoration(
               color: order.numberColor.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(
+                JtrResponsive.getResponsiveRadius(context, 10),
+              ),
             ),
             alignment: Alignment.center,
             child: Text(
               order.number,
               style: TextStyle(
-                fontSize: 13,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
                 fontWeight: FontWeight.bold,
                 color: order.numberColor,
               ),
             ),
           ),
-          const SizedBox(width: 12),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -291,16 +326,16 @@ class _OrderStatRow extends StatelessWidget {
                 Text(
                   '${order.products.length} article${order.products.length != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),
                     height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 2),
+                JtrResponsive.getResponsiveSpacing(context, 2),
                 Text(
                   order.profitCenter,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                     fontWeight: FontWeight.w500,
                     color: AppTheme.darkText,
                     letterSpacing: 0.3,
@@ -309,29 +344,35 @@ class _OrderStatRow extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 8),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
                 order.total,
                 style: TextStyle(
-                  fontSize: 14,
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
                   fontWeight: FontWeight.bold,
                   color: AppTheme.darkText,
                 ),
               ),
-              const SizedBox(height: 4),
+              JtrResponsive.getResponsiveSpacing(context, 4),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 8,
+                  vertical: 3,
+                ),
                 decoration: BoxDecoration(
                   color: order.impressionColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(
+                    JtrResponsive.getResponsiveRadius(context, 8),
+                  ),
                 ),
                 child: Text(
                   '${order.impressionCount} IMP.',
                   style: TextStyle(
-                    fontSize: 9,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
                     fontWeight: FontWeight.bold,
                     color: order.impressionColor,
                     letterSpacing: 0.3,
@@ -355,24 +396,26 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: JtrResponsive.getResponsivePadding(context, vertical: 48),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 16),
+        ),
         border: Border.all(color: const Color(0xFFE8E8E8)),
       ),
       child: Column(
         children: [
           Icon(
             Icons.bar_chart_rounded,
-            size: 48,
+            size: JtrResponsive.getResponsiveSize(context, 48),
             color: AppTheme.textSecondary.withValues(alpha: 0.3),
           ),
-          const SizedBox(height: 12),
+          JtrResponsive.getResponsiveSpacing(context, 12),
           Text(
             'Aucune commande en cours.',
             style: TextStyle(
-              fontSize: 14,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
               color: AppTheme.textSecondary.withValues(alpha: 0.5),
             ),
           ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 typedef MenuMessageSaveCallback = void Function(String message);
 
@@ -60,29 +61,45 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final dialogRadius = JtrResponsive.getResponsiveRadius(context, 24);
+    final fieldRadius = JtrResponsive.getResponsiveRadius(context, 16);
+
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      insetPadding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 28,
+      ),
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: AppTheme.dialogBackground,
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(dialogRadius),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: Get.isDarkMode ? 0.45 : 0.12),
-              blurRadius: 28,
-              offset: const Offset(0, 10),
+              color: Colors.black
+                  .withValues(alpha: Get.isDarkMode ? 0.45 : 0.12),
+              blurRadius: JtrResponsive.getResponsiveWidth(context, 28),
+              offset: Offset(
+                0,
+                JtrResponsive.getResponsiveHeight(context, 10),
+              ),
             ),
           ],
         ),
         child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(dialogRadius),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  left: 16,
+                  right: 16,
+                  top: 18,
+                  bottom: 14,
+                ),
                 child: Row(
                   children: [
                     _HeaderIconButton(
@@ -90,7 +107,7 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                       child: Icon(
                         Icons.chevron_left,
                         color: AppTheme.darkText,
-                        size: 22,
+                        size: JtrResponsive.getResponsiveSize(context, 22),
                       ),
                     ),
                     Expanded(
@@ -98,7 +115,10 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                         'Message',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          fontSize: 18,
+                          fontSize: JtrResponsive.getResponsiveFontSize(
+                            context,
+                            18,
+                          ),
                           fontWeight: FontWeight.w700,
                           color: AppTheme.darkText,
                         ),
@@ -110,14 +130,19 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                       child: Icon(
                         Icons.check,
                         color: AppTheme.primary,
-                        size: 22,
+                        size: JtrResponsive.getResponsiveSize(context, 22),
                       ),
                     ),
                   ],
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 18),
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  left: 16,
+                  right: 16,
+                  bottom: 18,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -125,20 +150,26 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                       widget.itemLabel.toUpperCase(),
                       textAlign: TextAlign.left,
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          13,
+                        ),
                         fontWeight: FontWeight.w700,
                         color: AppTheme.darkText,
                         letterSpacing: 0.2,
                       ),
                     ),
-                    const SizedBox(height: 14),
+                    JtrResponsive.getResponsiveSpacing(context, 14),
                     TextField(
                       controller: _controller,
                       autofocus: true,
                       maxLines: 3,
                       textCapitalization: TextCapitalization.characters,
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          14,
+                        ),
                         fontWeight: FontWeight.w600,
                         color: AppTheme.darkText,
                       ),
@@ -150,28 +181,31 @@ class _MenuMessageTypingDialogState extends State<MenuMessageTypingDialog> {
                         filled: true,
                         fillColor: AppTheme.dialogItemBackground,
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(fieldRadius),
                           borderSide: BorderSide.none,
                         ),
                         enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(fieldRadius),
                           borderSide: BorderSide.none,
                         ),
                         focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(fieldRadius),
                           borderSide: BorderSide(
                             color: AppTheme.primary,
                             width: 1.5,
                           ),
                         ),
-                        contentPadding: const EdgeInsets.all(16),
+                        contentPadding: JtrResponsive.getResponsivePadding(
+                          context,
+                          all: 16,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
               Container(
-                height: 3,
+                height: JtrResponsive.getResponsiveHeight(context, 3),
                 color: AppTheme.primary,
               ),
             ],
@@ -195,6 +229,8 @@ class _HeaderIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = JtrResponsive.getResponsiveSize(context, 40);
+
     return Material(
       color: backgroundColor ?? AppTheme.dialogItemBackground,
       shape: const CircleBorder(),
@@ -202,8 +238,8 @@ class _HeaderIconButton extends StatelessWidget {
         onTap: onTap,
         customBorder: const CircleBorder(),
         child: SizedBox(
-          width: 40,
-          height: 40,
+          width: size,
+          height: size,
           child: Center(child: child),
         ),
       ),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class TicketSuccessDialog extends StatefulWidget {
   const TicketSuccessDialog({super.key});
@@ -39,47 +40,62 @@ class _TicketSuccessDialogState extends State<TicketSuccessDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final iconSize = JtrResponsive.getResponsiveSize(context, 56);
+
     return Dialog(
       backgroundColor: AppTheme.background,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 20),
+        ),
+      ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 28, 24, 16),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 24,
+          right: 24,
+          top: 28,
+          bottom: 16,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 56,
-              height: 56,
+              width: iconSize,
+              height: iconSize,
               decoration: BoxDecoration(
                 color: AppTheme.lightButton,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.check,
                 color: AppTheme.primary,
-                size: 30,
+                size: JtrResponsive.getResponsiveSize(context, 30),
               ),
             ),
-            const SizedBox(height: 20),
+            JtrResponsive.getResponsiveSpacing(context, 20),
             Text(
               "L'impression a été effectuée sur l'imprimante principale TICKET.",
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 15,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
                 height: 1.4,
                 color: AppTheme.darkText,
               ),
             ),
-            const SizedBox(height: 20),
+            JtrResponsive.getResponsiveSpacing(context, 20),
             Align(
               alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: () => Get.back(),
                 child: Text(
                   'OK (${_secondsRemaining}S)',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: AppTheme.primary,
-                    fontSize: 15,
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      15,
+                    ),
                     fontWeight: FontWeight.w600,
                   ),
                 ),

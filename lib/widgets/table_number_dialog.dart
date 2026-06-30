@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 class TableNumberDialog extends StatefulWidget {
   const TableNumberDialog({
@@ -30,9 +31,6 @@ class TableNumberDialog extends StatefulWidget {
 }
 
 class _TableNumberDialogState extends State<TableNumberDialog> {
-  static const _keyGap = 6.0;
-  static const _keyHeight = 54.0;
-  static const _keyRadius = 12.0;
   static const _columns = 4;
 
   String _tableInput = '';
@@ -62,19 +60,36 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
         ThemeController.to.isDark.value;
       }
 
+      final keyGap = JtrResponsive.getResponsiveWidth(context, 6);
+      var keyHeight = JtrResponsive.getResponsiveHeight(context, 54);
+      if (JtrResponsive.isLargeDevice(context)) {
+        keyHeight += 4;
+      }
+      final keyRadius = JtrResponsive.getResponsiveRadius(context, 12);
+      final isDark = AppTheme.isDark;
+
       return Dialog(
         backgroundColor: AppTheme.keypadDialogBackground,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+        insetPadding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 28,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 32),
+          ),
+        ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 22, 18, 22),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 18,
+            vertical: 22,
+          ),
           child: LayoutBuilder(
             builder: (context, constraints) {
               final gridWidth = constraints.maxWidth;
-              final cellWidth =
-                  (gridWidth - _keyGap * (_columns - 1)) / _columns;
-              final doubleCellWidth = cellWidth * 2 + _keyGap;
-              final isDark = AppTheme.isDark;
+              final cellWidth = (gridWidth - keyGap * (_columns - 1)) / _columns;
+              final doubleCellWidth = cellWidth * 2 + keyGap;
 
               return Column(
                 mainAxisSize: MainAxisSize.min,
@@ -84,33 +99,45 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                     widget.title,
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 17,
+                      fontSize: JtrResponsive.getResponsiveFontSize(
+                        context,
+                        17,
+                      ),
                       fontWeight: FontWeight.bold,
                       color: isDark ? AppTheme.primary : AppTheme.darkText,
                       letterSpacing: 0.4,
                     ),
                   ),
-                  const SizedBox(height: 18),
+                  JtrResponsive.getResponsiveSpacing(context, 18),
                   _KeyRow(
+                    keyGap: keyGap,
                     children: [
                       _ActionKey(
                         width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
                         backgroundColor: AppTheme.keypadCancelBackground,
                         onTap: () => Get.back(),
                         child: Icon(
                           Icons.close,
                           color: AppTheme.keypadCancelIcon,
-                          size: 22,
+                          size: JtrResponsive.getResponsiveSize(context, 22),
                         ),
                       ),
                       _DisplayField(
                         text: _mainDisplay,
                         width: doubleCellWidth,
-                        height: _keyHeight,
-                        fontSize: 20,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        fontSize: JtrResponsive.getResponsiveFontSize(
+                          context,
+                          20,
+                        ),
                       ),
                       _ActionKey(
                         width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
                         backgroundColor: AppTheme.keypadKeyBackground,
                         onTap: _backspace,
                         child: Icon(
@@ -118,45 +145,131 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                           color: AppTheme.keypadKeyForeground.withValues(
                             alpha: AppTheme.isDark ? 0.9 : 0.65,
                           ),
-                          size: 20,
+                          size: JtrResponsive.getResponsiveSize(context, 20),
                         ),
                       ),
                     ],
                   ),
                   _KeyRow(
+                    keyGap: keyGap,
                     children: [
-                      _CalcKey(width: cellWidth, label: '7', onTap: () => _appendDigit('7')),
-                      _CalcKey(width: cellWidth, label: '8', onTap: () => _appendDigit('8')),
-                      _CalcKey(width: cellWidth, label: '9', onTap: () => _appendDigit('9')),
-                      _CalcKey(width: cellWidth, label: '/', onTap: () {}),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '7',
+                        onTap: () => _appendDigit('7'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '8',
+                        onTap: () => _appendDigit('8'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '9',
+                        onTap: () => _appendDigit('9'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '/',
+                        onTap: () {},
+                      ),
                     ],
                   ),
                   _KeyRow(
+                    keyGap: keyGap,
                     children: [
-                      _CalcKey(width: cellWidth, label: '4', onTap: () => _appendDigit('4')),
-                      _CalcKey(width: cellWidth, label: '5', onTap: () => _appendDigit('5')),
-                      _CalcKey(width: cellWidth, label: '6', onTap: () => _appendDigit('6')),
-                      _CalcKey(width: cellWidth, label: '*', onTap: () {}),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '4',
+                        onTap: () => _appendDigit('4'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '5',
+                        onTap: () => _appendDigit('5'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '6',
+                        onTap: () => _appendDigit('6'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '*',
+                        onTap: () {},
+                      ),
                     ],
                   ),
                   _KeyRow(
+                    keyGap: keyGap,
                     children: [
-                      _CalcKey(width: cellWidth, label: '1', onTap: () => _appendDigit('1')),
-                      _CalcKey(width: cellWidth, label: '2', onTap: () => _appendDigit('2')),
-                      _CalcKey(width: cellWidth, label: '3', onTap: () => _appendDigit('3')),
-                      _CalcKey(width: cellWidth, label: '-', onTap: () {}),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '1',
+                        onTap: () => _appendDigit('1'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '2',
+                        onTap: () => _appendDigit('2'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '3',
+                        onTap: () => _appendDigit('3'),
+                      ),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '-',
+                        onTap: () {},
+                      ),
                     ],
                   ),
                   _KeyRow(
+                    keyGap: keyGap,
                     children: [
                       _CalcKey(
                         width: doubleCellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
                         label: '0',
                         onTap: () => _appendDigit('0'),
                       ),
-                      _CalcKey(width: cellWidth, label: '.', onTap: () => _appendDigit('.')),
+                      _CalcKey(
+                        width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
+                        label: '.',
+                        onTap: () => _appendDigit('.'),
+                      ),
                       _ConfirmKey(
                         width: cellWidth,
+                        height: keyHeight,
+                        keyRadius: keyRadius,
                         onTap: _tableInput.isEmpty ? null : _confirm,
                       ),
                     ],
@@ -176,12 +289,14 @@ class _DisplayField extends StatelessWidget {
     required this.text,
     required this.height,
     required this.fontSize,
+    required this.keyRadius,
     this.width,
   });
 
   final String text;
   final double height;
   final double fontSize;
+  final double keyRadius;
   final double? width;
 
   @override
@@ -194,10 +309,8 @@ class _DisplayField extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: AppTheme.keypadDisplayBackground,
-          borderRadius: BorderRadius.circular(_TableNumberDialogState._keyRadius),
-          border: isDark
-              ? null
-              : Border.all(color: AppTheme.keypadKeyBorder),
+          borderRadius: BorderRadius.circular(keyRadius),
+          border: isDark ? null : Border.all(color: AppTheme.keypadKeyBorder),
         ),
         child: Center(
           child: Text(
@@ -218,18 +331,22 @@ class _DisplayField extends StatelessWidget {
 }
 
 class _KeyRow extends StatelessWidget {
-  const _KeyRow({required this.children});
+  const _KeyRow({
+    required this.keyGap,
+    required this.children,
+  });
 
+  final double keyGap;
   final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: _TableNumberDialogState._keyGap),
+      padding: EdgeInsets.only(bottom: keyGap),
       child: Row(
         children: [
           for (var i = 0; i < children.length; i++) ...[
-            if (i > 0) const SizedBox(width: _TableNumberDialogState._keyGap),
+            if (i > 0) SizedBox(width: keyGap),
             children[i],
           ],
         ],
@@ -241,11 +358,15 @@ class _KeyRow extends StatelessWidget {
 class _CalcKey extends StatelessWidget {
   const _CalcKey({
     required this.width,
+    required this.height,
+    required this.keyRadius,
     required this.label,
     required this.onTap,
   });
 
   final double width;
+  final double height;
+  final double keyRadius;
   final String label;
   final VoidCallback onTap;
 
@@ -253,11 +374,13 @@ class _CalcKey extends StatelessWidget {
   Widget build(BuildContext context) {
     return _KeySurface(
       width: width,
+      height: height,
+      keyRadius: keyRadius,
       onTap: onTap,
       child: Text(
         label,
         style: TextStyle(
-          fontSize: 20,
+          fontSize: JtrResponsive.getResponsiveFontSize(context, 20),
           fontWeight: FontWeight.w500,
           color: AppTheme.keypadKeyForeground.withValues(alpha: 0.9),
         ),
@@ -269,12 +392,16 @@ class _CalcKey extends StatelessWidget {
 class _ActionKey extends StatelessWidget {
   const _ActionKey({
     required this.width,
+    required this.height,
+    required this.keyRadius,
     required this.backgroundColor,
     required this.onTap,
     required this.child,
   });
 
   final double width;
+  final double height;
+  final double keyRadius;
   final Color backgroundColor;
   final VoidCallback onTap;
   final Widget child;
@@ -283,6 +410,8 @@ class _ActionKey extends StatelessWidget {
   Widget build(BuildContext context) {
     return _KeySurface(
       width: width,
+      height: height,
+      keyRadius: keyRadius,
       onTap: onTap,
       color: backgroundColor,
       child: child,
@@ -293,10 +422,14 @@ class _ActionKey extends StatelessWidget {
 class _ConfirmKey extends StatelessWidget {
   const _ConfirmKey({
     required this.width,
+    required this.height,
+    required this.keyRadius,
     required this.onTap,
   });
 
   final double width;
+  final double height;
+  final double keyRadius;
   final VoidCallback? onTap;
 
   @override
@@ -306,23 +439,25 @@ class _ConfirmKey extends StatelessWidget {
     final buttonColor = isDark || isEnabled
         ? AppTheme.primary
         : AppTheme.primary.withValues(alpha: 0.45);
+    final iconContainerSize = JtrResponsive.getResponsiveSize(context, 28);
+    final checkIconSize = JtrResponsive.getResponsiveSize(context, 16);
 
     return SizedBox(
       width: width,
-      height: _TableNumberDialogState._keyHeight,
+      height: height,
       child: Material(
         color: buttonColor,
-        borderRadius: BorderRadius.circular(_TableNumberDialogState._keyRadius),
+        borderRadius: BorderRadius.circular(keyRadius),
         elevation: isEnabled && !isDark ? 5 : 0,
         shadowColor: AppTheme.primary.withValues(alpha: 0.45),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(_TableNumberDialogState._keyRadius),
+          borderRadius: BorderRadius.circular(keyRadius),
           child: Center(
             child: isDark
                 ? Container(
-                    width: 28,
-                    height: 28,
+                    width: iconContainerSize,
+                    height: iconContainerSize,
                     decoration: BoxDecoration(
                       color: AppTheme.keypadDialogBackground,
                       shape: BoxShape.circle,
@@ -330,21 +465,21 @@ class _ConfirmKey extends StatelessWidget {
                     child: Icon(
                       Icons.check,
                       color: AppTheme.primary,
-                      size: 16,
+                      size: checkIconSize,
                     ),
                   )
                 : Container(
-                    width: 28,
-                    height: 28,
+                    width: iconContainerSize,
+                    height: iconContainerSize,
                     decoration: BoxDecoration(
                       color: Colors.white,
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white, width: 2),
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.check,
                       color: AppTheme.primary,
-                      size: 16,
+                      size: checkIconSize,
                     ),
                   ),
           ),
@@ -357,12 +492,16 @@ class _ConfirmKey extends StatelessWidget {
 class _KeySurface extends StatelessWidget {
   const _KeySurface({
     required this.width,
+    required this.height,
+    required this.keyRadius,
     required this.onTap,
     required this.child,
     this.color,
   });
 
   final double width;
+  final double height;
+  final double keyRadius;
   final VoidCallback onTap;
   final Widget child;
   final Color? color;
@@ -373,13 +512,13 @@ class _KeySurface extends StatelessWidget {
 
     return SizedBox(
       width: width,
-      height: _TableNumberDialogState._keyHeight,
+      height: height,
       child: Material(
         color: keyColor,
-        borderRadius: BorderRadius.circular(_TableNumberDialogState._keyRadius),
+        borderRadius: BorderRadius.circular(keyRadius),
         child: InkWell(
           onTap: onTap,
-          borderRadius: BorderRadius.circular(_TableNumberDialogState._keyRadius),
+          borderRadius: BorderRadius.circular(keyRadius),
           child: Center(child: child),
         ),
       ),

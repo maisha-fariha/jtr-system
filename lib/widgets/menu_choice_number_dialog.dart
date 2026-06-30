@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 
 typedef MenuChoiceNumberCallback = void Function(int choiceNumber);
 
@@ -29,7 +31,7 @@ class MenuChoiceNumberDialog extends StatefulWidget {
         maxChoices: maxChoices,
       ),
       barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
+      barrierColor: AppTheme.dialogBarrier,
     );
   }
 
@@ -53,71 +55,135 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      backgroundColor: AppTheme.background,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 36),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
+    return Obx(() {
+      if (Get.isRegistered<ThemeController>()) {
+        ThemeController.to.isDark.value;
+      }
+
+      final isLarge = JtrResponsive.isLargeDevice(context);
+      final gridSpacing = JtrResponsive.getResponsiveWidth(
+        context,
+        isLarge ? 20 : 16,
+      );
+      final crossAxisCount = JtrResponsive.getResponsiveValue(
+        context,
+        small: 3,
+        medium: 3,
+        large: 6,
+      );
+      final dialogRadius = JtrResponsive.getResponsiveRadius(
+        context,
+        isLarge ? 24 : 16,
+      );
+      final maxDialogWidth = JtrResponsive.getResponsiveWidth(
+        context,
+        isLarge ? 560 : 400,
+      );
+
+      return Dialog(
+        backgroundColor: AppTheme.dialogBackground,
+        insetPadding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: isLarge ? 48 : 36,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(dialogRadius),
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxDialogWidth),
+          child: Padding(
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              left: isLarge ? 20 : 16,
+              right: isLarge ? 20 : 16,
+              top: isLarge ? 18 : 14,
+              bottom: isLarge ? 24 : 20,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                _HeaderIconButton(
-                  backgroundColor: AppTheme.inactiveSurface,
-                  icon: Icons.chevron_left,
-                  iconColor: AppTheme.textSecondary,
-                  onTap: () => Get.back(),
-                ),
-                Expanded(
-                  child: Text(
-                    widget.menuLabel,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.darkText,
-                      letterSpacing: 0.3,
+                Row(
+                  children: [
+                    _HeaderIconButton(
+                      backgroundColor: AppTheme.inactiveSurface,
+                      icon: Icons.chevron_left,
+                      iconColor: AppTheme.textSecondary,
+                      onTap: () => Get.back(),
                     ),
-                  ),
+                    Expanded(
+                      child: Text(
+                        widget.menuLabel,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: _choiceDialogFontSize(context, 16),
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.darkText,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                    _HeaderIconButton(
+                      backgroundColor: AppTheme.lightButton,
+                      icon: Icons.check,
+                      iconColor: AppTheme.primary,
+                      onTap: _selectedNumber == null ? null : _confirm,
+                    ),
+                  ],
                 ),
-                _HeaderIconButton(
-                  backgroundColor: AppTheme.lightButton,
-                  icon: Icons.check,
-                  iconColor: AppTheme.primary,
-                  onTap: _selectedNumber == null ? null : _confirm,
+                JtrResponsive.getResponsiveSpacing(
+                  context,
+                  isLarge ? 16 : 14,
+                ),
+                Divider(height: 1, color: AppTheme.cardBorder),
+                JtrResponsive.getResponsiveSpacing(
+                  context,
+                  isLarge ? 24 : 20,
+                ),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: widget.maxChoices,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: crossAxisCount,
+                    mainAxisSpacing: gridSpacing,
+                    crossAxisSpacing: gridSpacing,
+                    childAspectRatio: 1,
+                  ),
+                  itemBuilder: (context, index) {
+                    final number = index + 1;
+                    final isSelected = _selectedNumber == number;
+                    return _ChoiceNumberButton(
+                      number: number,
+                      isSelected: isSelected,
+                      onTap: () => _selectNumber(number),
+                    );
+                  },
                 ),
               ],
             ),
-            const SizedBox(height: 14),
-            Divider(height: 1, color: AppTheme.cardBorder),
-            const SizedBox(height: 20),
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: widget.maxChoices,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 16,
-                crossAxisSpacing: 16,
-                childAspectRatio: 1,
-              ),
-              itemBuilder: (context, index) {
-                final number = index + 1;
-                final isSelected = _selectedNumber == number;
-                return _ChoiceNumberButton(
-                  number: number,
-                  isSelected: isSelected,
-                  onTap: () => _selectNumber(number),
-                );
-              },
-            ),
-          ],
+          ),
         ),
-      ),
-    );
+      );
+    });
   }
+}
+
+double _choiceDialogFontSize(BuildContext context, double base) {
+  final fontSize = JtrResponsive.getResponsiveFontSize(context, base);
+  if (JtrResponsive.isLargeDevice(context)) {
+    return fontSize + 2;
+  }
+  return fontSize;
+}
+
+double _choiceDialogIconSize(BuildContext context, double base) {
+  final size = JtrResponsive.getResponsiveSize(context, base);
+  if (JtrResponsive.isLargeDevice(context)) {
+    return size + 2;
+  }
+  return size;
 }
 
 class _HeaderIconButton extends StatelessWidget {
@@ -135,16 +201,30 @@ class _HeaderIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isLarge = JtrResponsive.isLargeDevice(context);
+    final radius = JtrResponsive.getResponsiveRadius(
+      context,
+      isLarge ? 12 : 10,
+    );
+    final size = JtrResponsive.getResponsiveSize(
+      context,
+      isLarge ? 44 : 40,
+    );
+
     return Material(
       color: backgroundColor,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(radius),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(radius),
         child: SizedBox(
-          width: 40,
-          height: 40,
-          child: Icon(icon, color: iconColor, size: 22),
+          width: size,
+          height: size,
+          child: Icon(
+            icon,
+            color: iconColor,
+            size: _choiceDialogIconSize(context, 22),
+          ),
         ),
       ),
     );
@@ -164,6 +244,8 @@ class _ChoiceNumberButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isLarge = JtrResponsive.isLargeDevice(context);
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -175,14 +257,14 @@ class _ChoiceNumberButton extends StatelessWidget {
             color: isSelected ? AppTheme.lightButton : AppTheme.inactiveSurface,
             border: Border.all(
               color: isSelected ? AppTheme.primary : AppTheme.cardBorder,
-              width: isSelected ? 2 : 1,
+              width: isSelected ? (isLarge ? 2.5 : 2) : 1,
             ),
           ),
           alignment: Alignment.center,
           child: Text(
             '$number',
             style: TextStyle(
-              fontSize: 22,
+              fontSize: _choiceDialogFontSize(context, 22),
               fontWeight: FontWeight.w700,
               color: AppTheme.darkText,
             ),

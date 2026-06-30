@@ -40,6 +40,9 @@ dependencies:
   hive_flutter: ^1.1.0
   freezed_annotation: ^3.0.0
   json_annotation: ^4.9.0
+  flutter_screenutil: ^5.9.0
+  gems_responsive:
+    path: flutter_gems/packages/gems_responsive
 
 dev_dependencies:
   flutter_test:

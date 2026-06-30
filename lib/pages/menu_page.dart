@@ -7,6 +7,16 @@ import '../models/menu_item.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
+
+/// Slightly larger text on large screens for menu / CHOIX layout.
+double _menuPageFontSize(BuildContext context, double base) {
+  final fontSize = JtrResponsive.getResponsiveFontSize(context, base);
+  if (JtrResponsive.isLargeDevice(context)) {
+    return fontSize + 2;
+  }
+  return fontSize;
+}
 
 /// Figma frame 160:1522 — product-selection screen (CHOIX 1/2/3).
 ///
@@ -38,38 +48,44 @@ class MenuPage extends GetView<OrderMenuController> {
         }
       },
       child: Scaffold(
-      backgroundColor: AppTheme.connectBackground,
-      body: SafeArea(
-        child: Column(
-          children: [
-            const _MenuHeader(),
-            Divider(height: 1, color: AppTheme.cardBorder),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.only(bottom: 88),
-                child: Padding(
-                  // Figma: content starts at x=24, width=342
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 24),
-                      for (final category in controller.visibleCategories) ...[
-                        _CourseSectionHeader(category: category),
-                        const SizedBox(height: 16),
-                        _CourseItemsGrid(category: category),
-                        const SizedBox(height: 32),
+        backgroundColor: AppTheme.connectBackground,
+        body: SafeArea(
+          child: Column(
+            children: [
+              const _MenuHeader(),
+              Divider(height: 1, color: AppTheme.cardBorder),
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    bottom: 88,
+                  ),
+                  child: Padding(
+                    // Figma: content starts at x=24, width=342
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      horizontal: 24,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        JtrResponsive.getResponsiveSpacing(context, 24),
+                        for (final category in controller.visibleCategories) ...[
+                          _CourseSectionHeader(category: category),
+                          JtrResponsive.getResponsiveSpacing(context, 16),
+                          _CourseItemsGrid(category: category),
+                          JtrResponsive.getResponsiveSpacing(context, 32),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            const _MenuBottomNav(),
-          ],
+              const _MenuBottomNav(),
+            ],
+          ),
         ),
-      ),
-      floatingActionButton: const _ConfirmFab(),
+        floatingActionButton: const _ConfirmFab(),
       ),
     );
   }
@@ -83,14 +99,17 @@ class _MenuHeader extends GetView<OrderMenuController> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 64,
+      height: JtrResponsive.adaptiveHeight(context, 64, compact: 48),
       child: Padding(
         // Figma: left container at x=16; confirm button at x=334 → right pad=16
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 16,
+        ),
         child: Row(
           children: [
             const _MenuIconButton(),
-            const SizedBox(width: 12),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
             const Expanded(child: _OrderDisplay()),
             const _ConfirmIconButton(),
           ],
@@ -108,9 +127,12 @@ class _MenuIconButton extends GetView<OrderMenuController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final count = controller.selectedCount;
+      final buttonSize = JtrResponsive.getResponsiveSize(context, 40);
+      final badgeSize = JtrResponsive.getResponsiveSize(context, 20);
+
       return SizedBox(
-        width: 40,
-        height: 40,
+        width: buttonSize,
+        height: buttonSize,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -125,28 +147,31 @@ class _MenuIconButton extends GetView<OrderMenuController> {
               padding: EdgeInsets.zero,
               icon: Icon(
                 Icons.menu,
-                size: 24,
+                size: JtrResponsive.getResponsiveSize(context, 24),
                 color: AppTheme.darkText,
               ),
             ),
             if (count > 0)
               Positioned(
-                right: -4,
-                top: -4,
+                right: JtrResponsive.getResponsiveWidth(context, -4),
+                top: JtrResponsive.getResponsiveHeight(context, -4),
                 child: Container(
-                  width: 20,
-                  height: 20,
+                  width: badgeSize,
+                  height: badgeSize,
                   decoration: BoxDecoration(
                     color: AppTheme.primary,
                     shape: BoxShape.circle,
-                    border: Border.all(color: AppTheme.background, width: 1.5),
+                    border: Border.all(
+                      color: AppTheme.background,
+                      width: JtrResponsive.getResponsiveWidth(context, 1.5),
+                    ),
                   ),
                   alignment: Alignment.center,
                   child: Text(
                     '$count',
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: Colors.white,
-                      fontSize: 10,
+                      fontSize: _menuPageFontSize(context, 10),
                       fontWeight: FontWeight.bold,
                       height: 1,
                     ),
@@ -174,19 +199,19 @@ class _OrderDisplay extends GetView<OrderMenuController> {
         Text(
           'COMMANDE EN COURS',
           style: TextStyle(
-            fontSize: 11,
+            fontSize: _menuPageFontSize(context, 11),
             fontWeight: FontWeight.w500,
             letterSpacing: 0.5,
             color: AppTheme.textSecondary.withValues(alpha: 0.7),
             height: 1.2,
           ),
         ),
-        const SizedBox(height: 2),
+        JtrResponsive.getResponsiveSpacing(context, 2),
         // Access .value inside build — tracked by GetView's implicit Obx
         Obx(() => Text(
               'Table ${controller.currentTable.value}',
               style: TextStyle(
-                fontSize: 16,
+                fontSize: _menuPageFontSize(context, 16),
                 fontWeight: FontWeight.bold,
                 color: AppTheme.darkText,
                 height: 1.2,
@@ -209,7 +234,7 @@ class _ConfirmIconButton extends GetView<OrderMenuController> {
         onPressed: enabled ? controller.confirmOrder : null,
         icon: Icon(
           Icons.check_circle_outline,
-          size: 24,
+          size: JtrResponsive.getResponsiveSize(context, 24),
           color: enabled
               ? AppTheme.primary
               : AppTheme.textSecondary.withValues(alpha: 0.35),
@@ -228,14 +253,16 @@ class _CourseSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final circleSize = JtrResponsive.getResponsiveSize(context, 24);
+
     // Figma: header h=33, circle 24×24, heading at x=32
     return SizedBox(
-      height: 33,
+      height: JtrResponsive.getResponsiveHeight(context, 33),
       child: Row(
         children: [
           Container(
-            width: 24,
-            height: 24,
+            width: circleSize,
+            height: circleSize,
             decoration: BoxDecoration(
               color: category.color,
               shape: BoxShape.circle,
@@ -243,19 +270,19 @@ class _CourseSectionHeader extends StatelessWidget {
             alignment: Alignment.center,
             child: Text(
               '${category.number}',
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
-                fontSize: 12,
+                fontSize: _menuPageFontSize(context, 12),
                 fontWeight: FontWeight.bold,
                 height: 1,
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
           Text(
             'CHOIX ${category.number} — ${category.label}',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: _menuPageFontSize(context, 13),
               fontWeight: FontWeight.w700,
               color: AppTheme.darkText,
               letterSpacing: 0.4,
@@ -264,7 +291,7 @@ class _CourseSectionHeader extends StatelessWidget {
           const Spacer(),
           Icon(
             Icons.expand_more,
-            size: 16,
+            size: JtrResponsive.getResponsiveSize(context, 16),
             color: AppTheme.textSecondary.withValues(alpha: 0.6),
           ),
         ],
@@ -288,12 +315,22 @@ class _CourseItemsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final columns = JtrResponsive.gridColumns<int>(
+      context,
+      small: 3,
+      medium: 4,
+      large: 4,
+    );
+    final spacing = JtrResponsive.getResponsiveWidth(context, 12);
+    final runSpacing = JtrResponsive.getResponsiveHeight(context, 12);
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final cellWidth = (constraints.maxWidth - 24) / 3;
+        final cellWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
         return Wrap(
-          spacing: 12,
-          runSpacing: 12,
+          spacing: spacing,
+          runSpacing: runSpacing,
           children: [
             for (final item in category.items)
               _MenuItemButton(
@@ -335,22 +372,31 @@ class _MenuItemButton extends GetView<OrderMenuController> {
       final isSelected = controller.isSelected(item);
       final bg = isSelected ? AppTheme.lightButton : AppTheme.background;
       final borderColor = isSelected ? AppTheme.primary : AppTheme.cardBorder;
+      final itemRadius = JtrResponsive.getResponsiveRadius(context, 10);
 
       return GestureDetector(
         onTap: () => controller.toggleItem(item),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           width: width,
-          height: 128,
+          height: JtrResponsive.adaptiveHeight(context, 128, compact: 92),
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: borderColor, width: isSelected ? 1.5 : 1),
+            borderRadius: BorderRadius.circular(itemRadius),
+            border: Border.all(
+              color: borderColor,
+              width: isSelected
+                  ? JtrResponsive.getResponsiveWidth(context, 1.5)
+                  : JtrResponsive.getResponsiveWidth(context, 1),
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
+                blurRadius: JtrResponsive.getResponsiveSize(context, 4),
+                offset: Offset(
+                  0,
+                  JtrResponsive.getResponsiveHeight(context, 2),
+                ),
               ),
             ],
           ),
@@ -359,19 +405,25 @@ class _MenuItemButton extends GetView<OrderMenuController> {
             children: [
               // Accent bar — h=4, border-radius top only
               Container(
-                height: 4,
+                height: JtrResponsive.getResponsiveHeight(context, 4),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? category.color
                       : category.color.withValues(alpha: 0.5),
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(10),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(itemRadius),
                   ),
                 ),
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    left: 16,
+                    top: 12,
+                    right: 8,
+                    bottom: 8,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -379,7 +431,7 @@ class _MenuItemButton extends GetView<OrderMenuController> {
                       Text(
                         item.formattedPrice,
                         style: TextStyle(
-                          fontSize: 11,
+                          fontSize: _menuPageFontSize(context, 11),
                           fontWeight: FontWeight.w600,
                           color: isSelected
                               ? AppTheme.primary
@@ -394,7 +446,7 @@ class _MenuItemButton extends GetView<OrderMenuController> {
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 10,
+                          fontSize: _menuPageFontSize(context, 10),
                           fontWeight: FontWeight.w700,
                           color: isSelected
                               ? AppTheme.darkText
@@ -425,6 +477,8 @@ class _ConfirmFab extends GetView<OrderMenuController> {
     return Obx(() {
       final count = controller.selectedCount;
       final enabled = count > 0;
+      final badgeSize = JtrResponsive.getResponsiveSize(context, 18);
+
       return FloatingActionButton(
         onPressed: enabled ? controller.confirmOrder : null,
         backgroundColor: enabled
@@ -434,14 +488,18 @@ class _ConfirmFab extends GetView<OrderMenuController> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            const Icon(Icons.check, color: Colors.white, size: 28),
+            Icon(
+              Icons.check,
+              color: Colors.white,
+              size: JtrResponsive.getResponsiveSize(context, 28),
+            ),
             if (count > 0)
               Positioned(
                 top: 0,
                 right: 0,
                 child: Container(
-                  width: 18,
-                  height: 18,
+                  width: badgeSize,
+                  height: badgeSize,
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     shape: BoxShape.circle,
@@ -451,7 +509,7 @@ class _ConfirmFab extends GetView<OrderMenuController> {
                     '$count',
                     style: TextStyle(
                       color: AppTheme.primary,
-                      fontSize: 9,
+                      fontSize: _menuPageFontSize(context, 9),
                       fontWeight: FontWeight.bold,
                     ),
                   ),
@@ -472,19 +530,26 @@ class _MenuBottomNav extends GetView<OrderMenuController> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 64,
+      height: JtrResponsive.adaptiveHeight(context, 64, compact: 48),
       decoration: BoxDecoration(
         color: AppTheme.background,
         border: Border(top: BorderSide(color: AppTheme.cardBorder)),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 32),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 32,
+        ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             IconButton(
               onPressed: () => Get.offAllNamed(AppRoutes.session),
-              icon: Icon(Icons.home, color: AppTheme.primary, size: 28),
+              icon: Icon(
+                Icons.home,
+                color: AppTheme.primary,
+                size: JtrResponsive.getResponsiveSize(context, 28),
+              ),
             ),
             IconButton(
               onPressed: () {
@@ -494,14 +559,18 @@ class _MenuBottomNav extends GetView<OrderMenuController> {
                   Get.back();
                 }
               },
-              icon: Icon(Icons.arrow_back, color: AppTheme.darkText, size: 28),
+              icon: Icon(
+                Icons.arrow_back,
+                color: AppTheme.darkText,
+                size: JtrResponsive.getResponsiveSize(context, 28),
+              ),
             ),
             IconButton(
               onPressed: AppNavigation.logout,
-              icon: const Icon(
+              icon: Icon(
                 Icons.logout,
-                color: Color(0xFF2EC4B6),
-                size: 28,
+                color: const Color(0xFF2EC4B6),
+                size: JtrResponsive.getResponsiveSize(context, 28),
               ),
             ),
           ],

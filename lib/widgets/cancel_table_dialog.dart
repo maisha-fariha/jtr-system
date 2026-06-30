@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
+import '../utils/responsive.dart';
 import 'user_identifiant_field.dart';
 import 'user_identifiant_field_controller.dart';
 
@@ -35,8 +36,6 @@ class CancelTableDialog extends StatefulWidget {
 }
 
 class _CancelTableDialogState extends State<CancelTableDialog> {
-  static const _horizontalPadding = 20.0;
-
   final _identifiantController = TextEditingController();
   final _passwordController = TextEditingController();
   final _passwordFocusNode = FocusNode();
@@ -67,24 +66,36 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
         ThemeController.to.isDark.value;
       }
 
+      final horizontalPadding =
+          JtrResponsive.getResponsiveWidth(context, 20);
+
       return Dialog(
         backgroundColor: AppTheme.background,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+        insetPadding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 28,
+        ),
         clipBehavior: Clip.none,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 24),
+          ),
+        ),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final fieldWidth = constraints.maxWidth - (_horizontalPadding * 2);
+            final fieldWidth =
+                constraints.maxWidth - (horizontalPadding * 2);
 
             return Stack(
               clipBehavior: Clip.none,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    _horizontalPadding,
-                    16,
-                    _horizontalPadding,
-                    24,
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    left: horizontalPadding,
+                    right: horizontalPadding,
+                    top: 16,
+                    bottom: 24,
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -92,17 +103,29 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: Container(
-                          padding: const EdgeInsets.all(4),
+                          padding: JtrResponsive.getResponsivePadding(
+                            context,
+                            all: 4,
+                          ),
                           decoration: BoxDecoration(
-                            color: AppTheme.textSecondary.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(50),
+                            color: AppTheme.textSecondary
+                                .withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(
+                              JtrResponsive.getResponsiveRadius(
+                                context,
+                                50,
+                              ),
+                            ),
                           ),
                           child: IconButton(
                             onPressed: () => Get.back(),
                             icon: Icon(
                               Icons.arrow_back_ios_new,
                               color: AppTheme.darkText,
-                              size: 20,
+                              size: JtrResponsive.getResponsiveSize(
+                                context,
+                                20,
+                              ),
                             ),
                           ),
                         ),
@@ -111,18 +134,21 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                         widget.title,
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          fontSize: 18,
+                          fontSize: JtrResponsive.getResponsiveFontSize(
+                            context,
+                            18,
+                          ),
                           fontWeight: FontWeight.bold,
                           color: AppTheme.darkText,
                           height: 1.3,
                         ),
                       ),
-                      const SizedBox(height: 8),
+                      JtrResponsive.getResponsiveSpacing(context, 8),
                       UserIdentifiantField(
                         controller: _identifiantFieldController,
                         hintText: 'Identifiant, Prénom, Numéro, ...',
                       ),
-                      const SizedBox(height: 16),
+                      JtrResponsive.getResponsiveSpacing(context, 16),
                       AuthInputContainer(
                         showIcons: false,
                         child: TextField(
@@ -130,15 +156,22 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                           focusNode: _passwordFocusNode,
                           obscureText: true,
                           style: TextStyle(
-                            fontSize: 15,
+                            fontSize: JtrResponsive.getResponsiveFontSize(
+                              context,
+                              15,
+                            ),
                             color: AppTheme.darkText,
                           ),
                           decoration: InputDecoration(
                             hintText: 'Mot de passe',
                             hintStyle: TextStyle(
-                              color:
-                                  AppTheme.textSecondary.withValues(alpha: 0.55),
-                              fontSize: 15,
+                              color: AppTheme.textSecondary
+                                  .withValues(alpha: 0.55),
+                              fontSize:
+                                  JtrResponsive.getResponsiveFontSize(
+                                context,
+                                15,
+                              ),
                               fontWeight: FontWeight.w400,
                             ),
                             border: InputBorder.none,
@@ -149,10 +182,13 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 24),
+                      JtrResponsive.getResponsiveSpacing(context, 24),
                       SizedBox(
                         width: double.infinity,
-                        height: 52,
+                        height: JtrResponsive.getResponsiveHeight(
+                          context,
+                          52,
+                        ),
                         child: ElevatedButton(
                           onPressed: () {
                             Get.back();
@@ -162,15 +198,25 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
                             backgroundColor: AppTheme.primary,
                             foregroundColor: Colors.white,
                             elevation: 4,
-                            shadowColor: AppTheme.primary.withValues(alpha: 0.4),
+                            shadowColor:
+                                AppTheme.primary.withValues(alpha: 0.4),
                             shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(
+                                JtrResponsive.getResponsiveRadius(
+                                  context,
+                                  16,
+                                ),
+                              ),
                             ),
                           ),
-                          child: const Text(
+                          child: Text(
                             'Se connecter',
                             style: TextStyle(
-                              fontSize: 17,
+                              fontSize:
+                                  JtrResponsive.getResponsiveFontSize(
+                                context,
+                                17,
+                              ),
                               fontWeight: FontWeight.w600,
                             ),
                           ),

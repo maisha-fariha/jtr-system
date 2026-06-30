@@ -785,6 +785,55 @@ class OrderMapper {
     return ids;
   }
 
+  /// Course ids to fire to the kitchen (send / envoyer).
+  static List<int> extractKitchenSendCourseIds(Map<String, dynamic> data) {
+    final ids = <int>{};
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return const [];
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseId = course['id'];
+        final courseIdInt = courseId is int
+            ? courseId
+            : (courseId is num ? courseId.toInt() : null);
+        if (courseIdInt == null) continue;
+
+        final status = course['status'] as String?;
+        if (status == 'in_progress' ||
+            status == 'to_be_continued' ||
+            status == 'pending') {
+          ids.add(courseIdInt);
+          continue;
+        }
+
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          final itemStatus = item['status'] as String?;
+          if (itemStatus == null ||
+              itemStatus == 'in_progress' ||
+              itemStatus == 'pending' ||
+              itemStatus == 'to_be_continued') {
+            ids.add(courseIdInt);
+            break;
+          }
+        }
+      }
+    }
+
+    if (ids.isNotEmpty) return ids.toList();
+
+    return extractRequestableCourseIds(data);
+  }
+
   static int? resolveTableId(
     List<Map<String, dynamic>> tables,
     String tableNumber,
@@ -1100,6 +1149,142 @@ class OrderMapper {
     }
 
     return buildOrderUpdatePayload(working);
+  }
+
+  static Map<String, dynamic> adjustLineQuantityAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required int delta,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      final currentQty = (item['qty'] as num?)?.toInt() ?? 1;
+      final newQty = currentQty + delta;
+      if (newQty <= 0) {
+        item['status'] = 'cancelled';
+        return;
+      }
+      final unitPrice = _itemUnitPrice(item);
+      item['qty'] = newQty;
+      item['sub_total'] = unitPrice * newQty;
+    });
+    return buildOrderUpdatePayload(working);
+  }
+
+  static Map<String, dynamic> applyOfferAtLineIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      item['is_offer'] = true;
+      item['offer_reason'] = 'Article offert';
+      item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
+      item['sub_total'] = '0.00';
+    });
+    return buildOrderUpdatePayload(working);
+  }
+
+  static bool _mutateVisibleLineAtIndex(
+    Map<String, dynamic> orderDetail,
+    int lineIndex,
+    void Function(Map<String, dynamic> item) mutate,
+  ) {
+    var currentIndex = 0;
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+
+          if (currentIndex == lineIndex) {
+            mutate(item);
+            return true;
+          }
+          currentIndex++;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  static double parseOrderTotalAmount(Map<String, dynamic> data) {
+    final order = unwrapOrderDetail(data);
+    final raw = order['total_price'] ??
+        order['remaining_amount'] ??
+        order['total'] ??
+        data['total_price'];
+    if (raw is num) return raw.toDouble();
+    if (raw is String) {
+      return double.tryParse(raw.replaceAll(',', '.').replaceAll('€', '').trim()) ??
+          0;
+    }
+    return 0;
+  }
+
+  static List<Map<String, dynamic>> parsePaymentModesList(dynamic data) {
+    if (data is List) {
+      return data.whereType<Map<String, dynamic>>().toList();
+    }
+    if (data is Map<String, dynamic>) {
+      for (final key in ['data', 'payment_modes', 'modes', 'items']) {
+        final inner = data[key];
+        if (inner is List) {
+          return inner.whereType<Map<String, dynamic>>().toList();
+        }
+      }
+    }
+    return const [];
+  }
+
+  static int? resolvePaymentModeId(
+    List<Map<String, dynamic>> modes, {
+    required bool isCash,
+  }) {
+    if (modes.isEmpty) return null;
+
+    for (final mode in modes) {
+      final id = (mode['id'] as num?)?.toInt();
+      if (id == null) continue;
+
+      final label = [
+        mode['name'],
+        mode['code'],
+        mode['label'],
+        mode['type'],
+      ].whereType<String>().join(' ').toLowerCase();
+
+      final matchesCash = label.contains('esp') ||
+          label.contains('cash') ||
+          label.contains('liquide');
+      final matchesCard = label.contains('carte') ||
+          label.contains('card') ||
+          label.contains('credit') ||
+          label.contains('cb');
+
+      if (isCash && matchesCash) return id;
+      if (!isCash && matchesCard) return id;
+    }
+
+    if (modes.length == 1) {
+      return (modes.first['id'] as num?)?.toInt();
+    }
+
+    final firstId = (modes.first['id'] as num?)?.toInt();
+    final lastId = (modes.last['id'] as num?)?.toInt();
+    return isCash ? firstId : lastId;
   }
 
   static Map<String, dynamic> removeSimpleProductFromOrder({

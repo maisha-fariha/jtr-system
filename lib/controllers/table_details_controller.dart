@@ -15,6 +15,8 @@ import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/composed_product_picker_sheet.dart';
 import '../widgets/table_number_dialog.dart';
+import '../widgets/ticket_loading_dialog.dart';
+import '../widgets/ticket_success_dialog.dart';
 import 'session_controller.dart';
 
 class TableDetailsController extends GetxController {
@@ -358,6 +360,16 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    if (icon == Icons.receipt_long_outlined) {
+      printTicket(context: context);
+      return;
+    }
+
+    if (icon == Icons.send_outlined) {
+      sendToKitchen(context: context);
+      return;
+    }
+
     if (icon == Icons.payments_outlined) {
       togglePaymentOptions();
       return;
@@ -392,6 +404,141 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
   bool isToolbarIconEnabled(IconData icon) => true;
+
+  Future<void> printTicket({required BuildContext context}) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    activeToolbarIcon.value = Icons.receipt_long_outlined;
+    showPaymentOptions.value = false;
+
+    if (!context.mounted) return;
+    showDialog<void>(
+      context: context,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      builder: (_) => const TicketLoadingDialog(),
+    );
+
+    try {
+      final updated = await _orderRepository.markOrderPrinted(id);
+      _syncOrderInSession(updated, orderNumber);
+
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        await showDialog<void>(
+          context: context,
+          useRootNavigator: true,
+          barrierDismissible: false,
+          barrierColor: Colors.black.withValues(alpha: 0.45),
+          builder: (_) => const TicketSuccessDialog(),
+        );
+      }
+    } on ApiException catch (e) {
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      ApiDebugDialog.show(title: 'Erreur ticket', body: e.message);
+    } catch (_) {
+      if (context.mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      Get.snackbar('Erreur', 'Impossible d\'imprimer le ticket.');
+    }
+  }
+
+  Future<void> sendToKitchen({required BuildContext context}) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    AppConfirmDialog.show(
+      context: context,
+      title: 'Envoyer en cuisine',
+      message:
+          'Envoyer toutes les commandes en attente pour la table $orderNumber ?',
+      onConfirm: () async {
+        activeToolbarIcon.value = Icons.send_outlined;
+        showPaymentOptions.value = false;
+        isAddingProduct.value = true;
+        try {
+          final updated = await _orderRepository.requestAllCourses(id);
+          _syncOrderInSession(updated, orderNumber);
+          Get.snackbar(
+            'Envoyé',
+            'La commande a été envoyée en cuisine.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+            margin: const EdgeInsets.all(16),
+          );
+        } on ApiException catch (e) {
+          ApiDebugDialog.show(title: 'Erreur envoi', body: e.message);
+        } catch (_) {
+          Get.snackbar(
+            'Erreur',
+            'Impossible d\'envoyer la commande en cuisine.',
+            snackPosition: SnackPosition.BOTTOM,
+            margin: const EdgeInsets.all(16),
+          );
+        } finally {
+          isAddingProduct.value = false;
+        }
+      },
+    );
+  }
+
+  Future<void> payOrder({required BuildContext context, required bool isCash}) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final label = isCash ? 'espèces' : 'carte de crédit';
+    AppConfirmDialog.show(
+      context: context,
+      title: 'Paiement',
+      message: 'Encaisser la table $orderNumber en $label ?',
+      onConfirm: () async {
+        isAddingProduct.value = true;
+        try {
+          final updated = await _orderRepository.payOrder(
+            orderId: id,
+            isCash: isCash,
+          );
+          _syncOrderInSession(updated, orderNumber);
+          showPaymentOptions.value = false;
+          Get.snackbar(
+            'Paiement enregistré',
+            'Le paiement en $label a été enregistré.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+            margin: const EdgeInsets.all(16),
+          );
+        } on ApiException catch (e) {
+          ApiDebugDialog.show(
+            title: 'Erreur paiement',
+            body: '${_orderRepository.lastAddItemLog ?? ''}\n\n${e.message}',
+          );
+        } catch (_) {
+          Get.snackbar(
+            'Erreur',
+            'Impossible d\'enregistrer le paiement.',
+            snackPosition: SnackPosition.BOTTOM,
+            margin: const EdgeInsets.all(16),
+          );
+        } finally {
+          isAddingProduct.value = false;
+        }
+      },
+    );
+  }
 
   Future<void> requestNextCourse({BuildContext? context}) async {
     final id = resolvedOrderId;
@@ -554,22 +701,95 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  void incrementProduct(int productIndex) {
-    if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>()
-        .adjustOrderProductQuantity(orderNumber, productIndex, 1);
+  Future<void> incrementProduct(int productIndex) async {
+    await _mutateLineQuantity(productIndex, 1);
   }
 
-  void decrementProduct(int productIndex) {
-    if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>()
-        .adjustOrderProductQuantity(orderNumber, productIndex, -1);
+  Future<void> decrementProduct(int productIndex) async {
+    await _mutateLineQuantity(productIndex, -1);
   }
 
-  void offerProduct(int productIndex) {
-    if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>()
-        .applyOfferToOrderProduct(orderNumber, productIndex);
+  Future<void> offerProduct(int productIndex) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder == null ||
+        productIndex < 0 ||
+        productIndex >= currentOrder.products.length) {
+      return;
+    }
+
+    isAddingProduct.value = true;
+    try {
+      final updated = await _orderRepository.applyOfferAtLineIndex(
+        orderId: id,
+        lineIndex: productIndex,
+      );
+      _syncOrderInSession(updated, orderNumber);
+      Get.snackbar(
+        'Offert',
+        '${currentOrder.products[productIndex].name} a été offert.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      );
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur offre',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible d\'offrir l\'article.');
+    } finally {
+      isAddingProduct.value = false;
+    }
+  }
+
+  Future<void> _mutateLineQuantity(int productIndex, int delta) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder == null ||
+        productIndex < 0 ||
+        productIndex >= currentOrder.products.length) {
+      return;
+    }
+
+    final line = currentOrder.products[productIndex];
+    if (delta < 0) {
+      final qty = int.tryParse(line.quantity) ?? 1;
+      if (qty <= 1) {
+        await cancelOrderLine(productIndex);
+        return;
+      }
+    }
+
+    isAddingProduct.value = true;
+    try {
+      final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
+        orderId: id,
+        lineIndex: productIndex,
+        delta: delta,
+      );
+      _syncOrderInSession(updated, orderNumber);
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur quantité',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible de modifier la quantité.');
+    } finally {
+      isAddingProduct.value = false;
+    }
   }
 
   Future<void> cancelOrderLine(int productIndex) async {

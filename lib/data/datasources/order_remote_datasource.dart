@@ -246,4 +246,68 @@ class OrderRemoteDataSource {
       );
     }
   }
+
+  Future<void> payOrder({
+    required int orderId,
+    required double amount,
+    required int paymentModeId,
+  }) async {
+    final path = ApiEndpoints.payOrder(orderId);
+    final body = {
+      'amount': amount,
+      'payment_mode_id': paymentModeId,
+    };
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to pay order.',
+          statusCode: envelope.status,
+        );
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPaymentModes() async {
+    for (final path in [
+      ApiEndpoints.paymentModesForCheckout,
+      ApiEndpoints.activePaymentModes,
+    ]) {
+      try {
+        final response = await _client.get<Map<String, dynamic>>(path);
+        final envelope = ApiEnvelope<dynamic>.fromJson(
+          response.data!,
+          (json) => json,
+        );
+
+        if (!envelope.success) continue;
+
+        final modes = OrderMapper.parsePaymentModesList(envelope.data);
+        if (modes.isNotEmpty) return modes;
+      } on ApiException {
+        continue;
+      }
+    }
+
+    throw ApiException(message: 'Impossible de charger les modes de paiement.');
+  }
 }

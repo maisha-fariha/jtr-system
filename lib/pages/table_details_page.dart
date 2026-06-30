@@ -690,7 +690,7 @@ class _ToolbarIconButton extends StatelessWidget {
 
 // ── Payment buttons ────────────────────────────────────────────────────────────
 
-class _PaymentButtons extends StatelessWidget {
+class _PaymentButtons extends GetView<TableDetailsController> {
   const _PaymentButtons();
 
   static const _cashGrey = Color(0xFFB8B8B8);
@@ -711,7 +711,7 @@ class _PaymentButtons extends StatelessWidget {
             child: _PaymentButton(
               label: 'ESPECE',
               backgroundColor: _cashGrey,
-              onTap: () {},
+              onTap: () => controller.payOrder(context: context, isCash: true),
             ),
           ),
           JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
@@ -719,7 +719,7 @@ class _PaymentButtons extends StatelessWidget {
             child: _PaymentButton(
               label: 'CARTE DE CREDIT',
               backgroundColor: AppTheme.primary,
-              onTap: () {},
+              onTap: () => controller.payOrder(context: context, isCash: false),
             ),
           ),
         ],

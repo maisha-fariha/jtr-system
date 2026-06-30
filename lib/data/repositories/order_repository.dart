@@ -626,4 +626,132 @@ class OrderRepository {
     }
     return updated;
   }
+
+  Future<SessionOrder> adjustOrderLineQuantityAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required int delta,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Ajustement quantité ligne',
+      mutate: (detail) => OrderMapper.adjustLineQuantityAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        delta: delta,
+      ),
+    );
+  }
+
+  Future<SessionOrder> applyOfferAtLineIndex({
+    required int orderId,
+    required int lineIndex,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Offre article',
+      mutate: (detail) => OrderMapper.applyOfferAtLineIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+      ),
+    );
+  }
+
+  Future<SessionOrder> requestAllCourses(int orderId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractKitchenSendCourseIds(detail);
+    if (courseIds.isEmpty) {
+      throw ApiException(
+        message: 'Aucun article à envoyer en cuisine pour cette table.',
+      );
+    }
+
+    await _remote.requestCourses(orderId, courseIds);
+    final updated = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, updated);
+    return OrderMapper.fromOrderDetail(updated);
+  }
+
+  Future<SessionOrder> payOrder({
+    required int orderId,
+    required bool isCash,
+  }) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Paiement impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final amount = OrderMapper.parseOrderTotalAmount(detail);
+    if (amount <= 0) {
+      throw ApiException(message: 'Montant de commande invalide.');
+    }
+
+    final modes = await _remote.fetchPaymentModes();
+    final paymentModeId =
+        OrderMapper.resolvePaymentModeId(modes, isCash: isCash);
+    if (paymentModeId == null) {
+      throw ApiException(
+        message: 'Mode de paiement introuvable pour cette commande.',
+      );
+    }
+
+    await _remote.payOrder(
+      orderId: orderId,
+      amount: amount,
+      paymentModeId: paymentModeId,
+    );
+
+    final updated = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, updated);
+    return OrderMapper.fromOrderDetail(updated);
+  }
+
+  Future<SessionOrder> _mutateOrderLine({
+    required int orderId,
+    required String logTitle,
+    required Map<String, dynamic> Function(Map<String, dynamic> detail) mutate,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — modification impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── $logTitle ──');
+    apiLog.writeln('order_id=$orderId');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final payload = mutate(detail);
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
 }

@@ -342,6 +342,8 @@ class SessionController extends GetxController {
     selectAction(SessionAction.nouvelleCommande);
     TableNumberDialog.show(
       context: context,
+      integerOnly: true,
+      maxDigits: 4,
       onConfirm: (tableNumber) => _onTableNumberConfirmed(context, tableNumber),
     );
   }
@@ -360,6 +362,8 @@ class SessionController extends GetxController {
     TableNumberDialog.show(
       context: context,
       title: 'NOMBRE DE COUVERTS',
+      integerOnly: true,
+      maxDigits: 3,
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
           context: context,

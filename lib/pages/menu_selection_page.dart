@@ -152,7 +152,7 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          '1',
+                          '${selection.choiceNumber}',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: JtrResponsive.getResponsiveFontSize(
@@ -358,10 +358,15 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                 ),
                 JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                  child: InkWell(
+                    onTap: controller.toggleSidebarExpanded,
+                    borderRadius: BorderRadius.circular(
+                      JtrResponsive.getResponsiveRadius(context, 8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                         children: [
                           Expanded(
                             child: Text(
@@ -378,13 +383,17 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                               ),
                             ),
                           ),
-                          Icon(
-                            Icons.keyboard_arrow_down,
-                            size: JtrResponsive.getResponsiveSize(
-                              context,
-                              18,
+                          Obx(
+                            () => Icon(
+                              controller.isSidebarExpanded.value
+                                  ? Icons.keyboard_arrow_down
+                                  : Icons.keyboard_arrow_right,
+                              size: JtrResponsive.getResponsiveSize(
+                                context,
+                                18,
+                              ),
+                              color: AppTheme.textSecondary,
                             ),
-                            color: AppTheme.textSecondary,
                           ),
                         ],
                       ),
@@ -400,6 +409,7 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                         ),
                       ),
                     ],
+                    ),
                   ),
                 ),
               ],
@@ -409,8 +419,10 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
             height: JtrResponsive.getResponsiveHeight(context, 1),
             color: AppTheme.cardBorder,
           ),
-          Expanded(
-            child: ListView(
+          Obx(
+            () => controller.isSidebarExpanded.value
+                ? Expanded(
+                    child: ListView(
               padding: JtrResponsive.getResponsivePadding(
                 context,
                 left: 12,
@@ -459,36 +471,45 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                           if (selection.messageForCourse(item.courseNumber) !=
                               null) ...[
                             JtrResponsive.getResponsiveSpacing(context, 2),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    selection.messageForCourse(
-                                      item.courseNumber,
-                                    )!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize:
-                                          JtrResponsive.getResponsiveFontSize(
-                                        context,
-                                        11,
+                            InkWell(
+                              onTap: () => controller.editMessageForCourse(
+                                context: context,
+                                courseNumber: item.courseNumber,
+                              ),
+                              borderRadius: BorderRadius.circular(
+                                JtrResponsive.getResponsiveRadius(context, 6),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      selection.messageForCourse(
+                                        item.courseNumber,
+                                      )!,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize:
+                                            JtrResponsive.getResponsiveFontSize(
+                                          context,
+                                          11,
+                                        ),
+                                        fontWeight: FontWeight.w600,
+                                        color: AppTheme.primary,
+                                        letterSpacing: 0.3,
                                       ),
-                                      fontWeight: FontWeight.w600,
-                                      color: AppTheme.primary,
-                                      letterSpacing: 0.3,
                                     ),
                                   ),
-                                ),
-                                Icon(
-                                  Icons.keyboard_arrow_down,
-                                  size: JtrResponsive.getResponsiveSize(
-                                    context,
-                                    14,
+                                  Icon(
+                                    Icons.edit_outlined,
+                                    size: JtrResponsive.getResponsiveSize(
+                                      context,
+                                      14,
+                                    ),
+                                    color: AppTheme.primary,
                                   ),
-                                  color: AppTheme.primary,
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ],
                         ],
@@ -497,6 +518,8 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                 ],
               ],
             ),
+                  )
+                : const SizedBox.shrink(),
           ),
           Divider(
             height: JtrResponsive.getResponsiveHeight(context, 1),

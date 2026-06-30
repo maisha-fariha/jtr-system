@@ -95,7 +95,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
         : _tableInput;
     if (value.isEmpty) return;
     if (widget.integerOnly && int.tryParse(value) == null) return;
-    Get.back();
+    Navigator.of(context, rootNavigator: true).pop();
     Future.microtask(() => widget.onConfirm?.call(value));
   }
 
@@ -163,7 +163,8 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         height: keyHeight,
                         keyRadius: keyRadius,
                         backgroundColor: AppTheme.keypadCancelBackground,
-                        onTap: () => Get.back(),
+                        onTap: () =>
+                            Navigator.of(context, rootNavigator: true).pop(),
                         child: Icon(
                           Icons.close,
                           color: AppTheme.keypadCancelIcon,
@@ -261,7 +262,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                           height: keyHeight,
                           keyRadius: keyRadius,
                           label: '*',
-                          onTap: () {},
+                          onTap: _clear,
                         ),
                     ],
                   ),
@@ -297,7 +298,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                           height: keyHeight,
                           keyRadius: keyRadius,
                           label: '-',
-                          onTap: () {},
+                          onTap: _backspace,
                         ),
                     ],
                   ),

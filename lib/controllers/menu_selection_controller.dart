@@ -33,6 +33,7 @@ class MenuSelectionController extends GetxController {
   final isLoadingMenus = false.obs;
   final isLoadingMenuDetail = false.obs;
   final isSaving = false.obs;
+  final isSidebarExpanded = true.obs;
   final menusError = RxnString();
 
   late final String orderNumber;
@@ -281,6 +282,30 @@ class MenuSelectionController extends GetxController {
 
   void dismissActiveSelection() {
     activeSelection.value = null;
+    isSidebarExpanded.value = true;
+  }
+
+  void toggleSidebarExpanded() {
+    isSidebarExpanded.value = !isSidebarExpanded.value;
+  }
+
+  void editMessageForCourse({
+    required BuildContext context,
+    required int courseNumber,
+  }) {
+    final selection = activeSelection.value;
+    if (selection == null) return;
+
+    final item = selection.selectedItemsByCourse[courseNumber];
+    if (item == null) return;
+
+    _showMessageTypingDialog(
+      context,
+      MenuMessageTarget(
+        courseNumber: courseNumber,
+        label: '1x ${item.name}',
+      ),
+    );
   }
 
   Future<void> requestNextCourse({required BuildContext context}) async {

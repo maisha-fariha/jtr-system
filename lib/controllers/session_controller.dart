@@ -211,11 +211,8 @@ class SessionController extends GetxController {
 
   void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
 
-  static String normalizeTableKey(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return trimmed;
-    return trimmed.replaceFirst(RegExp(r'^T'), '');
-  }
+  static String normalizeTableKey(String value) =>
+      OrderMapper.normalizeTableKey(value);
 
   static bool _tableKeysMatch(String a, String b) {
     if (a == b) return true;
@@ -581,20 +578,27 @@ class SessionController extends GetxController {
   }
 
   Future<void> deleteOrder(String orderNumber) async {
-    final idx = orders.indexWhere((order) => order.number == orderNumber);
-    if (idx < 0) return;
-
-    final order = orders[idx];
+    final order = findOrder(orderNumber: orderNumber);
+    if (order == null) return;
 
     try {
-      if (!order.isLocalOnly) {
-        await _orderRepository.closeOrder(order.id);
-        await loadSessionOrders(forceRefresh: true);
+      if (order.isLocalOnly) {
+        final tableId = -order.id;
+        if (tableId > 0) {
+          await _orderRepository.endTableSession(tableId);
+        }
       } else {
-        orders.removeAt(idx);
+        await _orderRepository.closeOrder(
+          order.id,
+          tableNumber: order.number,
+        );
       }
 
-      _clearUiStateForOrder(orderNumber);
+      orders.removeWhere((o) => _tableKeysMatch(o.number, order.number));
+      _clearUiStateForOrder(order.number);
+
+      unawaited(_sessionRepository.getTablesList(forceRefresh: true));
+      unawaited(loadSessionOrders(forceRefresh: true));
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
     } catch (_) {

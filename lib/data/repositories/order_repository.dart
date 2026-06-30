@@ -13,15 +13,18 @@ class OrderRepository {
     required OrderRemoteDataSource remote,
     required OrderLocalDataSource local,
     required SessionRemoteDataSource sessionRemote,
+    required SessionLocalDataSource sessionLocal,
     required ConnectivityService connectivity,
   })  : _remote = remote,
         _local = local,
         _sessionRemote = sessionRemote,
+        _sessionLocal = sessionLocal,
         _connectivity = connectivity;
 
   final OrderRemoteDataSource _remote;
   final OrderLocalDataSource _local;
   final SessionRemoteDataSource _sessionRemote;
+  final SessionLocalDataSource _sessionLocal;
   final ConnectivityService _connectivity;
 
   /// Last create-order debug trace (for on-screen error/success dialog).
@@ -58,15 +61,77 @@ class OrderRepository {
     );
   }
 
-  Future<void> closeOrder(int orderId) async {
+  Future<void> closeOrder(
+    int orderId, {
+    String? tableNumber,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    await _remote.closeOrder(orderId);
-    await _local.removeOrderDetail(orderId);
+    final tableId = await _resolveTableIdForClose(
+      orderId: orderId,
+      tableNumber: tableNumber,
+    );
+
+    if (orderId > 0) {
+      await _remote.closeOrder(orderId);
+      await _local.removeOrderDetail(orderId);
+      await _sessionLocal.removeOpenOrderFromList(orderId);
+    }
+
+    if (tableId != null && tableId > 0) {
+      try {
+        await _remote.endTableSession(tableId);
+      } on ApiException catch (error) {
+        if (orderId <= 0) rethrow;
+        final message = error.message.toLowerCase();
+        if (!message.contains('session') && !message.contains('404')) {
+          rethrow;
+        }
+      }
+    }
+  }
+
+  Future<void> endTableSession(int tableId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    await _remote.endTableSession(tableId);
+  }
+
+  Future<int?> _resolveTableIdForClose({
+    required int orderId,
+    String? tableNumber,
+  }) async {
+    if (orderId < 0) return -orderId;
+
+    if (orderId > 0) {
+      try {
+        final detail = await _remote.fetchOrderDetail(orderId);
+        final tableId = (detail['table_id'] as num?)?.toInt();
+        if (tableId != null && tableId > 0) return tableId;
+      } catch (_) {}
+    }
+
+    if (tableNumber == null || tableNumber.isEmpty) return null;
+
+    try {
+      final tables = await _sessionRemote.fetchTablesList();
+      final normalized = OrderMapper.normalizeTableKey(tableNumber);
+      return OrderMapper.resolveTableId(tables, normalized) ??
+          OrderMapper.resolveTableId(
+            tables,
+            OrderMapper.tableDisplayNumber(normalized),
+          );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<SessionOrder> applyTableOffer(int orderId) async {
@@ -142,6 +207,7 @@ class OrderRepository {
     apiLog.writeln('── GET /api/orders/$orderId (seat_orders) ──');
     final detail = await _remote.fetchOrderDetail(orderId);
     await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
     apiLog.writeln(formatApiPayload(detail));
 
     final displayNumber = OrderMapper.tableDisplayNumber('${table.tableNumber}');
@@ -165,93 +231,55 @@ class OrderRepository {
     required List<Map<String, dynamic>> tables,
     required StringBuffer apiLog,
   }) async {
-    final orderPayload = OrderMapper.buildCreateOrderPayload(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: table.id,
-      salesZoneId: salesZoneId,
-    );
-
     apiLog
       ..writeln('── Données table (GET /api/tables/list) ──')
       ..writeln('table_id=${table.id}')
       ..writeln('table_number=${table.tableNumber}')
       ..writeln('status=${table.status ?? '—'}')
-      ..writeln('sales_zone_id=${salesZoneId ?? '—'}')
-      ..writeln()
-      ..writeln('── POST /api/orders payload ──')
-      ..writeln(formatApiPayload(orderPayload));
+      ..writeln('sales_zone_id=${salesZoneId ?? '—'}');
 
-    Map<String, dynamic>? created;
-    _remote.lastApiLog = null;
-    try {
-      created = await _remote.createOrder(orderPayload);
-      apiLog.writeln('── Via POST /api/orders ──');
-    } on ApiException catch (orderError) {
-      apiLog.writeln('── POST /api/orders échoué ──');
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
-      apiLog.writeln('Raison: ${orderError.message}');
-      created = await _startTableSessionFallback(
-        table: table,
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        apiLog: apiLog,
-      );
-    }
-
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
-
-    var orderId = created == null
-        ? null
-        : OrderMapper.extractOrderIdFromPayload(created);
-
-    if (orderId != null && orderId > 0) {
-      return orderId;
-    }
-
-    apiLog.writeln('── Order id absent après POST /api/orders ──');
-    created = await _startTableSessionFallback(
+    // Step 1: lock table / open session (does not persist an order by itself).
+    await _tryStartTableSession(
       table: table,
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
       apiLog: apiLog,
     );
 
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
+    // Refresh tables so POST /api/orders sees the open session state.
+    List<Map<String, dynamic>> tablesAfterSession = tables;
+    try {
+      tablesAfterSession = await _sessionRemote.fetchTablesList();
+    } catch (_) {}
 
-    orderId = created == null
-        ? null
-        : OrderMapper.extractOrderIdFromPayload(created);
-
+    // Step 2: always create the order record via POST /api/orders.
+    var orderId = await _postCreateOrderRecord(
+      table: table,
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      salesZoneId: salesZoneId,
+      apiLog: apiLog,
+    );
     if (orderId != null && orderId > 0) {
       return orderId;
     }
 
+    // Step 3: backend may attach active_order asynchronously on the table row.
     orderId = await _resolveOrderIdForTable(
       tableId: table.id,
       tableNumber: table.tableNumber,
-      initialTables: tables,
+      initialTables: tablesAfterSession,
     );
     if (orderId != null && orderId > 0) {
       apiLog.writeln('── Order id résolu via GET /api/tables/list: $orderId ──');
-      return orderId;
+      final verified = await _verifyOrderId(orderId, apiLog);
+      if (verified != null) return verified;
     }
 
-    orderId = OrderMapper.activeOrderIdForTableId(tables, table.id);
-    if (orderId != null && orderId > 0) {
-      apiLog.writeln('── Order id depuis tables list: $orderId ──');
-    }
-
-    return orderId;
+    return null;
   }
 
-  Future<Map<String, dynamic>?> _startTableSessionFallback({
+  Future<void> _tryStartTableSession({
     required ResolvedTable table,
     required int waiterId,
     required int numberOfGuests,
@@ -262,19 +290,99 @@ class OrderRepository {
       numberOfGuests: numberOfGuests,
     );
 
+    apiLog
+      ..writeln()
+      ..writeln('── POST /api/tables/${table.id}/session payload ──')
+      ..writeln(formatApiPayload(sessionPayload));
+
     _remote.lastApiLog = null;
     try {
-      final created = await _remote.startTableSession(table.id, sessionPayload);
-      apiLog.writeln('── Fallback POST /api/tables/${table.id}/session ──');
-      return created;
+      await _remote.startTableSession(table.id, sessionPayload);
+      apiLog.writeln('── Via POST /api/tables/${table.id}/session ──');
     } on ApiException catch (sessionError) {
       apiLog.writeln('── POST /api/tables/${table.id}/session échoué ──');
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
       apiLog.writeln('Raison: ${sessionError.message}');
-      rethrow;
     }
+
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+  }
+
+  Future<int?> _postCreateOrderRecord({
+    required ResolvedTable table,
+    required int waiterId,
+    required int numberOfGuests,
+    required int? salesZoneId,
+    required StringBuffer apiLog,
+  }) async {
+    final payloads = OrderMapper.createOrderPayloadCandidates(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: salesZoneId,
+    );
+
+    ApiException? lastError;
+
+    for (var i = 0; i < payloads.length; i++) {
+      final payload = payloads[i];
+      apiLog
+        ..writeln()
+        ..writeln('── POST /api/orders (tentative ${i + 1}/${payloads.length}) ──')
+        ..writeln(formatApiPayload(payload));
+
+      _remote.lastApiLog = null;
+      try {
+        final created = await _remote.createOrder(payload);
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+
+        final orderId = OrderMapper.extractOrderIdFromPayload(created);
+        if (orderId == null || orderId <= 0) {
+          apiLog.writeln('── Réponse POST sans order id ──');
+          continue;
+        }
+
+        final verified = await _verifyOrderId(orderId, apiLog);
+        if (verified != null) {
+          apiLog.writeln('── Commande créée via POST /api/orders: $verified ──');
+          return verified;
+        }
+      } on ApiException catch (orderError) {
+        lastError = orderError;
+        apiLog.writeln('── POST /api/orders échoué ──');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        apiLog.writeln('Raison: ${orderError.message}');
+      }
+    }
+
+    if (lastError != null) {
+      throw lastError;
+    }
+
+    return null;
+  }
+
+  Future<int?> _verifyOrderId(int orderId, StringBuffer apiLog) async {
+    try {
+      final detail = await _remote.fetchOrderDetail(orderId);
+      if (OrderMapper.orderIdFromDetail(detail) == orderId) {
+        return orderId;
+      }
+      apiLog.writeln(
+        '── GET /api/orders/$orderId: id incohérent dans la réponse ──',
+      );
+    } on ApiException catch (error) {
+      apiLog.writeln('── GET /api/orders/$orderId échoué: ${error.message} ──');
+    }
+    return null;
   }
 
   Future<int?> _resolveOrderIdForTable({

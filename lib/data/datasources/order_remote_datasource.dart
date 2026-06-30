@@ -50,6 +50,25 @@ class OrderRemoteDataSource {
     }
   }
 
+  Future<void> endTableSession(int tableId) async {
+    final path = ApiEndpoints.tableSession(tableId);
+    final response = await _client.delete<Map<String, dynamic>>(path);
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return;
+
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      data,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to end table session.',
+        statusCode: envelope.status,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> updateOrder(
     int orderId,
     Map<String, dynamic> body,

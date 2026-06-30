@@ -84,6 +84,20 @@ class ApiClient extends GetxService {
     }
   }
 
+  Future<Response<T>> delete<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    try {
+      return await _dio.delete<T>(
+        path,
+        queryParameters: queryParameters,
+      );
+    } on DioException catch (error) {
+      throw _mapError(error);
+    }
+  }
+
   ApiException _mapError(DioException error) {
     final response = error.response;
     if (response?.data is Map<String, dynamic>) {

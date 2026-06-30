@@ -385,6 +385,28 @@ class SessionLocalDataSource {
     );
   }
 
+  Future<void> upsertOpenOrderInList(Map<String, dynamic> order) async {
+    final orderId = (order['id'] as num?)?.toInt() ?? 0;
+    if (orderId <= 0) return;
+
+    final current = readOpenOrdersList();
+    final updated = [
+      order,
+      ...current.where((entry) => (entry['id'] as num?)?.toInt() != orderId),
+    ];
+    await saveOpenOrdersList(updated);
+  }
+
+  Future<void> removeOpenOrderFromList(int orderId) async {
+    if (orderId <= 0) return;
+
+    final current = readOpenOrdersList();
+    final updated = current
+        .where((entry) => (entry['id'] as num?)?.toInt() != orderId)
+        .toList(growable: false);
+    await saveOpenOrdersList(updated);
+  }
+
   List<Map<String, dynamic>> readOpenOrdersList() {
     final raw = _storage.readString(StorageConstants.openOrdersKey);
     if (raw == null || raw.isEmpty) return const [];

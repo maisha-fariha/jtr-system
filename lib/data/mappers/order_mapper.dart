@@ -34,6 +34,12 @@ class OrderMapper {
   static String tableDisplayNumber(String tableNumber) =>
       'T${tableNumber.trim()}';
 
+  static String normalizeTableKey(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return trimmed;
+    return trimmed.replaceFirst(RegExp(r'^T'), '');
+  }
+
   /// Builds session rows from [GET /api/tables/list]:
   /// tables with [active_order] and open tables with [session] only.
   static List<SessionOrder> sessionOrdersFromTables(
@@ -542,14 +548,77 @@ class OrderMapper {
     return buildOrderUpdatePayload(copy);
   }
 
-  /// Minimal payload to open an empty table (no items yet).
-  /// Per Orders API, create with items needs [buildCreateOrderWithItemPayload].
-  /// When POST fails, [OrderRepository] falls back to table session.
+  /// Header-only POST /api/orders body (empty table, no lines yet).
   static Map<String, dynamic> buildCreateOrderPayload({
     required int waiterId,
     required int numberOfGuests,
     required int tableId,
     int? salesZoneId,
+  }) {
+    return _createOrderBasePayload(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: tableId,
+      salesZoneId: salesZoneId,
+    );
+  }
+
+  /// POST /api/orders with seat shell (no product lines).
+  static Map<String, dynamic> buildCreateOrderSeatShellPayload({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+  }) {
+    const seatNumber = 1;
+    return _createOrderBasePayload(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: tableId,
+      salesZoneId: salesZoneId,
+      seatOrders: [
+        {
+          'seat_number': seatNumber,
+          'courses': [
+            {
+              'course_number': 1,
+              'seat_number': seatNumber,
+            },
+          ],
+        },
+      ],
+    );
+  }
+
+  /// Candidate POST bodies for an empty table (tried in order after session).
+  static List<Map<String, dynamic>> createOrderPayloadCandidates({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+  }) {
+    return [
+      buildCreateOrderPayload(
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        tableId: tableId,
+        salesZoneId: salesZoneId,
+      ),
+      buildCreateOrderSeatShellPayload(
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        tableId: tableId,
+        salesZoneId: salesZoneId,
+      ),
+    ];
+  }
+
+  static Map<String, dynamic> _createOrderBasePayload({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+    List<Map<String, dynamic>>? seatOrders,
   }) {
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
@@ -559,6 +628,9 @@ class OrderMapper {
 
     if (salesZoneId != null) {
       payload['sales_zone_id'] = salesZoneId;
+    }
+    if (seatOrders != null) {
+      payload['seat_orders'] = seatOrders;
     }
 
     return payload;
@@ -885,18 +957,29 @@ class OrderMapper {
   }
 
   static int? extractOrderIdFromPayload(Map<String, dynamic> data) {
-    final order = unwrapOrderDetail(data);
-    final direct = orderIdFromDetail(order);
-    if (direct > 0) return direct;
-
     final activeOrder = data['active_order'];
     if (activeOrder is Map<String, dynamic>) {
       final id = (activeOrder['id'] as num?)?.toInt();
       if (id != null && id > 0) return id;
     }
 
+    final nestedOrder = data['order'];
+    if (nestedOrder is Map<String, dynamic>) {
+      final id = orderIdFromDetail(nestedOrder);
+      if (id > 0) return id;
+    }
+
     final orderId = data['order_id'];
-    if (orderId is num) return orderId.toInt();
+    if (orderId is num && orderId > 0) return orderId.toInt();
+
+    // Table/session payloads must not treat table id as order id.
+    if (data.containsKey('table_number') && activeOrder == null) {
+      return null;
+    }
+
+    final order = unwrapOrderDetail(data);
+    final direct = orderIdFromDetail(order);
+    if (direct > 0) return direct;
 
     return null;
   }

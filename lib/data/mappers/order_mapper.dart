@@ -396,7 +396,7 @@ class OrderMapper {
     if (seatOrders is! List) return entries;
 
     var lineIndex = 0;
-    var previousCourseHadItems = false;
+    var sawItemsInPreviousCourses = false;
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
@@ -415,11 +415,13 @@ class OrderMapper {
           visibleItems.add(item);
         }
 
-        if (visibleItems.isEmpty) continue;
-
-        if (previousCourseHadItems) {
+        if (sawItemsInPreviousCourses &&
+            (entries.isEmpty ||
+                entries.last.type != OrderDisplayEntryType.suivreSeparator)) {
           entries.add(const OrderDisplayEntry.suivre());
         }
+
+        if (visibleItems.isEmpty) continue;
 
         for (final item in visibleItems) {
           final product = item['product'];
@@ -447,7 +449,7 @@ class OrderMapper {
           );
         }
 
-        previousCourseHadItems = true;
+        sawItemsInPreviousCourses = true;
       }
     }
 
@@ -1172,24 +1174,53 @@ class OrderMapper {
     int qty = 1,
     String comment = '',
   }) {
-    final existing = findSimpleItemByProductId(orderDetail, productId);
-    if (existing == null) {
-      return appendSimpleItem(
-        orderDetail: orderDetail,
-        productId: productId,
-        unitPrice: unitPrice,
-        qty: qty,
-        comment: comment,
-      );
-    }
+    return appendSimpleItem(
+      orderDetail: orderDetail,
+      productId: productId,
+      unitPrice: unitPrice,
+      qty: qty,
+      comment: comment,
+    );
+  }
 
-    final currentQty = (existing['qty'] as num?)?.toInt() ?? 0;
-    final resolvedUnitPrice = _itemUnitPrice(existing);
+  static Map<String, dynamic> setLineQuantityAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required int qty,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      if (qty <= 0) {
+        item['status'] = 'cancelled';
+        return;
+      }
+
+      final unitPrice = _itemUnitPrice(item);
+      item['qty'] = qty;
+      item['sub_total'] = unitPrice * qty;
+    });
+    return buildOrderUpdatePayload(working);
+  }
+
+  static Map<String, dynamic> adjustSimpleProductQuantity({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required int delta,
+    required double unitPrice,
+  }) {
+    final currentQty = quantityForSimpleProduct(orderDetail, productId);
+    final existing = findSimpleItemByProductId(orderDetail, productId);
+    final resolvedUnitPrice = existing != null
+        ? (_itemUnitPrice(existing) > 0
+            ? _itemUnitPrice(existing)
+            : unitPrice)
+        : unitPrice;
+
     return setSimpleProductQuantity(
       orderDetail: orderDetail,
       productId: productId,
-      qty: currentQty + qty,
-      unitPrice: resolvedUnitPrice > 0 ? resolvedUnitPrice : unitPrice,
+      qty: currentQty + delta,
+      unitPrice: resolvedUnitPrice,
     );
   }
 
@@ -1228,28 +1259,6 @@ class OrderMapper {
       productId: productId,
       unitPrice: unitPrice,
       qty: qty,
-    );
-  }
-
-  static Map<String, dynamic> adjustSimpleProductQuantity({
-    required Map<String, dynamic> orderDetail,
-    required int productId,
-    required int delta,
-    required double unitPrice,
-  }) {
-    final currentQty = quantityForSimpleProduct(orderDetail, productId);
-    final existing = findSimpleItemByProductId(orderDetail, productId);
-    final resolvedUnitPrice = existing != null
-        ? (_itemUnitPrice(existing) > 0
-            ? _itemUnitPrice(existing)
-            : unitPrice)
-        : unitPrice;
-
-    return setSimpleProductQuantity(
-      orderDetail: orderDetail,
-      productId: productId,
-      qty: currentQty + delta,
-      unitPrice: resolvedUnitPrice,
     );
   }
 

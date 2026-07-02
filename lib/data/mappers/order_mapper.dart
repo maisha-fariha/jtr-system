@@ -1726,6 +1726,114 @@ class OrderMapper {
     );
   }
 
+  static List<int> productLineIndicesForSection(
+    List<OrderDisplayEntry> entries,
+    int sectionIndex,
+  ) {
+    return entries
+        .where(
+          (entry) =>
+              entry.type == OrderDisplayEntryType.product &&
+              (entry.sectionIndex ?? 0) == sectionIndex,
+        )
+        .map((entry) => entry.lineIndex)
+        .whereType<int>()
+        .toList();
+  }
+
+  static List<OrderDisplayEntry> removeSuivreSectionFromDisplay(
+    List<OrderDisplayEntry> entries,
+    int sectionIndex,
+  ) {
+    return entries
+        .where(
+          (entry) =>
+              !((entry.type == OrderDisplayEntryType.suivreSeparator ||
+                      entry.type == OrderDisplayEntryType.product) &&
+                  (entry.sectionIndex ?? 0) == sectionIndex),
+        )
+        .toList();
+  }
+
+  /// Rebuilds display rows using a trimmed suivre layout and fresh API products.
+  static List<OrderDisplayEntry> applyTrimmedSuivreLayout({
+    required List<OrderProduct> products,
+    required List<OrderDisplayEntry> trimmedLayout,
+  }) {
+    if (products.isEmpty) return const [];
+
+    final splits = suivreSplitPositions(trimmedLayout);
+    if (splits.isEmpty) {
+      return [
+        for (var i = 0; i < products.length; i++)
+          OrderDisplayEntry.product(
+            product: products[i],
+            lineIndex: i,
+            sectionIndex: 0,
+          ),
+      ];
+    }
+
+    final flatProducts = [
+      for (var i = 0; i < products.length; i++)
+        OrderDisplayEntry.product(
+          product: products[i],
+          lineIndex: i,
+          sectionIndex: 0,
+        ),
+    ];
+
+    final validSplits = splits
+        .where((splitAt) => splitAt > 0 && splitAt <= products.length)
+        .toList();
+    if (validSplits.isEmpty) {
+      return flatProducts;
+    }
+
+    return _rebuildEntriesWithSuivreSplits(flatProducts, validSplits);
+  }
+
+  static Map<String, dynamic> cancelOrderLinesAtIndices({
+    required Map<String, dynamic> orderDetail,
+    required Set<int> lineIndices,
+  }) {
+    if (lineIndices.isEmpty) {
+      return buildOrderUpdatePayload(orderDetail);
+    }
+
+    final working = Map<String, dynamic>.from(orderDetail);
+    var currentIndex = 0;
+
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) {
+      return buildOrderUpdatePayload(working);
+    }
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+
+          if (lineIndices.contains(currentIndex)) {
+            item['status'] = 'cancelled';
+          }
+          currentIndex++;
+        }
+      }
+    }
+
+    return buildOrderUpdatePayload(working);
+  }
+
   static Map<String, dynamic> cancelOrderLineAtIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,

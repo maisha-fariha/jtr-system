@@ -896,16 +896,23 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  void _syncOrderInSession(SessionOrder updated, String displayNumber) {
+  void _syncOrderInSession(
+    SessionOrder updated,
+    String displayNumber, {
+    List<OrderDisplayEntry>? reconcileAgainst,
+    List<OrderDisplayEntry>? displayEntriesOverride,
+  }) {
     if (!Get.isRegistered<SessionController>()) return;
 
-    final previous = order;
-    var displayEntries = updated.displayEntries;
-    if (previous != null) {
-      displayEntries = OrderMapper.reconcileSuivreDisplay(
-        previous: previous.displayEntries,
-        next: displayEntries,
-      );
+    var displayEntries = displayEntriesOverride ?? updated.displayEntries;
+    if (displayEntriesOverride == null) {
+      final previousEntries = reconcileAgainst ?? order?.displayEntries;
+      if (previousEntries != null) {
+        displayEntries = OrderMapper.reconcileSuivreDisplay(
+          previous: previousEntries,
+          next: displayEntries,
+        );
+      }
     }
 
     Get.find<SessionController>().updateOrderRow(
@@ -1028,6 +1035,69 @@ class TableDetailsController extends GetxController {
       );
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible de modifier la quantité.');
+    } finally {
+      isAddingProduct.value = false;
+    }
+  }
+
+  Future<void> cancelSuivreSection(int sectionIndex) async {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder == null) return;
+
+    final lineIndices = OrderMapper.productLineIndicesForSection(
+      currentOrder.displayEntries,
+      sectionIndex,
+    );
+    final trimmedDisplay = OrderMapper.removeSuivreSectionFromDisplay(
+      currentOrder.displayEntries,
+      sectionIndex,
+    );
+
+    collapsedSuivreSections.remove(sectionIndex);
+    collapsedSuivreSections.refresh();
+    if (selectedOrderLineIndex.value != null &&
+        lineIndices.contains(selectedOrderLineIndex.value)) {
+      selectedOrderLineIndex.value = null;
+    }
+
+    isAddingProduct.value = true;
+    try {
+      if (lineIndices.isNotEmpty) {
+        final updated = await _orderRepository.cancelOrderLinesAtIndices(
+          orderId: id,
+          lineIndices: lineIndices,
+          previousDisplayEntries: trimmedDisplay,
+        );
+        _syncOrderInSession(
+          updated,
+          orderNumber,
+          displayEntriesOverride: updated.displayEntries,
+        );
+        return;
+      }
+
+      final displayEntries = OrderMapper.applyTrimmedSuivreLayout(
+        products: currentOrder.products,
+        trimmedLayout: trimmedDisplay,
+      );
+      _syncOrderInSession(
+        currentOrder.copyWith(displayEntries: displayEntries),
+        orderNumber,
+        displayEntriesOverride: displayEntries,
+      );
+    } on ApiException catch (e) {
+      ApiDebugDialog.show(
+        title: 'Erreur annulation',
+        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+      );
+    } catch (_) {
+      Get.snackbar('Erreur', 'Impossible d\'annuler cette suite.');
     } finally {
       isAddingProduct.value = false;
     }

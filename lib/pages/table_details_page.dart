@@ -228,8 +228,10 @@ class _OrderSummary extends GetView<TableDetailsController> {
 
         rows.add(
           _SuivreSeparator(
+            sectionIndex: sectionIndex,
             isCollapsed: collapsed,
             onTap: () => controller.toggleSuivreSection(sectionIndex),
+            groupTag: _productSlidableGroupTag,
           ),
         );
         index++;
@@ -383,43 +385,65 @@ class _OrderSummary extends GetView<TableDetailsController> {
   }
 }
 
-class _SuivreSeparator extends StatelessWidget {
+class _SuivreSeparator extends GetView<TableDetailsController> {
   const _SuivreSeparator({
+    required this.sectionIndex,
     required this.isCollapsed,
     required this.onTap,
+    required this.groupTag,
   });
 
+  final int sectionIndex;
   final bool isCollapsed;
   final VoidCallback onTap;
+  final String groupTag;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(
-        JtrResponsive.getResponsiveRadius(context, 6),
+    return Slidable(
+      key: ValueKey('suivre-$sectionIndex'),
+      groupTag: groupTag,
+      startActionPane: ActionPane(
+        motion: const ScrollMotion(),
+        extentRatio: 0.14,
+        children: [
+          SlidableAction(
+            onPressed: (_) => controller.cancelSuivreSection(sectionIndex),
+            backgroundColor: AppTheme.background,
+            foregroundColor: const Color(0xFFE74C3C),
+            icon: CupertinoIcons.delete,
+            spacing: 0,
+            padding: EdgeInsets.zero,
+          ),
+        ],
       ),
-      child: Padding(
-        padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              'À SUIVRE',
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                fontWeight: FontWeight.w700,
-                color: AppTheme.primary,
-                letterSpacing: 0.6,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 6),
+        ),
+        child: Padding(
+          padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'À SUIVRE',
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.primary,
+                  letterSpacing: 0.6,
+                ),
               ),
-            ),
-            JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
-            Icon(
-              isCollapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
-              color: AppTheme.primary,
-              size: JtrResponsive.getResponsiveSize(context, 20),
-            ),
-          ],
+              JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+              Icon(
+                isCollapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
+                color: AppTheme.primary,
+                size: JtrResponsive.getResponsiveSize(context, 20),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -105,12 +105,8 @@ class OrderRepository {
   ) async {
     final splits = OrderMapper.suivreSplitPositions(displayEntries);
     final count = OrderMapper.suivreSeparatorCount(displayEntries);
-    if (splits.isNotEmpty) {
-      await _local.saveSuivreSplitHint(orderId, splits);
-    }
-    if (count > 0) {
-      await _local.saveSuivreCountHint(orderId, count);
-    }
+    await _local.saveSuivreSplitHint(orderId, splits);
+    await _local.saveSuivreCountHint(orderId, count);
   }
 
   Future<void> closeOrder(
@@ -1047,6 +1043,74 @@ class OrderRepository {
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
       return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> cancelOrderLinesAtIndices({
+    required int orderId,
+    required List<int> lineIndices,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Annulation articles (section) ──');
+    apiLog.writeln('order_id=$orderId lines=$lineIndices');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.cancelOrderLinesAtIndices(
+        orderDetail: detail,
+        lineIndices: lineIndices.toSet(),
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+
+      final splitHint = previousDisplayEntries == null
+          ? _local.readSuivreSplitHint(orderId)
+          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
+      final countHint = previousDisplayEntries == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+      final order = OrderMapper.fromOrderDetail(
+        updated,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+
+      final displayEntries = previousDisplayEntries == null
+          ? order.displayEntries
+          : OrderMapper.applyTrimmedSuivreLayout(
+              products: order.products,
+              trimmedLayout: previousDisplayEntries,
+            );
+
+      await _persistSuivreLayoutHints(orderId, displayEntries);
+      return order.copyWith(displayEntries: displayEntries);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

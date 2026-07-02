@@ -465,7 +465,7 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.arrow_forward) {
+    if (icon == Icons.arrow_forward || icon == Icons.restaurant) {
       requestNextCourse(context: context);
       return;
     }

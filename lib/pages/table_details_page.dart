@@ -550,6 +550,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.keyboard_return_outlined,
     Icons.grid_view,
     Icons.arrow_forward,
+    Icons.restaurant,
     Icons.restaurant_menu,
     Icons.receipt_long_outlined,
     Icons.payments_outlined,

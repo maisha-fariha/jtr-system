@@ -712,10 +712,7 @@ class TableDetailsController extends GetxController {
     var id = await _ensureResolvedOrderId();
     logOrderFlow('onProductTap resolvedOrderId=${id ?? 'none'}');
 
-    final wasAlreadySelected = selectedProductId.value == product.id;
     selectedProductId.value = product.id;
-
-    if (wasAlreadySelected) return;
 
     isAddingProduct.value = true;
     try {

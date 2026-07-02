@@ -10,7 +10,6 @@ import '../data/models/catalog/category_tree_node.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
-import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
@@ -37,7 +36,6 @@ class TableDetailsController extends GetxController {
   final isBottomPanelExpanded = true.obs;
   final showPaymentOptions = false.obs;
   final selectedProductId = RxnInt();
-  final selectedOrderLineIndex = RxnInt();
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
   final isCatalogLoading = false.obs;
   final isAddingProduct = false.obs;
@@ -266,10 +264,12 @@ class TableDetailsController extends GetxController {
   bool isProductSelected(CatalogProductModel product) =>
       selectedProductId.value == product.id;
 
-  bool isOrderLineSelected(int lineIndex) =>
-      selectedOrderLineIndex.value == lineIndex;
+  bool isOrderLineSelected(OrderProduct line) {
+    final catalog = catalogProductByName(line.name);
+    return catalog != null && selectedProductId.value == catalog.id;
+  }
 
-  void selectOrderLine(int lineIndex, OrderProduct line) {
+  void selectOrderLine(OrderProduct line) {
     final catalog = catalogProductByName(line.name);
     if (catalog == null) {
       Get.snackbar(
@@ -281,12 +281,10 @@ class TableDetailsController extends GetxController {
       return;
     }
     selectedProductId.value = catalog.id;
-    selectedOrderLineIndex.value = lineIndex;
   }
 
   void selectCatalogProduct(CatalogProductModel product) {
     selectedProductId.value = product.id;
-    selectedOrderLineIndex.value = null;
   }
 
   void selectCategory(int index) {
@@ -403,22 +401,14 @@ class TableDetailsController extends GetxController {
       !paymentModesLoading.value &&
       !isAddingProduct.value;
 
-  OrderProduct? get selectedOrderLine {
-    final currentOrder = order;
-    final lineIndex = selectedOrderLineIndex.value;
-    if (currentOrder == null || lineIndex == null) return null;
-    if (lineIndex < 0 || lineIndex >= currentOrder.products.length) return null;
-    return currentOrder.products[lineIndex];
-  }
-
   void showQuantityDialog({required BuildContext context}) {
-    final line = selectedOrderLine;
-    if (line == null) {
+    final product = selectedCatalogProduct;
+    if (product == null) {
       isBottomPanelExpanded.value = true;
       showPaymentOptions.value = false;
       Get.snackbar(
-        'Sélectionnez une ligne',
-        'Touchez une ligne dans la commande avant le clavier.',
+        'Sélectionnez un produit',
+        'Touchez un article dans la commande ou la grille avant le clavier.',
         snackPosition: SnackPosition.BOTTOM,
         duration: const Duration(seconds: 3),
         margin: const EdgeInsets.all(16),
@@ -426,8 +416,7 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    final product = catalogProductByName(line.name);
-    if (product?.isComposed == true) {
+    if (product.isComposed) {
       Get.snackbar(
         'Produit composé',
         'Ce produit se configure via le sélecteur de menu.',
@@ -437,22 +426,22 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    final currentQty = int.tryParse(line.quantity) ?? 0;
+    final currentQty = productQuantityInOrder(product);
 
     TableNumberDialog.show(
       context: context,
-      title: line.name.toUpperCase(),
+      title: product.name.toUpperCase(),
       initialValue: currentQty > 0 ? '$currentQty' : null,
       integerOnly: true,
       maxDigits: 3,
       onConfirm: (value) {
+        final selected = selectedCatalogProduct;
+        if (selected == null) return;
+
         final parsed = int.tryParse(value.trim());
         if (parsed == null || parsed < 0) return;
 
-        final selectedLineIndex = selectedOrderLineIndex.value;
-        if (selectedLineIndex == null) return;
-
-        unawaited(_setOrderLineQuantity(selectedLineIndex, parsed));
+        unawaited(_setProductQuantity(selected, parsed));
       },
     );
   }
@@ -691,7 +680,7 @@ class TableDetailsController extends GetxController {
         isAddingProduct.value = true;
         try {
           final updated = await _orderRepository.requestNextCourses(id);
-          _syncOrderInSession(_withTrailingSuivreSeparator(updated), orderNumber);
+          _syncOrderInSession(updated, orderNumber);
           Get.snackbar(
             'Suite demandée',
             'La demande À SUIVRE a été envoyée.',
@@ -793,16 +782,20 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  Future<void> _setOrderLineQuantity(int lineIndex, int qty) async {
+  Future<void> _setProductQuantity(
+    CatalogProductModel product,
+    int qty,
+  ) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) return;
 
     isAddingProduct.value = true;
     try {
-      final updated = await _orderRepository.setOrderLineQuantityAtIndex(
+      final updated = await _orderRepository.setProductQuantityInOrder(
         orderId: id,
-        lineIndex: lineIndex,
+        productId: product.id,
         qty: qty,
+        unitPrice: product.unitPrice,
       );
       _syncOrderInSession(updated, orderNumber);
     } on ApiException catch (e) {
@@ -846,20 +839,6 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
     Get.find<SessionController>().updateOrderRow(
       updated.copyWith(number: displayNumber),
-    );
-  }
-
-  SessionOrder _withTrailingSuivreSeparator(SessionOrder order) {
-    if (order.displayEntries.isNotEmpty &&
-        order.displayEntries.last.type == OrderDisplayEntryType.suivreSeparator) {
-      return order;
-    }
-
-    return order.copyWith(
-      displayEntries: [
-        ...order.displayEntries,
-        const OrderDisplayEntry.suivre(),
-      ],
     );
   }
 
@@ -979,9 +958,6 @@ class TableDetailsController extends GetxController {
     final catalog = catalogProductByName(line.name);
     if (catalog != null && selectedProductId.value == catalog.id) {
       selectedProductId.value = null;
-    }
-    if (selectedOrderLineIndex.value == productIndex) {
-      selectedOrderLineIndex.value = null;
     }
 
     isAddingProduct.value = true;

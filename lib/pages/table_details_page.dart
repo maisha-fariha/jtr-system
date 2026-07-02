@@ -335,7 +335,7 @@ class _ProductLine extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final isSelected = controller.isOrderLineSelected(productIndex);
+      final isSelected = controller.isOrderLineSelected(product);
 
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
@@ -379,7 +379,7 @@ class _ProductLine extends GetView<TableDetailsController> {
               ? AppTheme.primary.withValues(alpha: 0.08)
               : Colors.transparent,
           child: InkWell(
-            onTap: () => controller.selectOrderLine(productIndex, product),
+            onTap: () => controller.selectOrderLine(product),
             child: Padding(
               padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
               child: Row(

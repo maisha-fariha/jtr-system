@@ -245,16 +245,20 @@ class TableDetailsController extends GetxController {
     return null;
   }
 
-  int productQuantityInOrder(CatalogProductModel product) {
-    final currentOrder = order;
+  int productQuantityInOrder(
+    CatalogProductModel product, {
+    SessionOrder? source,
+  }) {
+    final currentOrder = source ?? order;
     if (currentOrder == null) return 0;
     final normalized = product.name.toUpperCase();
+    var total = 0;
     for (final line in currentOrder.products) {
       if (line.name.toUpperCase() == normalized) {
-        return int.tryParse(line.quantity) ?? 0;
+        total += int.tryParse(line.quantity) ?? 0;
       }
     }
-    return 0;
+    return total;
   }
 
   bool isProductSelected(CatalogProductModel product) =>
@@ -707,14 +711,12 @@ class TableDetailsController extends GetxController {
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
-    if (isAddingProduct.value) return;
 
     var id = await _ensureResolvedOrderId();
     logOrderFlow('onProductTap resolvedOrderId=${id ?? 'none'}');
 
     selectedProductId.value = product.id;
 
-    isAddingProduct.value = true;
     try {
       if (product.isComposed) {
         final detail = await _catalogRepository.getProductDetail(product.id);
@@ -777,8 +779,6 @@ class TableDetailsController extends GetxController {
       );
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
-    } finally {
-      isAddingProduct.value = false;
     }
   }
 
@@ -842,13 +842,11 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  bool isProductInOrder(CatalogProductModel product) {
-    final currentOrder = order;
-    if (currentOrder == null) return false;
-    final normalized = product.name.toUpperCase();
-    return currentOrder.products.any(
-      (line) => line.name.toUpperCase() == normalized,
-    );
+  bool isProductInOrder(
+    CatalogProductModel product, {
+    SessionOrder? source,
+  }) {
+    return productQuantityInOrder(product, source: source) > 0;
   }
 
   Future<void> incrementProduct(int productIndex) async {

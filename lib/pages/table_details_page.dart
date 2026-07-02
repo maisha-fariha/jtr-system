@@ -63,7 +63,9 @@ class TableDetailsPage extends GetView<TableDetailsController> {
 
                   return Column(
                     children: [
-                      Expanded(child: _OrderSummary(order: currentOrder)),
+                      Expanded(
+                        child: _OrderSummary(orderNumber: controller.orderNumber),
+                      ),
                       const _ActionToolbar(),
                       if (showPayment)
                         const Expanded(flex: 3, child: _PaymentButtons())
@@ -173,12 +175,37 @@ class _TableDetailsHeader extends StatelessWidget {
 
 // ── Order summary ──────────────────────────────────────────────────────────────
 
-class _OrderSummary extends StatelessWidget {
-  const _OrderSummary({required this.order});
+class _OrderSummary extends GetView<TableDetailsController> {
+  const _OrderSummary({required this.orderNumber});
 
-  final SessionOrder order;
+  final String orderNumber;
 
   static const _productSlidableGroupTag = 'table-details-products';
+
+  SessionOrder? _resolveOrder() {
+    if (!Get.isRegistered<SessionController>()) return null;
+    return Get.find<SessionController>().findOrder(
+      orderNumber: orderNumber,
+      orderId: controller.orderId,
+    );
+  }
+
+  SessionOrder? _resolveOrderFromSession(SessionController session) {
+    final targetId = controller.resolvedOrderId;
+    for (final candidate in session.orders) {
+      if (targetId != null && targetId > 0 && candidate.id == targetId) {
+        return candidate;
+      }
+    }
+    for (final candidate in session.orders) {
+      if (candidate.number == orderNumber ||
+          SessionController.normalizeTableKey(candidate.number) ==
+              SessionController.normalizeTableKey(orderNumber)) {
+        return candidate;
+      }
+    }
+    return _resolveOrder();
+  }
 
   TextStyle _headerStyle(BuildContext context) => TextStyle(
         fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
@@ -187,133 +214,213 @@ class _OrderSummary extends StatelessWidget {
         color: AppTheme.textSecondary,
       );
 
+  List<Widget> _buildVisibleRows(BuildContext context, SessionOrder order) {
+    final rows = <Widget>[];
+    final entries = order.displayEntries;
+    var index = 0;
+
+    while (index < entries.length) {
+      final entry = entries[index];
+
+      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+        final sectionIndex = entry.sectionIndex ?? 0;
+        final collapsed = controller.isSuivreSectionCollapsed(sectionIndex);
+
+        rows.add(
+          _SuivreSeparator(
+            isCollapsed: collapsed,
+            onTap: () => controller.toggleSuivreSection(sectionIndex),
+          ),
+        );
+        index++;
+
+        if (!collapsed) {
+          while (index < entries.length &&
+              entries[index].type == OrderDisplayEntryType.product &&
+              entries[index].sectionIndex == sectionIndex) {
+            final productEntry = entries[index];
+            rows.add(
+              _ProductLine(
+                orderNumber: order.number,
+                productIndex: productEntry.lineIndex!,
+                product: productEntry.product!,
+                groupTag: _productSlidableGroupTag,
+              ),
+            );
+            index++;
+          }
+        } else {
+          while (index < entries.length &&
+              entries[index].type == OrderDisplayEntryType.product &&
+              entries[index].sectionIndex == sectionIndex) {
+            index++;
+          }
+        }
+        continue;
+      }
+
+      final productEntry = entry;
+      rows.add(
+        _ProductLine(
+          orderNumber: order.number,
+          productIndex: productEntry.lineIndex!,
+          product: productEntry.product!,
+          groupTag: _productSlidableGroupTag,
+        ),
+      );
+      index++;
+    }
+
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Padding(
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            left: 20,
-            right: 20,
-            top: 12,
-            bottom: 8,
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                flex: 1,
-                child: Text(
-                  'QTÉ',
-                  style: _headerStyle(context),
-                ),
-              ),
-              Expanded(
-                flex: 5,
-                child: Text('ARTICLE', style: _headerStyle(context)),
-              ),
-              Expanded(
-                flex: 2,
-                child: Text(
-                  'PRIX',
-                  textAlign: TextAlign.right,
-                  style: _headerStyle(context),
-                ),
-              ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: SlidableAutoCloseBehavior(
-            child: ListView.separated(
-              padding: JtrResponsive.getResponsivePadding(
-                context,
-                horizontal: 20,
-              ),
-              itemCount: order.displayEntries.length,
-              separatorBuilder: (_, _) =>
-                  JtrResponsive.getResponsiveSpacing(context, 4),
-              itemBuilder: (context, index) {
-                final entry = order.displayEntries[index];
-                if (entry.type == OrderDisplayEntryType.suivreSeparator) {
-                  return const _SuivreSeparator();
-                }
+    return Obx(() {
+      if (!Get.isRegistered<SessionController>()) {
+        return const SizedBox.shrink();
+      }
 
-                final product = entry.product!;
-                final lineIndex = entry.lineIndex!;
+      final session = Get.find<SessionController>();
+      session.orders.length;
+      controller.collapsedSuivreSections.length;
 
-                return _ProductLine(
-                  orderNumber: order.number,
-                  productIndex: lineIndex,
-                  product: product,
-                  groupTag: _productSlidableGroupTag,
-                );
-              },
+      final resolvedOrder = _resolveOrderFromSession(session);
+      if (resolvedOrder == null) {
+        return const SizedBox.shrink();
+      }
+
+      final rows = _buildVisibleRows(context, resolvedOrder);
+      final suivreCount = resolvedOrder.displayEntries
+          .where((e) => e.type == OrderDisplayEntryType.suivreSeparator)
+          .length;
+
+      return Column(
+        children: [
+          Padding(
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              left: 20,
+              right: 20,
+              top: 12,
+              bottom: 8,
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 1,
+                  child: Text(
+                    'QTÉ',
+                    style: _headerStyle(context),
+                  ),
+                ),
+                Expanded(
+                  flex: 5,
+                  child: Text('ARTICLE', style: _headerStyle(context)),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    'PRIX',
+                    textAlign: TextAlign.right,
+                    style: _headerStyle(context),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
-        const Divider(height: 1, color: Color(0xFFE8E8E8)),
-        Padding(
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            left: 20,
-            right: 20,
-            top: 12,
-            bottom: 12,
-          ),
-          child: Row(
-            children: [
-              Text(
-                'Total',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.darkText,
+          Expanded(
+            child: SlidableAutoCloseBehavior(
+              child: ListView.separated(
+                key: ValueKey(
+                  '${resolvedOrder.id}-${resolvedOrder.displayEntries.length}-$suivreCount',
                 ),
-              ),
-              const Spacer(),
-              Text(
-                order.total,
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 22),
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.darkText,
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 20,
                 ),
+                itemCount: rows.length,
+                separatorBuilder: (_, _) =>
+                    JtrResponsive.getResponsiveSpacing(context, 4),
+                itemBuilder: (context, index) => rows[index],
               ),
-            ],
+            ),
           ),
-        ),
-      ],
-    );
+          const Divider(height: 1, color: Color(0xFFE8E8E8)),
+          Padding(
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              left: 20,
+              right: 20,
+              top: 12,
+              bottom: 12,
+            ),
+            child: Row(
+              children: [
+                Text(
+                  'Total',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  resolvedOrder.total,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 22),
+                    fontWeight: FontWeight.w800,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    });
   }
 }
 
 class _SuivreSeparator extends StatelessWidget {
-  const _SuivreSeparator();
+  const _SuivreSeparator({
+    required this.isCollapsed,
+    required this.onTap,
+  });
+
+  final bool isCollapsed;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            'À SUIVRE',
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-              fontWeight: FontWeight.w700,
-              color: AppTheme.primary,
-              letterSpacing: 0.6,
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(
+        JtrResponsive.getResponsiveRadius(context, 6),
+      ),
+      child: Padding(
+        padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              'À SUIVRE',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.primary,
+                letterSpacing: 0.6,
+              ),
             ),
-          ),
-          JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
-          Icon(
-            Icons.arrow_drop_down,
-            color: AppTheme.primary,
-            size: JtrResponsive.getResponsiveSize(context, 20),
-          ),
-        ],
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+            Icon(
+              isCollapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
+              color: AppTheme.primary,
+              size: JtrResponsive.getResponsiveSize(context, 20),
+            ),
+          ],
+        ),
       ),
     );
   }

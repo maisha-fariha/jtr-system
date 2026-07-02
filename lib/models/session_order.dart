@@ -75,8 +75,7 @@ class SessionOrder {
       total: total ?? this.total,
       waiterId: waiterId ?? this.waiterId,
       products: nextProducts,
-      displayEntries:
-          displayEntries ?? (products != null ? null : this.displayEntries),
+      displayEntries: displayEntries ?? this.displayEntries,
     );
   }
 }

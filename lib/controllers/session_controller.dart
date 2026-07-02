@@ -357,8 +357,13 @@ class SessionController extends GetxController {
     loadingDetailOrderNumbers.refresh();
 
     try {
-      final detail = await _orderRepository.getOrderDetail(existing.id);
+      final previous = orders[idx];
+      final detail = await _orderRepository.getOrderDetail(
+        existing.id,
+        previousDisplayEntries: previous.displayEntries,
+      );
       orders[idx] = detail.copyWith(number: existing.number);
+      orders.refresh();
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
     } catch (_) {
@@ -631,8 +636,26 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          final updated = await _orderRepository.requestNextCourses(order.id);
-          _upsertOrderInList(updated.copyWith(number: order.number));
+          final updated = await _orderRepository.requestNextCourses(
+            order.id,
+            previousDisplayEntries: order.displayEntries,
+          );
+          final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(
+            updated.displayEntries,
+            force: true,
+          );
+          _upsertOrderInList(
+            updated.copyWith(
+              number: order.number,
+              displayEntries: displayEntries,
+            ),
+          );
+          unawaited(
+            _orderRepository.persistSuivreLayoutHints(
+              order.id,
+              displayEntries,
+            ),
+          );
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

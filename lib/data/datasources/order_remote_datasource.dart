@@ -276,6 +276,42 @@ class OrderRemoteDataSource {
     }
   }
 
+  Future<void> addSeatOrderItems({
+    required int orderId,
+    required int seatNumber,
+    required Map<String, dynamic> body,
+  }) async {
+    final path = ApiEndpoints.orderSeatOrderItems(orderId, seatNumber);
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to add seat order items.',
+          statusCode: envelope.status,
+        );
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
+  }
+
   Future<void> markOrderPrinted(int orderId) async {
     final response = await _client.post<Map<String, dynamic>>(
       ApiEndpoints.markOrderPrinted,

@@ -287,7 +287,12 @@ class OrderMapper {
     return buffer.toString().trimRight();
   }
 
-  static SessionOrder fromOrderDetail(Map<String, dynamic> data) {
+  static SessionOrder fromOrderDetail(
+    Map<String, dynamic> data, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    List<int> suivreSplitHints = const [],
+    int suivreCountHint = 0,
+  }) {
     final tableNumber = tableNumberFromDetail(data);
     final tableId = (data['table_id'] as num?)?.toInt();
     final orderId = orderIdFromDetail(data);
@@ -301,6 +306,14 @@ class OrderMapper {
     final waiter = data['waiter'];
     final waiterName =
         waiter is Map<String, dynamic> ? (waiter['name'] as String? ?? '—') : '—';
+
+    final products = extractProducts(data);
+    final displayEntries = finalizeDisplayEntries(
+      data,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: suivreSplitHints,
+      suivreCountHint: suivreCountHint,
+    );
 
     return SessionOrder(
       id: orderId,
@@ -319,8 +332,16 @@ class OrderMapper {
       total: formatPrice(
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
-      products: extractProducts(data),
-      displayEntries: extractOrderDisplayEntries(data),
+      products: products,
+      displayEntries: displayEntries.isNotEmpty
+          ? displayEntries
+          : [
+              for (var i = 0; i < products.length; i++)
+                OrderDisplayEntry.product(
+                  product: products[i],
+                  lineIndex: i,
+                ),
+            ],
       waiterId: waiterIdFromOrderMap(data),
     );
   }
@@ -388,6 +409,44 @@ class OrderMapper {
     return products;
   }
 
+  static OrderDisplayEntry _suivreEntry(int sectionIndex) =>
+      OrderDisplayEntry.suivre(sectionIndex: sectionIndex);
+
+  static void _appendSuivreIfNeeded({
+    required List<OrderDisplayEntry> entries,
+    required int sectionIndex,
+  }) {
+    if (entries.isNotEmpty &&
+        entries.last.type == OrderDisplayEntryType.suivreSeparator &&
+        entries.last.sectionIndex == sectionIndex) {
+      return;
+    }
+    entries.add(_suivreEntry(sectionIndex));
+  }
+
+  static int _resolveItemCourseGroupKey(
+    Map<String, dynamic> item,
+    Map<String, dynamic> course,
+    int courseIndex,
+  ) {
+    final itemCourseId = (item['course_id'] as num?)?.toInt();
+    if (itemCourseId != null && itemCourseId > 0) {
+      return itemCourseId;
+    }
+
+    final courseId = (course['id'] as num?)?.toInt();
+    if (courseId != null && courseId > 0) {
+      return courseId;
+    }
+
+    final courseNumber = (course['course_number'] as num?)?.toInt();
+    if (courseNumber != null) {
+      return courseNumber;
+    }
+
+    return courseIndex + 1;
+  }
+
   static List<OrderDisplayEntry> extractOrderDisplayEntries(
     Map<String, dynamic> data,
   ) {
@@ -396,34 +455,118 @@ class OrderMapper {
     if (seatOrders is! List) return entries;
 
     var lineIndex = 0;
-    var sawItemsInPreviousCourses = false;
+    var suivreSectionIndex = 0;
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      final coursesRaw = seat['courses'];
+      if (coursesRaw is! List || coursesRaw.isEmpty) continue;
 
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
+      final courses = <Map<String, dynamic>>[];
+      for (final course in coursesRaw) {
+        if (course is Map<String, dynamic>) courses.add(course);
+      }
+      courses.sort((a, b) {
+        final left = (a['course_number'] as num?)?.toInt() ?? 0;
+        final right = (b['course_number'] as num?)?.toInt() ?? 0;
+        return left.compareTo(right);
+      });
+
+      final firstCourseNumber =
+          (courses.first['course_number'] as num?)?.toInt() ?? 1;
+
+      int? firstGroupKey;
+      int? currentGroupKey;
+
+      for (var courseIndex = 0; courseIndex < courses.length; courseIndex++) {
+        final course = courses[courseIndex];
+        final courseNumber =
+            (course['course_number'] as num?)?.toInt() ?? firstCourseNumber;
         final items = course['items'];
-        if (items is! List) continue;
 
         final visibleItems = <Map<String, dynamic>>[];
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-          visibleItems.add(item);
+        if (items is List) {
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            if (item['status'] == 'cancelled') continue;
+            visibleItems.add(item);
+          }
         }
 
-        if (sawItemsInPreviousCourses &&
-            (entries.isEmpty ||
-                entries.last.type != OrderDisplayEntryType.suivreSeparator)) {
-          entries.add(const OrderDisplayEntry.suivre());
+        final isFollowUpCourse =
+            courseIndex > 0 || courseNumber > firstCourseNumber;
+        var activeSection = 0;
+        var suivreHeaderForCourse = false;
+
+        if (isFollowUpCourse && visibleItems.isEmpty) {
+          suivreSectionIndex++;
+          activeSection = suivreSectionIndex;
+          _appendSuivreIfNeeded(
+            entries: entries,
+            sectionIndex: activeSection,
+          );
+          suivreHeaderForCourse = true;
+          continue;
         }
 
-        if (visibleItems.isEmpty) continue;
+        if (isFollowUpCourse && visibleItems.isNotEmpty) {
+          suivreSectionIndex++;
+          activeSection = suivreSectionIndex;
+          _appendSuivreIfNeeded(
+            entries: entries,
+            sectionIndex: activeSection,
+          );
+          suivreHeaderForCourse = true;
+        }
+
+        var sawNonSuivreItemsInCourse = false;
 
         for (final item in visibleItems) {
+          final groupKey =
+              _resolveItemCourseGroupKey(item, course, courseIndex);
+          final itemStatus = item['status'] as String?;
+          final isSuivreItem = itemStatus == 'to_be_continued';
+
+          if (firstGroupKey == null) {
+            firstGroupKey = groupKey;
+            currentGroupKey = groupKey;
+            activeSection = 0;
+          } else if (groupKey != currentGroupKey) {
+            suivreSectionIndex++;
+            activeSection = suivreSectionIndex;
+            _appendSuivreIfNeeded(
+              entries: entries,
+              sectionIndex: activeSection,
+            );
+            currentGroupKey = groupKey;
+            suivreHeaderForCourse = true;
+            sawNonSuivreItemsInCourse = false;
+          } else if (isFollowUpCourse && !suivreHeaderForCourse) {
+            suivreSectionIndex++;
+            activeSection = suivreSectionIndex;
+            _appendSuivreIfNeeded(
+              entries: entries,
+              sectionIndex: activeSection,
+            );
+            suivreHeaderForCourse = true;
+          }
+
+          if (isSuivreItem &&
+              sawNonSuivreItemsInCourse &&
+              !suivreHeaderForCourse) {
+            suivreSectionIndex++;
+            activeSection = suivreSectionIndex;
+            _appendSuivreIfNeeded(
+              entries: entries,
+              sectionIndex: activeSection,
+            );
+            suivreHeaderForCourse = true;
+          }
+
+          if (!isSuivreItem) {
+            sawNonSuivreItemsInCourse = true;
+          }
+
           final product = item['product'];
           final name = product is Map<String, dynamic>
               ? (product['name'] as String? ?? 'Article')
@@ -445,15 +588,272 @@ class OrderMapper {
                 message: message,
               ),
               lineIndex: lineIndex++,
+              sectionIndex: activeSection,
             ),
           );
         }
-
-        sawItemsInPreviousCourses = true;
       }
     }
 
     return entries;
+  }
+
+  static Map<String, dynamic> buildSeatOrderItemsPostPayload({
+    required int courseNumber,
+    required int productId,
+    required int qty,
+    required double subTotal,
+    String comment = '',
+  }) {
+    return {
+      'course_number': courseNumber,
+      'items': [
+        {
+          'product_id': productId,
+          'qty': qty,
+          'sub_total': subTotal,
+          'comment': comment,
+        },
+      ],
+    };
+  }
+
+  static List<int> suivreSplitPositions(List<OrderDisplayEntry> entries) {
+    final splits = <int>[];
+    var productCount = 0;
+
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+        splits.add(productCount);
+      } else if (entry.type == OrderDisplayEntryType.product) {
+        productCount++;
+      }
+    }
+
+    return splits;
+  }
+
+  static List<OrderDisplayEntry> _rebuildEntriesWithSuivreSplits(
+    List<OrderDisplayEntry> entries,
+    List<int> splitPositions,
+  ) {
+    if (splitPositions.isEmpty) return entries;
+
+    final products = entries
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .toList();
+    if (products.isEmpty) return entries;
+
+    final validSplits = splitPositions
+        .where((splitAt) => splitAt > 0 && splitAt <= products.length)
+        .toList()
+      ..sort();
+    if (validSplits.isEmpty) return entries;
+
+    final rebuilt = <OrderDisplayEntry>[];
+    var lineIndex = 0;
+    var sectionIndex = 0;
+    var splitIdx = 0;
+
+    for (var i = 0; i < products.length; i++) {
+      while (splitIdx < validSplits.length && i == validSplits[splitIdx]) {
+        sectionIndex++;
+        rebuilt.add(_suivreEntry(sectionIndex));
+        splitIdx++;
+      }
+
+      final productEntry = products[i];
+      rebuilt.add(
+        OrderDisplayEntry.product(
+          product: productEntry.product!,
+          lineIndex: lineIndex++,
+          sectionIndex: sectionIndex,
+        ),
+      );
+    }
+
+    while (splitIdx < validSplits.length &&
+        validSplits[splitIdx] == products.length) {
+      sectionIndex++;
+      rebuilt.add(_suivreEntry(sectionIndex));
+      splitIdx++;
+    }
+
+    return rebuilt;
+  }
+
+  static int suivreSeparatorCount(List<OrderDisplayEntry> entries) {
+    return entries
+        .where((entry) => entry.type == OrderDisplayEntryType.suivreSeparator)
+        .length;
+  }
+
+  static List<int> _mergeSuivreSplitPositions({
+    required List<int> extracted,
+    List<int> hints = const [],
+    List<OrderDisplayEntry>? previous,
+  }) {
+    final merged = <int>{...extracted, ...hints};
+    if (previous != null) {
+      merged.addAll(suivreSplitPositions(previous));
+    }
+    final sorted = merged.toList()..sort();
+    return sorted;
+  }
+
+  /// Keeps À SUIVRE rows when a refresh returns fewer separators than before.
+  static List<OrderDisplayEntry> reconcileSuivreDisplay({
+    required List<OrderDisplayEntry> previous,
+    required List<OrderDisplayEntry> next,
+  }) {
+    final previousSplits = suivreSplitPositions(previous);
+    final nextSplits = suivreSplitPositions(next);
+    final previousCount = suivreSeparatorCount(previous);
+    final nextCount = suivreSeparatorCount(next);
+
+    var result = next;
+
+    if (previousSplits.isNotEmpty &&
+        (nextSplits.length < previousSplits.length || nextCount < previousCount)) {
+      final mergedSplits = _mergeSuivreSplitPositions(
+        extracted: nextSplits,
+        hints: previousSplits,
+      );
+      result = _rebuildEntriesWithSuivreSplits(next, mergedSplits);
+    }
+
+    if (previousCount > suivreSeparatorCount(result)) {
+      result = ensureSuivreSeparatorCount(
+        result,
+        previousCount,
+        forceAppend: true,
+      );
+    }
+
+    return result;
+  }
+
+  static int? suivreSplitAt(List<OrderDisplayEntry> entries) {
+    final splits = suivreSplitPositions(entries);
+    if (splits.isEmpty) return null;
+    return splits.first;
+  }
+
+  static List<OrderDisplayEntry> applySuivreSplitToProductEntries(
+    List<OrderDisplayEntry> entries,
+    int splitAt,
+  ) {
+    if (entries.any((e) => e.type == OrderDisplayEntryType.suivreSeparator)) {
+      return entries;
+    }
+
+    return _rebuildEntriesWithSuivreSplits(entries, [splitAt]);
+  }
+
+  static List<int> _maxSuivreSplitPositions({
+    required List<int> extracted,
+    List<int> hints = const [],
+    List<OrderDisplayEntry>? previous,
+  }) {
+    return _mergeSuivreSplitPositions(
+      extracted: extracted,
+      hints: hints,
+      previous: previous,
+    );
+  }
+
+  static List<OrderDisplayEntry> finalizeDisplayEntries(
+    Map<String, dynamic> data, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    List<int> suivreSplitHints = const [],
+    int suivreCountHint = 0,
+  }) {
+    var entries = extractOrderDisplayEntries(data);
+    final extractedSplits = suivreSplitPositions(entries);
+    final targetSplits = _maxSuivreSplitPositions(
+      extracted: extractedSplits,
+      hints: suivreSplitHints,
+      previous: previousDisplayEntries,
+    );
+
+    if (targetSplits.length > extractedSplits.length) {
+      entries = _rebuildEntriesWithSuivreSplits(entries, targetSplits);
+    }
+
+    if (previousDisplayEntries != null) {
+      entries = reconcileSuivreDisplay(
+        previous: previousDisplayEntries,
+        next: entries,
+      );
+    }
+
+    final targetCount = [
+      suivreCountHint,
+      if (previousDisplayEntries != null)
+        suivreSeparatorCount(previousDisplayEntries)
+      else
+        0,
+      suivreSeparatorCount(entries),
+    ].reduce((left, right) => left > right ? left : right);
+
+    if (targetCount > suivreSeparatorCount(entries)) {
+      entries = ensureSuivreSeparatorCount(
+        entries,
+        targetCount,
+        forceAppend: true,
+      );
+    }
+
+    return entries;
+  }
+
+  /// Appends one À SUIVRE row after the latest items when requesting another course.
+  static List<OrderDisplayEntry> appendSuivreSeparatorAfterRequest(
+    List<OrderDisplayEntry> entries, {
+    bool force = false,
+  }) {
+    if (entries.isEmpty) return entries;
+
+    if (!force && entries.last.type == OrderDisplayEntryType.suivreSeparator) {
+      return entries;
+    }
+
+    final nextSection = entries
+            .map((e) => e.sectionIndex ?? 0)
+            .fold<int>(0, (max, value) => value > max ? value : max) +
+        1;
+
+    return [
+      ...entries,
+      _suivreEntry(nextSection),
+    ];
+  }
+
+  static List<OrderDisplayEntry> ensureSuivreSeparatorCount(
+    List<OrderDisplayEntry> entries,
+    int expectedCount, {
+    bool forceAppend = false,
+  }) {
+    if (expectedCount <= 0) return entries;
+
+    var result = entries;
+    while (suivreSeparatorCount(result) < expectedCount) {
+      result = appendSuivreSeparatorAfterRequest(
+        result,
+        force: forceAppend,
+      );
+    }
+    return result;
+  }
+
+  /// Ensures a visible À SUIVRE row when the API has not yet split courses.
+  static List<OrderDisplayEntry> ensureTrailingSuivreMarker(
+    List<OrderDisplayEntry> entries,
+  ) {
+    if (entries.any((e) => e.type == OrderDisplayEntryType.suivreSeparator)) {
+      return entries;
+    }
+    return appendSuivreSeparatorAfterRequest(entries);
   }
 
   static String displayKey({
@@ -1095,6 +1495,70 @@ class OrderMapper {
     );
   }
 
+  /// Course that should receive newly added items (latest open / À suivre course).
+  static ({int? id, int number}) resolveAppendCourse(
+    Map<String, dynamic> detail, {
+    int? seatNumber,
+  }) {
+    final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List || seatOrders.isEmpty) {
+      return (id: null, number: 1);
+    }
+
+    int? bestId;
+    var bestNumber = 0;
+    var bestScore = -1;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final seatNo = (seat['seat_number'] as num?)?.toInt();
+      if (seatNo != targetSeat) continue;
+
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseNumber = (course['course_number'] as num?)?.toInt();
+        if (courseNumber == null) continue;
+
+        final courseId = (course['id'] as num?)?.toInt();
+        final status = course['status'] as String?;
+        final items = course['items'];
+
+        var visibleItemCount = 0;
+        if (items is List) {
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            if (item['status'] == 'cancelled') continue;
+            visibleItemCount++;
+          }
+        }
+
+        var score = courseNumber * 10;
+        if (visibleItemCount == 0) score += 5;
+        if (status == 'to_be_continued' ||
+            status == 'pending' ||
+            status == 'in_progress') {
+          score += 3;
+        }
+
+        if (score >= bestScore) {
+          bestScore = score;
+          bestId = courseId;
+          bestNumber = courseNumber;
+        }
+      }
+    }
+
+    if (bestNumber > 0) {
+      return (id: bestId, number: bestNumber);
+    }
+
+    return resolveActiveCourse(detail, seatNumber: targetSeat);
+  }
+
   /// PUT /api/orders/:id writable body.
   static Map<String, dynamic> buildOrderUpdatePayload(
     Map<String, dynamic> orderDetail,
@@ -1680,6 +2144,43 @@ class OrderMapper {
     }
   }
 
+  static String _resolveAppendItemStatus(
+    Map<String, dynamic> detail, {
+    required int seatNumber,
+    required int courseNumber,
+  }) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        if ((seat['seat_number'] as num?)?.toInt() != seatNumber) continue;
+
+        final courses = seat['courses'];
+        if (courses is! List || courses.isEmpty) continue;
+
+        var firstCourseNumber = 1;
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          final cn = (course['course_number'] as num?)?.toInt();
+          if (cn != null) {
+            firstCourseNumber = cn;
+            break;
+          }
+        }
+
+        if (courseNumber > firstCourseNumber) {
+          return 'to_be_continued';
+        }
+      }
+    }
+
+    return _resolveItemStatusForCourse(
+      detail,
+      seatNumber: seatNumber,
+      courseNumber: courseNumber,
+    );
+  }
+
   static Map<String, dynamic> appendSimpleItem({
     required Map<String, dynamic> orderDetail,
     required int productId,
@@ -1689,8 +2190,8 @@ class OrderMapper {
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
-    final course = resolveActiveCourse(working, seatNumber: seatNumber);
-    final itemStatus = _resolveItemStatusForCourse(
+    final course = resolveAppendCourse(working, seatNumber: seatNumber);
+    final itemStatus = _resolveAppendItemStatus(
       working,
       seatNumber: seatNumber,
       courseNumber: course.number,
@@ -1726,8 +2227,8 @@ class OrderMapper {
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
-    final course = resolveActiveCourse(working, seatNumber: seatNumber);
-    final itemStatus = _resolveItemStatusForCourse(
+    final course = resolveAppendCourse(working, seatNumber: seatNumber);
+    final itemStatus = _resolveAppendItemStatus(
       working,
       seatNumber: seatNumber,
       courseNumber: course.number,
@@ -1795,11 +2296,39 @@ class OrderMapper {
       if (!itemAdded && seatNo == seatNumber) {
         final courses = seatCopy['courses'];
         if (courses is List && courses.isNotEmpty) {
+          var targetCourseNumber = courseNumber;
+          var hasTargetCourse = false;
+          for (final course in courses) {
+            if (course is! Map<String, dynamic>) continue;
+            if ((course['course_number'] as num?)?.toInt() == courseNumber) {
+              hasTargetCourse = true;
+              break;
+            }
+          }
+          if (!hasTargetCourse) {
+            Map<String, dynamic>? lastCourse;
+            for (final course in courses) {
+              if (course is! Map<String, dynamic>) continue;
+              final cn = (course['course_number'] as num?)?.toInt();
+              if (cn == null) continue;
+              if (lastCourse == null ||
+                  cn >
+                      ((lastCourse['course_number'] as num?)?.toInt() ?? 0)) {
+                lastCourse = course;
+              }
+            }
+            if (lastCourse != null) {
+              targetCourseNumber =
+                  (lastCourse['course_number'] as num?)?.toInt() ??
+                      courseNumber;
+            }
+          }
+
           seatCopy['courses'] = courses.map((course) {
             if (course is! Map<String, dynamic>) return course;
             final courseCopy = Map<String, dynamic>.from(course);
             final cn = (courseCopy['course_number'] as num?)?.toInt();
-            if (cn == courseNumber) {
+            if (cn == targetCourseNumber) {
               final items = courseCopy['items'];
               final itemsList =
                   items is List ? List<dynamic>.from(items) : <dynamic>[];

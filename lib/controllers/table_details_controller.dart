@@ -5,13 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
+import '../data/mappers/order_mapper.dart';
 import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
-import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
+import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
@@ -52,6 +53,20 @@ class TableDetailsController extends GetxController {
 
   late final String orderNumber;
   int? orderId;
+
+  final collapsedSuivreSections = <int>{}.obs;
+
+  bool isSuivreSectionCollapsed(int sectionIndex) =>
+      collapsedSuivreSections.contains(sectionIndex);
+
+  void toggleSuivreSection(int sectionIndex) {
+    if (collapsedSuivreSections.contains(sectionIndex)) {
+      collapsedSuivreSections.remove(sectionIndex);
+    } else {
+      collapsedSuivreSections.add(sectionIndex);
+    }
+    collapsedSuivreSections.refresh();
+  }
 
   @override
   void onInit() {
@@ -145,7 +160,11 @@ class TableDetailsController extends GetxController {
     if (resolved == null || resolved <= 0) return null;
 
     try {
-      final detail = await _orderRepository.getOrderDetail(resolved);
+      final previous = order;
+      final detail = await _orderRepository.getOrderDetail(
+        resolved,
+        previousDisplayEntries: previous?.displayEntries,
+      );
       orderId = resolved;
       _syncOrderInSession(detail.copyWith(number: orderNumber), orderNumber);
       return orderId;
@@ -690,8 +709,43 @@ class TableDetailsController extends GetxController {
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
-          final updated = await _orderRepository.requestNextCourses(id);
-          _syncOrderInSession(_withTrailingSuivreSeparator(updated), orderNumber);
+          final current = order;
+          final updated = await _orderRepository.requestNextCourses(
+            id,
+            previousDisplayEntries: current?.displayEntries,
+          );
+          _syncOrderInSession(
+            _withSuivreDisplayAfterRequest(updated),
+            orderNumber,
+          );
+          final synced = order;
+          await _refreshOrder();
+          final refreshed = order;
+          if (refreshed != null && synced != null) {
+            final previousSuivreCount = synced.displayEntries
+                .where(
+                  (entry) =>
+                      entry.type == OrderDisplayEntryType.suivreSeparator,
+                )
+                .length;
+            final refreshedSuivreCount = refreshed.displayEntries
+                .where(
+                  (entry) =>
+                      entry.type == OrderDisplayEntryType.suivreSeparator,
+                )
+                .length;
+            if (refreshedSuivreCount < previousSuivreCount) {
+              _syncOrderInSession(
+                refreshed.copyWith(
+                  displayEntries: OrderMapper.reconcileSuivreDisplay(
+                    previous: synced.displayEntries,
+                    next: refreshed.displayEntries,
+                  ),
+                ),
+                orderNumber,
+              );
+            }
+          }
           Get.snackbar(
             'Suite demandée',
             'La demande À SUIVRE a été envoyée.',
@@ -844,22 +898,40 @@ class TableDetailsController extends GetxController {
 
   void _syncOrderInSession(SessionOrder updated, String displayNumber) {
     if (!Get.isRegistered<SessionController>()) return;
-    Get.find<SessionController>().updateOrderRow(
-      updated.copyWith(number: displayNumber),
-    );
-  }
 
-  SessionOrder _withTrailingSuivreSeparator(SessionOrder order) {
-    if (order.displayEntries.isNotEmpty &&
-        order.displayEntries.last.type == OrderDisplayEntryType.suivreSeparator) {
-      return order;
+    final previous = order;
+    var displayEntries = updated.displayEntries;
+    if (previous != null) {
+      displayEntries = OrderMapper.reconcileSuivreDisplay(
+        previous: previous.displayEntries,
+        next: displayEntries,
+      );
     }
 
+    Get.find<SessionController>().updateOrderRow(
+      updated.copyWith(
+        number: displayNumber,
+        displayEntries: displayEntries,
+      ),
+    );
+
+    final id = updated.id;
+    if (id > 0 && Get.isRegistered<OrderRepository>()) {
+      unawaited(
+        Get.find<OrderRepository>().persistSuivreLayoutHints(
+          id,
+          displayEntries,
+        ),
+      );
+    }
+  }
+
+  SessionOrder _withSuivreDisplayAfterRequest(SessionOrder order) {
     return order.copyWith(
-      displayEntries: [
-        ...order.displayEntries,
-        const OrderDisplayEntry.suivre(),
-      ],
+      displayEntries: OrderMapper.appendSuivreSeparatorAfterRequest(
+        order.displayEntries,
+        force: true,
+      ),
     );
   }
 

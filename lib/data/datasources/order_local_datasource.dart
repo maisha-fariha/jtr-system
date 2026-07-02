@@ -27,5 +27,50 @@ class OrderLocalDataSource {
 
   Future<void> removeOrderDetail(int orderId) async {
     await _storage.delete(_detailKey(orderId));
+    await _storage.delete(_suivreSplitKey(orderId));
+    await _storage.delete(_suivreCountKey(orderId));
+  }
+
+  String _suivreSplitKey(int orderId) =>
+      '${StorageConstants.orderDetailsPrefix}suivre_split_$orderId';
+
+  String _suivreCountKey(int orderId) =>
+      '${StorageConstants.orderDetailsPrefix}suivre_count_$orderId';
+
+  Future<void> saveSuivreSplitHint(int orderId, List<int> splitPositions) async {
+    final key = _suivreSplitKey(orderId);
+    final valid = splitPositions.where((splitAt) => splitAt > 0).toList();
+    if (valid.isEmpty) {
+      await _storage.delete(key);
+      return;
+    }
+    await _storage.writeString(key, valid.join(','));
+  }
+
+  List<int> readSuivreSplitHint(int orderId) {
+    final raw = _storage.readString(_suivreSplitKey(orderId));
+    if (raw == null || raw.isEmpty) return const [];
+
+    return raw
+        .split(',')
+        .map((value) => int.tryParse(value.trim()))
+        .whereType<int>()
+        .where((splitAt) => splitAt > 0)
+        .toList();
+  }
+
+  Future<void> saveSuivreCountHint(int orderId, int count) async {
+    final key = _suivreCountKey(orderId);
+    if (count <= 0) {
+      await _storage.delete(key);
+      return;
+    }
+    await _storage.writeString(key, '$count');
+  }
+
+  int readSuivreCountHint(int orderId) {
+    final raw = _storage.readString(_suivreCountKey(orderId));
+    if (raw == null || raw.isEmpty) return 0;
+    return int.tryParse(raw) ?? 0;
   }
 }

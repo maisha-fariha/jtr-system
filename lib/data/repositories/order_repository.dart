@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/network/api_exception.dart';
 import '../../models/session_order.dart';
+import '../../models/order_display_entry.dart';
 import '../models/create_table_order_result.dart';
 import '../../services/connectivity_service.dart';
 import '../datasources/order_local_datasource.dart';
@@ -48,23 +49,68 @@ class OrderRepository {
   List<Map<String, dynamic>> _cachedPaymentModes = [];
 
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
-  Future<SessionOrder> getOrderDetail(int orderId) async {
+  Future<SessionOrder> getOrderDetail(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     final online = await _connectivity.isOnline;
+    final splitHint = _local.readSuivreSplitHint(orderId);
+    final countHint = _local.readSuivreCountHint(orderId);
 
     if (online) {
       final detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
-      return OrderMapper.fromOrderDetail(detail);
+      final order = OrderMapper.fromOrderDetail(
+        detail,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+      return order;
     }
 
     final cached = _local.readOrderDetail(orderId);
     if (cached != null) {
-      return OrderMapper.fromOrderDetail(cached);
+      final order = OrderMapper.fromOrderDetail(
+        cached,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+      return order;
     }
 
     throw ApiException(
       message: 'Détails de commande indisponibles hors ligne.',
     );
+  }
+
+  Future<void> persistSuivreSplitHint(int orderId, List<int> splitPositions) async {
+    if (orderId <= 0) return;
+    await _local.saveSuivreSplitHint(orderId, splitPositions);
+  }
+
+  Future<void> persistSuivreLayoutHints(
+    int orderId,
+    List<OrderDisplayEntry> displayEntries,
+  ) async {
+    if (orderId <= 0) return;
+    await _persistSuivreLayoutHints(orderId, displayEntries);
+  }
+
+  Future<void> _persistSuivreLayoutHints(
+    int orderId,
+    List<OrderDisplayEntry> displayEntries,
+  ) async {
+    final splits = OrderMapper.suivreSplitPositions(displayEntries);
+    final count = OrderMapper.suivreSeparatorCount(displayEntries);
+    if (splits.isNotEmpty) {
+      await _local.saveSuivreSplitHint(orderId, splits);
+    }
+    if (count > 0) {
+      await _local.saveSuivreCountHint(orderId, count);
+    }
   }
 
   Future<void> closeOrder(
@@ -680,7 +726,10 @@ class OrderRepository {
     return null;
   }
 
-  Future<SessionOrder> requestNextCourses(int orderId) async {
+  Future<SessionOrder> requestNextCourses(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
@@ -696,7 +745,14 @@ class OrderRepository {
     await _remote.requestCourses(orderId, courseIds);
     final updated = await _remote.fetchOrderDetail(orderId);
     await _local.saveOrderDetail(orderId, updated);
-    return OrderMapper.fromOrderDetail(updated);
+    final splitHint = _local.readSuivreSplitHint(orderId);
+    final countHint = _local.readSuivreCountHint(orderId);
+    return OrderMapper.fromOrderDetail(
+      updated,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: splitHint,
+      suivreCountHint: countHint,
+    );
   }
 
   Future<SessionOrder> markOrderPrinted(int orderId) async {
@@ -735,32 +791,63 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+      final course = OrderMapper.resolveAppendCourse(
+        detail,
+        seatNumber: seatNumber,
+      );
 
       _ensureAddItemCourse(detail, apiLog);
 
-      final payload = OrderMapper.addOrIncrementSimpleItem(
-        orderDetail: detail,
+      final body = OrderMapper.buildSeatOrderItemsPostPayload(
+        courseNumber: course.number,
         productId: productId,
-        unitPrice: unitPrice,
         qty: qty,
+        subTotal: unitPrice * qty,
         comment: comment,
       );
 
-      final updated = await _putOrderUpdate(
+      await _postSeatOrderItems(
         orderId: orderId,
-        payload: payload,
+        detail: detail,
+        seatNumber: seatNumber,
+        body: body,
         apiLog: apiLog,
       );
-      await _local.saveOrderDetail(orderId, updated);
+
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return _fetchAndMapOrder(orderId);
     } on ApiException catch (e) {
-      apiLog.writeln('ERREUR: ${e.message}');
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
+      apiLog.writeln('POST add failed, fallback PUT: ${e.message}');
+
+      try {
+        final detail = await _remote.fetchOrderDetail(orderId);
+        _ensureAddItemCourse(detail, apiLog);
+
+        final payload = OrderMapper.addOrIncrementSimpleItem(
+          orderDetail: detail,
+          productId: productId,
+          unitPrice: unitPrice,
+          qty: qty,
+          comment: comment,
+        );
+
+        final updated = await _putOrderUpdate(
+          orderId: orderId,
+          payload: payload,
+          apiLog: apiLog,
+        );
+        await _local.saveOrderDetail(orderId, updated);
+        lastAddItemLog = apiLog.toString();
+        return _fetchAndMapOrder(orderId);
+      } on ApiException catch (fallbackError) {
+        apiLog.writeln('ERREUR: ${fallbackError.message}');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        lastAddItemLog = apiLog.toString();
+        rethrow;
       }
-      lastAddItemLog = apiLog.toString();
-      rethrow;
     }
   }
 
@@ -815,7 +902,7 @@ class OrderRepository {
       );
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return _fetchAndMapOrder(orderId);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -863,7 +950,7 @@ class OrderRepository {
       );
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return _fetchAndMapOrder(orderId);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -1019,12 +1106,12 @@ class OrderRepository {
     StringBuffer apiLog,
   ) {
     final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-    final course = OrderMapper.resolveActiveCourse(
+    final course = OrderMapper.resolveAppendCourse(
       detail,
       seatNumber: seatNumber,
     );
 
-    if (course.id == null) {
+    if (course.number <= 0) {
       apiLog.writeln(
         'ERREUR: aucune suite (course) sur la commande. '
         'La commande doit avoir au moins un seat_order/course.',
@@ -1036,9 +1123,67 @@ class OrderRepository {
     }
 
     apiLog.writeln(
-      'seat_number=$seatNumber course_id=${course.id} '
-      'course_sequence=${course.number}',
+      'seat_number=$seatNumber course_id=${course.id ?? '—'} '
+      'course_number=${course.number}',
     );
+  }
+
+  Future<SessionOrder> _fetchAndMapOrder(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+  }
+
+  Future<void> _postSeatOrderItems({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required int seatNumber,
+    required Map<String, dynamic> body,
+    required StringBuffer apiLog,
+  }) async {
+    apiLog.writeln(
+      '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
+    );
+    apiLog.writeln(formatApiPayload(body));
+
+    try {
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatNumber,
+        body: body,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      return;
+    } on ApiException {
+      final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
+        detail,
+        seatNumber: seatNumber,
+      );
+      if (seatRecordId == null || seatRecordId == seatNumber) {
+        rethrow;
+      }
+
+      apiLog.writeln(
+        'RETRY seat_number=$seatNumber → seat_record_id=$seatRecordId',
+      );
+      apiLog.writeln(
+        '── POST /api/orders/$orderId/seat-orders/$seatRecordId/items ──',
+      );
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatRecordId,
+        body: body,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _putOrderUpdate({
@@ -1242,7 +1387,7 @@ class OrderRepository {
       );
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return _fetchAndMapOrder(orderId);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

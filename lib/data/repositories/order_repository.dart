@@ -874,6 +874,52 @@ class OrderRepository {
     }
   }
 
+  Future<SessionOrder> setOrderLineQuantityAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required int qty,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Mise à jour quantité ligne ──');
+    apiLog.writeln('order_id=$orderId line_index=$lineIndex qty=$qty');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.setLineQuantityAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        qty: qty,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
   Future<SessionOrder> adjustProductQuantityInOrder({
     required int orderId,
     required int productId,

@@ -791,11 +791,11 @@ class _ToolbarIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = !isEnabled
-        ? AppTheme.textSecondary.withValues(alpha: 0.25)
-        : isActive
-            ? AppTheme.primary
-            : AppTheme.textSecondary;
+    final color = AppTheme.toolbarIconColor(
+      icon,
+      active: isActive,
+      enabled: isEnabled,
+    );
 
     final tapSize = JtrResponsive.getResponsiveSize(context, 44);
 

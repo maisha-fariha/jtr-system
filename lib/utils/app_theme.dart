@@ -54,6 +54,56 @@ class AppTheme {
   static Color get actionIcon =>
       _dark ? const Color(0xFFF1C40F) : primary;
 
+  // ─── Toolbar icon colors (semantic, same in light/dark) ───────────────────
+
+  static const Color toolbarHome = Color(0xFF5C6BC0);
+  static const Color toolbarBack = Color(0xFF78909C);
+  static const Color toolbarQuantity = Color(0xFFFB8C00);
+  static const Color toolbarSuivre = Color(0xFF43A047);
+  static const Color toolbarMenu = Color(0xFF8E24AA);
+  static const Color toolbarTicket = Color(0xFF1E88E5);
+  static const Color toolbarPayment = Color(0xFF00897B);
+  static const Color toolbarKitchen = Color(0xFFE53935);
+  static const Color toolbarPanel = Color(0xFF757575);
+  static const Color toolbarNewOrder = Color(0xFF3949AB);
+  static const Color toolbarStatistics = Color(0xFF6D4C41);
+  static const Color toolbarLogout = Color(0xFF2EC4B6);
+  static const Color toolbarMessage = Color(0xFF8E24AA);
+
+  static Color toolbarIconColor(
+    IconData icon, {
+    bool active = false,
+    bool enabled = true,
+  }) {
+    if (!enabled) {
+      return textSecondary.withValues(alpha: 0.25);
+    }
+
+    final base = switch (icon) {
+      Icons.home_outlined || Icons.home => toolbarHome,
+      Icons.keyboard_return_outlined || Icons.arrow_back => toolbarBack,
+      Icons.grid_view => toolbarQuantity,
+      Icons.arrow_forward || Icons.restaurant => toolbarSuivre,
+      Icons.restaurant_menu => toolbarMenu,
+      Icons.receipt_long_outlined => toolbarTicket,
+      Icons.payments_outlined => toolbarPayment,
+      Icons.send_outlined => toolbarKitchen,
+      Icons.keyboard_arrow_up ||
+      Icons.keyboard_arrow_down =>
+        toolbarPanel,
+      Icons.edit_outlined || Icons.edit => toolbarMessage,
+      Icons.logout => toolbarLogout,
+      Icons.add => toolbarNewOrder,
+      Icons.bar_chart_rounded => toolbarStatistics,
+      _ => textSecondary,
+    };
+
+    if (active) {
+      return Color.lerp(base, const Color(0xFF212121), 0.22) ?? base;
+    }
+    return base;
+  }
+
   /// → Modal dialog background
   static Color get dialogBackground => _dark ? const Color(0xFF212031) : Colors.white;
 

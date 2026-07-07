@@ -743,7 +743,9 @@ class _ActionButton extends StatelessWidget {
     final backgroundColor =
         isActive ? AppTheme.primary : AppTheme.inactiveSurface;
     final labelColor = isActive ? Colors.white : AppTheme.darkText;
-    final iconColor = isActive ? Colors.white : AppTheme.actionIcon;
+    final iconColor = isActive
+        ? Colors.white
+        : AppTheme.toolbarIconColor(icon);
     final responsiveIconSize = JtrResponsive.getResponsiveSize(context, iconSize);
 
     return GestureDetector(

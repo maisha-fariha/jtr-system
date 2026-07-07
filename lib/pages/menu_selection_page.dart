@@ -833,7 +833,9 @@ class _SidebarToolButton extends StatelessWidget {
               child: Icon(
                 icon,
                 size: iconSize,
-                color: AppTheme.textSecondary,
+                color: icon == Icons.keyboard_arrow_down
+                    ? AppTheme.toolbarSuivre
+                    : AppTheme.toolbarIconColor(icon),
               ),
             ),
           ),
@@ -1112,7 +1114,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             onPressed: () => Get.offAllNamed(AppRoutes.session),
             icon: Icon(
               Icons.home,
-              color: AppTheme.primary,
+              color: AppTheme.toolbarIconColor(Icons.home),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),
@@ -1123,7 +1125,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             ),
             icon: Icon(
               Icons.arrow_back,
-              color: AppTheme.darkText,
+              color: AppTheme.toolbarIconColor(Icons.arrow_back),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),
@@ -1131,7 +1133,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             onPressed: AppNavigation.logout,
             icon: Icon(
               Icons.logout,
-              color: const Color(0xFF2EC4B6),
+              color: AppTheme.toolbarIconColor(Icons.logout),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),

@@ -61,17 +61,58 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                   );
                   currentOrder ??= order;
 
+                  final showCatalog =
+                      showPayment || expanded;
+                  final useSideBySide =
+                      JtrResponsive.isLargeDevice(context) && showCatalog;
+
+                  if (useSideBySide) {
+                    return Column(
+                      children: [
+                        Expanded(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: _OrderSummary(
+                                  orderNumber: controller.orderNumber,
+                                ),
+                              ),
+                              const VerticalDivider(
+                                width: 1,
+                                color: Color(0xFFE8E8E8),
+                              ),
+                              Expanded(
+                                child: showPayment
+                                    ? const _PaymentButtons()
+                                    : Column(
+                                        children: const [
+                                          _CategoryTabs(),
+                                          Expanded(child: _MenuGrid()),
+                                        ],
+                                      ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const _ActionToolbar(),
+                      ],
+                    );
+                  }
+
                   return Column(
                     children: [
                       Expanded(
-                        child: _OrderSummary(orderNumber: controller.orderNumber),
+                        child: _OrderSummary(
+                          orderNumber: controller.orderNumber,
+                        ),
                       ),
                       const _ActionToolbar(),
                       if (showPayment)
-                        const Expanded(flex: 3, child: _PaymentButtons())
+                        const Expanded(flex: 1, child: _PaymentButtons())
                       else if (expanded) ...[
                         const _CategoryTabs(),
-                        const Expanded(flex: 2, child: _MenuGrid()),
+                        const Expanded(flex: 1, child: _MenuGrid()),
                       ],
                     ],
                   );

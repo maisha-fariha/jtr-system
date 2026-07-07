@@ -330,23 +330,30 @@ class _OrderSummaryState extends State<_OrderSummary> {
     while (index < entries.length) {
       final entry = entries[index];
 
-      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+      if (entry.isSectionDivider) {
         final sectionIndex = entry.sectionIndex ?? 0;
         final collapsed = controller.isSuivreSectionCollapsed(sectionIndex);
+        final isDemande =
+            entry.type == OrderDisplayEntryType.demandeSeparator;
 
         rows.add(
-          _SuivreSeparator(
+          _CourseSectionDivider(
             sectionIndex: sectionIndex,
+            isDemande: isDemande,
+            demandeTimeLabel: entry.demandeTimeLabel,
             isCollapsed: collapsed,
-            onTap: () => controller.toggleSuivreSection(sectionIndex),
+            onSelect: isDemande
+                ? null
+                : () => controller.selectSuivreSection(sectionIndex),
+            onToggleCollapse: () =>
+                controller.toggleSuivreSection(sectionIndex),
             groupTag: _productSlidableGroupTag,
           ),
         );
         index++;
 
         if (!collapsed) {
-          while (index < entries.length &&
-              entries[index].type != OrderDisplayEntryType.suivreSeparator) {
+          while (index < entries.length && !entries[index].isSectionDivider) {
             final productEntry = entries[index];
             if (productEntry.type != OrderDisplayEntryType.product) {
               index++;
@@ -363,8 +370,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
             index++;
           }
         } else {
-          while (index < entries.length &&
-              entries[index].type != OrderDisplayEntryType.suivreSeparator) {
+          while (index < entries.length && !entries[index].isSectionDivider) {
             index++;
           }
         }
@@ -396,6 +402,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
       final session = Get.find<SessionController>();
       session.orders.length;
       controller.suivreUiRevision.value;
+      controller.selectedSuivreSection.value;
 
       final resolvedOrder = _resolveOrderFromSession(session);
       if (resolvedOrder == null) {
@@ -508,24 +515,92 @@ class _OrderSummaryState extends State<_OrderSummary> {
   }
 }
 
-class _SuivreSeparator extends GetView<TableDetailsController> {
-  const _SuivreSeparator({
+class _CourseSectionDivider extends GetView<TableDetailsController> {
+  static const Color _demandeGreen = Color(0xFF27AE60);
+
+  const _CourseSectionDivider({
     required this.sectionIndex,
+    required this.isDemande,
     required this.isCollapsed,
-    required this.onTap,
+    required this.onToggleCollapse,
     required this.groupTag,
+    this.demandeTimeLabel,
+    this.onSelect,
   });
 
   final int sectionIndex;
+  final bool isDemande;
+  final String? demandeTimeLabel;
   final bool isCollapsed;
-  final VoidCallback onTap;
+  final VoidCallback? onSelect;
+  final VoidCallback onToggleCollapse;
   final String groupTag;
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       final collapsed = controller.isSuivreSectionCollapsed(sectionIndex);
+      final selected = !isDemande &&
+          controller.isSuivreSectionSelected(sectionIndex);
       controller.suivreUiRevision.value;
+      controller.selectedSuivreSection.value;
+
+      final accentColor = isDemande ? _demandeGreen : AppTheme.primary;
+      final label = isDemande
+          ? 'DEMANDÉE À ${demandeTimeLabel ?? '--:--:--'}'
+          : 'À SUIVRE';
+
+      final content = InkWell(
+        onTap: isDemande ? onToggleCollapse : onSelect,
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 6),
+        ),
+        child: Container(
+          decoration: BoxDecoration(
+            color: selected
+                ? AppTheme.primary.withValues(alpha: 0.14)
+                : null,
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 6),
+            ),
+            border: selected
+                ? Border.all(color: AppTheme.primary, width: 1.5)
+                : null,
+          ),
+          padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                  fontWeight: FontWeight.w700,
+                  color: accentColor,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+              GestureDetector(
+                onTap: onToggleCollapse,
+                behavior: HitTestBehavior.opaque,
+                child: Icon(
+                  collapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
+                  color: accentColor,
+                  size: JtrResponsive.getResponsiveSize(context, 20),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      if (isDemande) {
+        return KeyedSubtree(
+          key: ValueKey('demande-$sectionIndex'),
+          child: content,
+        );
+      }
 
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
@@ -544,35 +619,7 @@ class _SuivreSeparator extends GetView<TableDetailsController> {
             ),
           ],
         ),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(
-            JtrResponsive.getResponsiveRadius(context, 6),
-          ),
-          child: Padding(
-            padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'À SUIVRE',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.primary,
-                    letterSpacing: 0.6,
-                  ),
-                ),
-                JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
-                Icon(
-                  collapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
-                  color: AppTheme.primary,
-                  size: JtrResponsive.getResponsiveSize(context, 20),
-                ),
-              ],
-            ),
-          ),
-        ),
+        child: content,
       );
     });
   }

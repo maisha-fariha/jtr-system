@@ -417,19 +417,148 @@ class OrderMapper {
     return products;
   }
 
-  static OrderDisplayEntry _suivreEntry(int sectionIndex) =>
-      OrderDisplayEntry.suivre(sectionIndex: sectionIndex);
+  static OrderDisplayEntry _suivreEntry(
+    int sectionIndex, {
+    required int courseNumber,
+  }) =>
+      OrderDisplayEntry.suivre(
+        sectionIndex: sectionIndex,
+        courseNumber: courseNumber,
+      );
+
+  static int? _resolveCourseNumberAboveInDisplay(
+    List<OrderDisplayEntry> entries,
+  ) {
+    for (var i = entries.length - 1; i >= 0; i--) {
+      final entry = entries[i];
+      if (entry.type == OrderDisplayEntryType.product) {
+        return entry.courseNumber;
+      }
+    }
+    return null;
+  }
+
+  /// API course_number for the service tied to a selected À SUIVRE row.
+  static int? resolveCourseNumberForSuivreSection(
+    List<OrderDisplayEntry> entries,
+    int suivreSectionIndex,
+  ) {
+    final idx = entries.indexWhere(
+      (entry) =>
+          entry.isSectionDivider && entry.sectionIndex == suivreSectionIndex,
+    );
+    if (idx < 0) return null;
+
+    final divider = entries[idx];
+    if (divider.courseNumber != null) return divider.courseNumber;
+
+    for (var i = idx - 1; i >= 0; i--) {
+      final previous = entries[i];
+      if (previous.isSectionDivider) break;
+      if (previous.type == OrderDisplayEntryType.product &&
+          previous.courseNumber != null) {
+        return previous.courseNumber;
+      }
+    }
+
+    return null;
+  }
+
+  static bool _isSectionDivider(OrderDisplayEntry entry) =>
+      entry.isSectionDivider;
+
+  static String? formatDemandeTime(dynamic requestedAt) {
+    if (requestedAt == null) return null;
+    final raw = requestedAt.toString().trim();
+    if (raw.isEmpty) return null;
+
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return null;
+
+    final local = parsed.toLocal();
+    final hours = local.hour.toString().padLeft(2, '0');
+    final minutes = local.minute.toString().padLeft(2, '0');
+    final seconds = local.second.toString().padLeft(2, '0');
+    return '$hours:$minutes:$seconds';
+  }
+
+  static Map<String, dynamic>? findCourseInOrderDetail(
+    Map<String, dynamic> data,
+    int courseNumber,
+  ) {
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        if ((course['course_number'] as num?)?.toInt() == courseNumber) {
+          return course;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static List<OrderDisplayEntry> applyDemandeSeparatorsFromApi(
+    Map<String, dynamic> data,
+    List<OrderDisplayEntry> entries,
+  ) {
+    final result = <OrderDisplayEntry>[];
+
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) {
+        result.add(entry);
+        continue;
+      }
+
+      final sectionIndex = entry.sectionIndex ?? 0;
+      final courseNumber = entry.courseNumber ?? sectionIndex;
+      if (sectionIndex <= 0 && courseNumber <= 0) {
+        result.add(entry);
+        continue;
+      }
+
+      final course = findCourseInOrderDetail(data, courseNumber);
+      if (course == null || !_courseWasRequestedToKitchen(course)) {
+        result.add(entry);
+        continue;
+      }
+
+      final timeLabel = formatDemandeTime(course['requested_at']);
+      if (timeLabel == null) {
+        result.add(entry);
+        continue;
+      }
+
+      result.add(
+        OrderDisplayEntry.demande(
+          sectionIndex: sectionIndex,
+          courseNumber: courseNumber,
+          demandeTimeLabel: timeLabel,
+        ),
+      );
+    }
+
+    return result;
+  }
 
   static void _appendSuivreIfNeeded({
     required List<OrderDisplayEntry> entries,
     required int sectionIndex,
+    required int courseNumber,
   }) {
     if (entries.isNotEmpty &&
         entries.last.type == OrderDisplayEntryType.suivreSeparator &&
         entries.last.sectionIndex == sectionIndex) {
       return;
     }
-    entries.add(_suivreEntry(sectionIndex));
+    entries.add(_suivreEntry(sectionIndex, courseNumber: courseNumber));
   }
 
   static int _resolveItemCourseGroupKey(
@@ -513,9 +642,14 @@ class OrderMapper {
         if (isFollowUpCourse && visibleItems.isNotEmpty) {
           suivreSectionIndex++;
           activeSection = suivreSectionIndex;
+          final demandCourseNumber = courseIndex > 0
+              ? ((courses[courseIndex - 1]['course_number'] as num?)?.toInt() ??
+                  courseNumber - 1)
+              : courseNumber - 1;
           _appendSuivreIfNeeded(
             entries: entries,
             sectionIndex: activeSection,
+            courseNumber: demandCourseNumber,
           );
           suivreHeaderForCourse = true;
         }
@@ -538,6 +672,7 @@ class OrderMapper {
             _appendSuivreIfNeeded(
               entries: entries,
               sectionIndex: activeSection,
+              courseNumber: courseNumber,
             );
             currentGroupKey = groupKey;
             suivreHeaderForCourse = true;
@@ -545,9 +680,14 @@ class OrderMapper {
           } else if (isFollowUpCourse && !suivreHeaderForCourse) {
             suivreSectionIndex++;
             activeSection = suivreSectionIndex;
+            final demandCourseNumber = courseIndex > 0
+                ? ((courses[courseIndex - 1]['course_number'] as num?)?.toInt() ??
+                    courseNumber - 1)
+                : courseNumber - 1;
             _appendSuivreIfNeeded(
               entries: entries,
               sectionIndex: activeSection,
+              courseNumber: demandCourseNumber,
             );
             suivreHeaderForCourse = true;
           }
@@ -560,6 +700,7 @@ class OrderMapper {
             _appendSuivreIfNeeded(
               entries: entries,
               sectionIndex: activeSection,
+              courseNumber: courseNumber,
             );
             suivreHeaderForCourse = true;
           }
@@ -590,6 +731,7 @@ class OrderMapper {
               ),
               lineIndex: lineIndex++,
               sectionIndex: activeSection,
+              courseNumber: courseNumber,
             ),
           );
         }
@@ -624,7 +766,7 @@ class OrderMapper {
     var productCount = 0;
 
     for (final entry in entries) {
-      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+      if (_isSectionDivider(entry)) {
         splits.add(productCount);
       } else if (entry.type == OrderDisplayEntryType.product) {
         productCount++;
@@ -660,7 +802,14 @@ class OrderMapper {
     for (var i = 0; i < products.length; i++) {
       while (splitIdx < validSplits.length && i == validSplits[splitIdx]) {
         sectionIndex++;
-        rebuilt.add(_suivreEntry(sectionIndex));
+        final demandCourseNumber =
+            products[i - 1].courseNumber ?? products[i].courseNumber ?? 1;
+        rebuilt.add(
+          _suivreEntry(
+            sectionIndex,
+            courseNumber: demandCourseNumber,
+          ),
+        );
         splitIdx++;
       }
 
@@ -670,6 +819,7 @@ class OrderMapper {
           product: productEntry.product!,
           lineIndex: lineIndex++,
           sectionIndex: sectionIndex,
+          courseNumber: productEntry.courseNumber,
         ),
       );
     }
@@ -738,7 +888,7 @@ class OrderMapper {
     List<OrderDisplayEntry> entries,
     int splitAt,
   ) {
-    if (entries.any((e) => e.type == OrderDisplayEntryType.suivreSeparator)) {
+    if (entries.any(_isSectionDivider)) {
       return entries;
     }
 
@@ -752,14 +902,14 @@ class OrderMapper {
     int suivreCountHint = 0,
   }) {
     var entries = extractOrderDisplayEntries(data);
+    entries = applyDemandeSeparatorsFromApi(data, entries);
     final apiSuivreCount = suivreSeparatorCount(entries);
 
     // Only overlay local À SUIVRE rows that are not yet reflected by API courses.
     if (suivreCountHint > apiSuivreCount) {
       var pending = suivreCountHint - apiSuivreCount;
       while (pending > 0) {
-        final force = entries.isNotEmpty &&
-            entries.last.type == OrderDisplayEntryType.suivreSeparator;
+        final force = entries.isNotEmpty && _isSectionDivider(entries.last);
         entries = appendSuivreSeparatorAfterRequest(entries, force: force);
         pending--;
       }
@@ -788,9 +938,9 @@ class OrderMapper {
   ) {
     final result = <OrderDisplayEntry>[];
     for (final entry in entries) {
-      if (entry.type == OrderDisplayEntryType.suivreSeparator &&
+      if (_isSectionDivider(entry) &&
           result.isNotEmpty &&
-          result.last.type == OrderDisplayEntryType.suivreSeparator) {
+          _isSectionDivider(result.last)) {
         continue;
       }
       result.add(entry);
@@ -805,6 +955,10 @@ class OrderMapper {
     final result = <OrderDisplayEntry>[];
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
+      if (entry.type == OrderDisplayEntryType.demandeSeparator) {
+        result.add(entry);
+        continue;
+      }
       if (entry.type != OrderDisplayEntryType.suivreSeparator) {
         result.add(entry);
         continue;
@@ -812,7 +966,7 @@ class OrderMapper {
 
       var hasProducts = false;
       for (var j = i + 1; j < entries.length; j++) {
-        if (entries[j].type == OrderDisplayEntryType.suivreSeparator) break;
+        if (_isSectionDivider(entries[j])) break;
         if (entries[j].type == OrderDisplayEntryType.product) {
           hasProducts = true;
           break;
@@ -848,7 +1002,9 @@ class OrderMapper {
   }) {
     if (entries.isEmpty) return entries;
 
-    if (!force && entries.last.type == OrderDisplayEntryType.suivreSeparator) {
+    if (!force &&
+        entries.isNotEmpty &&
+        entries.last.type == OrderDisplayEntryType.suivreSeparator) {
       return entries;
     }
 
@@ -856,10 +1012,12 @@ class OrderMapper {
             .map((e) => e.sectionIndex ?? 0)
             .fold<int>(0, (max, value) => value > max ? value : max) +
         1;
+    final demandCourseNumber = _resolveCourseNumberAboveInDisplay(entries);
+    if (demandCourseNumber == null) return entries;
 
     return [
       ...entries,
-      _suivreEntry(nextSection),
+      _suivreEntry(nextSection, courseNumber: demandCourseNumber),
     ];
   }
 
@@ -884,7 +1042,7 @@ class OrderMapper {
   static List<OrderDisplayEntry> ensureTrailingSuivreMarker(
     List<OrderDisplayEntry> entries,
   ) {
-    if (entries.any((e) => e.type == OrderDisplayEntryType.suivreSeparator)) {
+    if (entries.any(_isSectionDivider)) {
       return entries;
     }
     return appendSuivreSeparatorAfterRequest(entries);
@@ -1375,6 +1533,109 @@ class OrderMapper {
     return bestId != null ? [bestId] : const [];
   }
 
+  /// Course id for demande on a selected À SUIVRE section.
+  static List<int> extractRequestableCourseIdsForSuivreSection(
+    Map<String, dynamic> data, {
+    required int courseNumber,
+  }) {
+    final courseId = _resolveRequestableCourseIdForNumber(
+      data,
+      courseNumber: courseNumber,
+      requireKnownStatus: true,
+    );
+    if (courseId != null) return [courseId];
+
+    final fallbackId = _resolveRequestableCourseIdForNumber(
+      data,
+      courseNumber: courseNumber,
+      requireKnownStatus: false,
+    );
+    return fallbackId != null ? [fallbackId] : const [];
+  }
+
+  static String describeWhySuivreSectionNotRequestable(
+    Map<String, dynamic> data, {
+    required int courseNumber,
+  }) {
+    if (courseNumber <= 0) {
+      return 'Sélectionnez un À SUIVRE avant de demander.';
+    }
+
+    final course = findCourseInOrderDetail(data, courseNumber);
+    if (course == null) {
+      return 'Service $courseNumber introuvable sur cette commande.';
+    }
+
+    if (_visibleItemCountInCourse(course) <= 0) {
+      return 'Ce service ne contient aucun article à envoyer en cuisine.';
+    }
+
+    if (_courseWasRequestedToKitchen(course)) {
+      final time = formatDemandeTime(course['requested_at']);
+      if (time != null) {
+        return 'Ce service a déjà été demandé à $time.';
+      }
+      return 'Ce service a déjà été demandé en cuisine.';
+    }
+
+    final status = course['status'] as String?;
+    if (status != null &&
+        status != 'to_be_continued' &&
+        status != 'pending' &&
+        status != 'in_progress') {
+      return 'Ce service n\'est pas demandable (statut: $status).';
+    }
+
+    final courseId = course['id'];
+    if (courseId == null) {
+      return 'Identifiant du service introuvable.';
+    }
+
+    return 'Aucun service à demander pour cette section.';
+  }
+
+  static int? _resolveRequestableCourseIdForNumber(
+    Map<String, dynamic> data, {
+    required int courseNumber,
+    required bool requireKnownStatus,
+  }) {
+    if (courseNumber <= 0) return null;
+
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final number = (course['course_number'] as num?)?.toInt();
+        if (number != courseNumber) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        if (_courseWasRequestedToKitchen(course)) return null;
+
+        if (requireKnownStatus) {
+          final status = course['status'] as String?;
+          if (status != 'to_be_continued' &&
+              status != 'pending' &&
+              status != 'in_progress') {
+            continue;
+          }
+        }
+
+        final courseId = course['id'];
+        final courseIdInt = courseId is int
+            ? courseId
+            : (courseId is num ? courseId.toInt() : null);
+        if (courseIdInt != null) return courseIdInt;
+      }
+    }
+
+    return null;
+  }
+
   /// Course ids to fire to the kitchen (send / envoyer).
   static List<int> extractKitchenSendCourseIds(Map<String, dynamic> data) {
     final ids = <int>{};
@@ -1633,17 +1894,54 @@ class OrderMapper {
     return (id: null, number: courseNumber);
   }
 
+  /// Course number for the next item from the current display layout.
+  static int? resolveAppendCourseNumberFromLayout(
+    List<OrderDisplayEntry> layoutHints,
+  ) {
+    for (var i = layoutHints.length - 1; i >= 0; i--) {
+      final entry = layoutHints[i];
+
+      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) return above + 1;
+        return null;
+      }
+
+      if (entry.type == OrderDisplayEntryType.demandeSeparator) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) return above + 1;
+        continue;
+      }
+
+      if (entry.type == OrderDisplayEntryType.product) {
+        final number = entry.courseNumber;
+        if (number != null && number > 0) return number;
+        return null;
+      }
+    }
+
+    return null;
+  }
+
   /// Course that should receive newly added items (latest open course).
   static ({int? id, int number}) resolveAppendCourse(
     Map<String, dynamic> detail, {
     int? seatNumber,
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
   }) {
     final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
     final courses = _coursesForSeat(detail, seatNumber: targetSeat);
     if (courses.isEmpty) {
       return (id: null, number: 1);
+    }
+
+    if (layoutHints != null && layoutHints.isNotEmpty) {
+      final fromLayout = resolveAppendCourseNumberFromLayout(layoutHints);
+      if (fromLayout != null && fromLayout > 0) {
+        return _resolveCourseTarget(courses, fromLayout);
+      }
     }
 
     var maxCourseNumber = 0;
@@ -1781,6 +2079,7 @@ class OrderMapper {
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
   }) {
     return appendSimpleItem(
       orderDetail: orderDetail,
@@ -1790,6 +2089,7 @@ class OrderMapper {
       comment: comment,
       suivreSectionCount: suivreSectionCount,
       suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
     );
   }
 
@@ -1894,7 +2194,7 @@ class OrderMapper {
     return entries
         .where(
           (entry) =>
-              !((entry.type == OrderDisplayEntryType.suivreSeparator ||
+              !((_isSectionDivider(entry) ||
                       entry.type == OrderDisplayEntryType.product) &&
                   (entry.sectionIndex ?? 0) == sectionIndex),
         )
@@ -2443,6 +2743,7 @@ class OrderMapper {
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
@@ -2451,6 +2752,7 @@ class OrderMapper {
       seatNumber: seatNumber,
       suivreSectionCount: suivreSectionCount,
       suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
     );
     final itemStatus = _resolveAppendItemStatus(
       working,
@@ -2487,6 +2789,7 @@ class OrderMapper {
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
@@ -2495,6 +2798,7 @@ class OrderMapper {
       seatNumber: seatNumber,
       suivreSectionCount: suivreSectionCount,
       suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
     );
     final itemStatus = _resolveAppendItemStatus(
       working,

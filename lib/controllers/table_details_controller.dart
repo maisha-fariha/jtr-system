@@ -55,10 +55,39 @@ class TableDetailsController extends GetxController {
   int? orderId;
 
   final collapsedSuivreSections = <int>{}.obs;
+  final selectedSuivreSection = RxnInt();
   final suivreUiRevision = 0.obs;
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
+
+  bool isSuivreSectionSelected(int sectionIndex) =>
+      selectedSuivreSection.value == sectionIndex;
+
+  bool isSelectedSectionRequestable(List<OrderDisplayEntry> entries) {
+    final sectionIndex = selectedSuivreSection.value;
+    if (sectionIndex == null || sectionIndex <= 0) return false;
+
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.suivreSeparator &&
+          entry.sectionIndex == sectionIndex) {
+        return true;
+      }
+      if (entry.type == OrderDisplayEntryType.demandeSeparator &&
+          entry.sectionIndex == sectionIndex) {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  void selectSuivreSection(int sectionIndex) {
+    selectedSuivreSection.value = sectionIndex;
+    collapsedSuivreSections.remove(sectionIndex);
+    collapsedSuivreSections.refresh();
+    suivreUiRevision.value++;
+  }
 
   void toggleSuivreSection(int sectionIndex) {
     if (collapsedSuivreSections.contains(sectionIndex)) {
@@ -731,6 +760,7 @@ class TableDetailsController extends GetxController {
     showPaymentOptions.value = false;
     isBottomPanelExpanded.value = true;
     activeToolbarIcon.value = Icons.restaurant;
+    selectedSuivreSection.value = sectionIndex;
 
     final id = resolvedOrderId;
     if (id != null && id > 0) {
@@ -751,21 +781,65 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    final sectionIndex = selectedSuivreSection.value;
+    if (sectionIndex == null || sectionIndex <= 0) {
+      Get.snackbar(
+        'Sélection requise',
+        'Sélectionnez un À SUIVRE avant de demander.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder != null &&
+        !isSelectedSectionRequestable(currentOrder.displayEntries)) {
+      selectedSuivreSection.value = null;
+      Get.snackbar(
+        'Sélection invalide',
+        'Ce service est déjà demandé. Sélectionnez un À SUIVRE ouvert.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final courseNumber = currentOrder == null
+        ? null
+        : OrderMapper.resolveCourseNumberForSuivreSection(
+            currentOrder.displayEntries,
+            sectionIndex,
+          );
+    if (courseNumber == null || courseNumber <= 0) {
+      Get.snackbar(
+        'Erreur',
+        'Impossible d\'identifier le service à demander.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
     AppConfirmDialog.show(
       context: context,
       title: 'Demande',
       message:
-          'Envoyer en cuisine les articles du service en cours ?',
+          'Envoyer en cuisine le service sélectionné (course $courseNumber) ?',
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
-          final currentOrder = order;
-          final updated = await _orderRepository.requestNextCourses(
+          final orderSnapshot = order;
+          final updated = await _orderRepository.requestCourseForSuivreSection(
             id,
-            previousDisplayEntries: currentOrder?.displayEntries,
+            courseNumber: courseNumber,
+            previousDisplayEntries: orderSnapshot?.displayEntries,
           );
           _syncOrderInSession(updated, orderNumber);
           await _refreshOrder();
+          if (selectedSuivreSection.value == sectionIndex) {
+            selectedSuivreSection.value = null;
+          }
           Get.snackbar(
             'Demande envoyée',
             'Le service a été envoyé en cuisine.',
@@ -781,7 +855,7 @@ class TableDetailsController extends GetxController {
         } catch (_) {
           Get.snackbar(
             'Erreur',
-            'Impossible d\'envoyer la demande de suite.',
+            'Impossible d\'envoyer la demande.',
             snackPosition: SnackPosition.BOTTOM,
             margin: const EdgeInsets.all(16),
           );

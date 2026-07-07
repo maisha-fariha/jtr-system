@@ -734,6 +734,38 @@ class OrderRepository {
     );
   }
 
+  Future<SessionOrder> requestCourseForSuivreSection(
+    int orderId, {
+    required int courseNumber,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+      detail,
+      courseNumber: courseNumber,
+    );
+    if (courseIds.isEmpty) {
+      throw ApiException(
+        message: OrderMapper.describeWhySuivreSectionNotRequestable(
+          detail,
+          courseNumber: courseNumber,
+        ),
+      );
+    }
+
+    await _remote.requestCourses(orderId, courseIds);
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+  }
+
   Future<SessionOrder> markOrderPrinted(int orderId) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
@@ -781,6 +813,7 @@ class OrderRepository {
         seatNumber: seatNumber,
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
+        layoutHints: layoutHints,
       );
 
       _ensureAddItemCourse(
@@ -835,6 +868,7 @@ class OrderRepository {
           comment: comment,
           suivreSectionCount: suivreHints.count,
           suivreSplitHints: suivreHints.splits,
+          layoutHints: layoutHints,
         );
 
         final updated = await _putOrderUpdate(
@@ -913,6 +947,7 @@ class OrderRepository {
         comment: comment,
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
+        layoutHints: layoutHints,
       );
 
       final updated = await _putOrderUpdate(
@@ -1227,6 +1262,7 @@ class OrderRepository {
       seatNumber: seatNumber,
       suivreSectionCount: suivreHints.count,
       suivreSplitHints: suivreHints.splits,
+      layoutHints: layoutHints,
     );
 
     if (course.number <= 0) {

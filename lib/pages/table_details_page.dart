@@ -852,7 +852,6 @@ class _ActionToolbarState extends State<_ActionToolbar> {
   late final ScrollController _scrollController;
 
   static const _icons = [
-    Icons.home_outlined,
     Icons.keyboard_return_outlined,
     Icons.grid_view,
     Icons.restaurant,

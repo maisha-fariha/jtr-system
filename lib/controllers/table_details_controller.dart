@@ -14,7 +14,6 @@ import '../data/repositories/order_repository.dart';
 import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
-import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
@@ -508,11 +507,6 @@ class TableDetailsController extends GetxController {
   }
 
   void onToolbarIconTap(IconData icon, {required BuildContext context}) {
-    if (icon == Icons.home_outlined) {
-      Get.offAllNamed(AppRoutes.session);
-      return;
-    }
-
     if (icon == Icons.keyboard_return_outlined) {
       unawaited(navigateBackOrExitTable());
       return;

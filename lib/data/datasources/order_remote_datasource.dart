@@ -312,21 +312,120 @@ class OrderRemoteDataSource {
     }
   }
 
-  Future<void> markOrderPrinted(int orderId) async {
-    final response = await _client.post<Map<String, dynamic>>(
-      ApiEndpoints.markOrderPrinted,
-      data: {'order_id': orderId},
-    );
-    final envelope = ApiEnvelope<dynamic>.fromJson(
-      response.data!,
-      (json) => json,
-    );
-
-    if (!envelope.success) {
-      throw ApiException(
-        message: envelope.message ?? 'Failed to mark order as printed.',
-        statusCode: envelope.status,
+  Future<Map<String, dynamic>> generateReceipt(
+    int orderId, {
+    String type = 'preview',
+  }) async {
+    final body = {
+      'order_id': orderId,
+      'type': type,
+      'mark_printed': true,
+    };
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        ApiEndpoints.generateReceipt,
+        data: body,
       );
+      final raw = response.data;
+      if (raw is! Map<String, dynamic>) {
+        throw ApiException(
+          message:
+              'Réponse ticket invalide (HTTP ${response.statusCode}): $raw',
+          statusCode: response.statusCode,
+        );
+      }
+
+      final envelope = ApiEnvelope.parseResponse(raw);
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to generate receipt.',
+          statusCode: envelope.status,
+        );
+      }
+
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        response: raw,
+        statusCode: response.statusCode,
+      );
+      return raw;
+    } on ApiException catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
+      rethrow;
+    } catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
+      throw ApiException(message: 'Erreur ticket: $error');
+    }
+  }
+
+  Future<Map<String, dynamic>> markOrderPrinted(int orderId) async {
+    final body = {'order_id': orderId};
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        ApiEndpoints.markOrderPrinted,
+        data: body,
+      );
+      final raw = response.data;
+      if (raw is! Map<String, dynamic>) {
+        throw ApiException(
+          message:
+              'Réponse mark-printed invalide (HTTP ${response.statusCode}): $raw',
+          statusCode: response.statusCode,
+        );
+      }
+
+      final envelope = ApiEnvelope.parseResponse(raw);
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to mark order as printed.',
+          statusCode: envelope.status,
+        );
+      }
+
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        response: raw,
+        statusCode: response.statusCode,
+      );
+      return raw;
+    } on ApiException catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
+      rethrow;
+    } catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
+      throw ApiException(message: 'Erreur mark-printed: $error');
     }
   }
 

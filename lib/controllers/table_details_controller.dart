@@ -555,7 +555,7 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconEnabled(IconData icon) => true;
 
   Future<void> printTicket({required BuildContext context}) async {
-    final id = resolvedOrderId;
+    final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
       return;
@@ -574,7 +574,10 @@ class TableDetailsController extends GetxController {
     );
 
     try {
-      final updated = await _orderRepository.markOrderPrinted(id);
+      final updated = await _orderRepository.markOrderPrinted(
+        id,
+        previousDisplayEntries: order?.displayEntries,
+      );
       _syncOrderInSession(updated, orderNumber);
 
       if (context.mounted) {
@@ -591,7 +594,7 @@ class TableDetailsController extends GetxController {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
       }
-      ApiDebugDialog.show(title: 'Erreur ticket', body: e.message);
+      Get.snackbar('Erreur', e.message);
     } catch (_) {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();

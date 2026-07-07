@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/network/api_exception.dart';
+import '../../core/network/api_endpoints.dart';
 import '../../models/session_order.dart';
 import '../../models/order_display_entry.dart';
 import '../models/create_table_order_result.dart';
@@ -45,6 +46,9 @@ class OrderRepository {
 
   /// Last payment-modes fetch debug trace.
   String? lastPaymentModesLog;
+
+  /// Last ticket/receipt print debug trace.
+  String? lastPrintLog;
 
   List<Map<String, dynamic>> _cachedPaymentModes = [];
 
@@ -766,17 +770,119 @@ class OrderRepository {
     );
   }
 
-  Future<SessionOrder> markOrderPrinted(int orderId) async {
+  Future<SessionOrder> markOrderPrinted(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    final apiLog = StringBuffer();
+    lastPrintLog = null;
+
     if (!await _connectivity.isOnline) {
+      lastPrintLog = 'Hors ligne — impression ticket impossible.';
       throw ApiException(
         message: 'Impression impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    await _remote.markOrderPrinted(orderId);
-    final detail = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, detail);
-    return OrderMapper.fromOrderDetail(detail);
+    apiLog.writeln('── Impression ticket ──');
+    apiLog.writeln('order_id=$orderId');
+
+    try {
+      final requestBody = {
+        'order_id': orderId,
+        'type': 'preview',
+        'mark_printed': true,
+      };
+      apiLog.writeln('── POST ${ApiEndpoints.generateReceipt} ──');
+      apiLog.writeln(formatApiPayload(requestBody));
+      final response = await _remote.generateReceipt(orderId);
+      apiLog.writeln('STATUS: OK');
+      apiLog.writeln('RESPONSE:');
+      apiLog.writeln(formatApiPayload(response));
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      logTicketPrint(
+        phase: 'generate',
+        request: requestBody,
+        response: response,
+        statusCode: 200,
+      );
+
+      final order = await getOrderDetail(
+        orderId,
+        previousDisplayEntries: previousDisplayEntries,
+      );
+      apiLog.writeln('receipt_print_count=${order.impressionCount}');
+      lastPrintLog = apiLog.toString();
+      return order;
+    } on ApiException catch (e) {
+      apiLog.writeln('STATUS: ERREUR (generate)');
+      apiLog.writeln('MESSAGE: ${e.message}');
+      lastPrintLog = apiLog.toString();
+      logTicketPrint(
+        phase: 'generate',
+        request: {
+          'order_id': orderId,
+          'type': 'preview',
+          'mark_printed': true,
+        },
+        statusCode: e.statusCode,
+        error: e.message,
+      );
+      apiLog.writeln('generate failed, fallback mark-printed: ${e.message}');
+      try {
+        final fallbackBody = {'order_id': orderId};
+        apiLog.writeln('── POST ${ApiEndpoints.markOrderPrinted} ──');
+        apiLog.writeln(formatApiPayload(fallbackBody));
+        final response = await _remote.markOrderPrinted(orderId);
+        apiLog.writeln('STATUS: OK (fallback mark-printed)');
+        apiLog.writeln('RESPONSE:');
+        apiLog.writeln(formatApiPayload(response));
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        logTicketPrint(
+          phase: 'mark-printed',
+          request: fallbackBody,
+          response: response,
+          statusCode: 200,
+        );
+
+        final order = await getOrderDetail(
+          orderId,
+          previousDisplayEntries: previousDisplayEntries,
+        );
+        apiLog.writeln('receipt_print_count=${order.impressionCount}');
+        lastPrintLog = apiLog.toString();
+        return order;
+      } on ApiException catch (fallbackError) {
+        apiLog.writeln('STATUS: ERREUR (fallback)');
+        apiLog.writeln('ERREUR: ${fallbackError.message}');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        logTicketPrint(
+          phase: 'mark-printed',
+          request: {'order_id': orderId},
+          statusCode: fallbackError.statusCode,
+          error: fallbackError.message,
+        );
+        lastPrintLog = apiLog.toString();
+        rethrow;
+      }
+    } catch (e) {
+      apiLog.writeln('STATUS: ERREUR (inattendue)');
+      apiLog.writeln('$e');
+      lastPrintLog = apiLog.toString();
+      logTicketPrint(
+        phase: 'ticket',
+        request: {'order_id': orderId},
+        error: e.toString(),
+      );
+      if (e is ApiException) rethrow;
+      throw ApiException(message: 'Erreur ticket: $e');
+    }
   }
 
   Future<SessionOrder> addSimpleProductToOrder({

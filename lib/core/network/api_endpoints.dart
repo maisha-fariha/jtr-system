@@ -11,6 +11,7 @@ class ApiEndpoints {
   static const createOrder = orders;
   static const openOrders = '/api/days/open-orders';
   static const markOrderPrinted = '/api/orders/mark-printed';
+  static const generateReceipt = '/api/receipts/generate';
   static const tablesList = '/api/tables/list';
   static const tables = '/api/tables';
   static String tableById(int tableId) => '/api/tables/$tableId';

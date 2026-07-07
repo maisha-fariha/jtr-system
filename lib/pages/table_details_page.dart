@@ -346,9 +346,12 @@ class _OrderSummaryState extends State<_OrderSummary> {
 
         if (!collapsed) {
           while (index < entries.length &&
-              entries[index].type == OrderDisplayEntryType.product &&
-              entries[index].sectionIndex == sectionIndex) {
+              entries[index].type != OrderDisplayEntryType.suivreSeparator) {
             final productEntry = entries[index];
+            if (productEntry.type != OrderDisplayEntryType.product) {
+              index++;
+              continue;
+            }
             rows.add(
               _ProductLine(
                 orderNumber: order.number,
@@ -361,8 +364,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
           }
         } else {
           while (index < entries.length &&
-              entries[index].type == OrderDisplayEntryType.product &&
-              entries[index].sectionIndex == sectionIndex) {
+              entries[index].type != OrderDisplayEntryType.suivreSeparator) {
             index++;
           }
         }
@@ -393,7 +395,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
 
       final session = Get.find<SessionController>();
       session.orders.length;
-      controller.collapsedSuivreSections.length;
+      controller.suivreUiRevision.value;
 
       final resolvedOrder = _resolveOrderFromSession(session);
       if (resolvedOrder == null) {
@@ -521,53 +523,58 @@ class _SuivreSeparator extends GetView<TableDetailsController> {
 
   @override
   Widget build(BuildContext context) {
-    return Slidable(
-      key: ValueKey('suivre-$sectionIndex'),
-      groupTag: groupTag,
-      startActionPane: ActionPane(
-        motion: const ScrollMotion(),
-        extentRatio: 0.14,
-        children: [
-          SlidableAction(
-            onPressed: (_) => controller.cancelSuivreSection(sectionIndex),
-            backgroundColor: AppTheme.background,
-            foregroundColor: const Color(0xFFE74C3C),
-            icon: CupertinoIcons.delete,
-            spacing: 0,
-            padding: EdgeInsets.zero,
-          ),
-        ],
-      ),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(
-          JtrResponsive.getResponsiveRadius(context, 6),
+    return Obx(() {
+      final collapsed = controller.isSuivreSectionCollapsed(sectionIndex);
+      controller.suivreUiRevision.value;
+
+      return Slidable(
+        key: ValueKey('suivre-$sectionIndex'),
+        groupTag: groupTag,
+        startActionPane: ActionPane(
+          motion: const ScrollMotion(),
+          extentRatio: 0.14,
+          children: [
+            SlidableAction(
+              onPressed: (_) => controller.cancelSuivreSection(sectionIndex),
+              backgroundColor: AppTheme.background,
+              foregroundColor: const Color(0xFFE74C3C),
+              icon: CupertinoIcons.delete,
+              spacing: 0,
+              padding: EdgeInsets.zero,
+            ),
+          ],
         ),
-        child: Padding(
-          padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                'À SUIVRE',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                  fontWeight: FontWeight.w700,
-                  color: AppTheme.primary,
-                  letterSpacing: 0.6,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 6),
+          ),
+          child: Padding(
+            padding: JtrResponsive.getResponsivePadding(context, vertical: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'À SUIVRE',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primary,
+                    letterSpacing: 0.6,
+                  ),
                 ),
-              ),
-              JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
-              Icon(
-                isCollapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
-                color: AppTheme.primary,
-                size: JtrResponsive.getResponsiveSize(context, 20),
-              ),
-            ],
+                JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+                Icon(
+                  collapsed ? Icons.arrow_drop_down : Icons.arrow_drop_up,
+                  color: AppTheme.primary,
+                  size: JtrResponsive.getResponsiveSize(context, 20),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 }
 
@@ -801,7 +808,6 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.home_outlined,
     Icons.keyboard_return_outlined,
     Icons.grid_view,
-    Icons.arrow_forward,
     Icons.restaurant,
     Icons.restaurant_menu,
     Icons.receipt_long_outlined,

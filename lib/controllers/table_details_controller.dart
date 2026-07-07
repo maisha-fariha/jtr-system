@@ -55,6 +55,7 @@ class TableDetailsController extends GetxController {
   int? orderId;
 
   final collapsedSuivreSections = <int>{}.obs;
+  final suivreUiRevision = 0.obs;
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
@@ -66,6 +67,7 @@ class TableDetailsController extends GetxController {
       collapsedSuivreSections.add(sectionIndex);
     }
     collapsedSuivreSections.refresh();
+    suivreUiRevision.value++;
   }
 
   @override
@@ -495,7 +497,14 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (icon == Icons.arrow_forward || icon == Icons.restaurant) {
+    if (icon == Icons.restaurant) {
+      activeToolbarIcon.value = Icons.restaurant;
+      unawaited(addSuivreAfterLatestItems());
+      return;
+    }
+
+    if (icon == Icons.restaurant_menu) {
+      activeToolbarIcon.value = Icons.restaurant_menu;
       requestNextCourse(context: context);
       return;
     }
@@ -512,22 +521,6 @@ class TableDetailsController extends GetxController {
 
     if (icon == Icons.payments_outlined) {
       togglePaymentOptions();
-      return;
-    }
-
-    if (icon == Icons.restaurant_menu) {
-      final id = resolvedOrderId;
-      if (id == null || id <= 0) {
-        Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
-        return;
-      }
-      Get.toNamed(
-        AppRoutes.menuSelection,
-        arguments: {
-          'orderNumber': orderNumber,
-          'orderId': id,
-        },
-      );
       return;
     }
 
@@ -693,6 +686,64 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  Future<void> addSuivreAfterLatestItems() async {
+    final currentOrder = order;
+    if (currentOrder == null) {
+      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    if (currentOrder.products.isEmpty) {
+      Get.snackbar(
+        'À SUIVRE',
+        'Ajoutez d\'abord un article avant d\'ouvrir la suite.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final beforeCount =
+        OrderMapper.suivreSeparatorCount(currentOrder.displayEntries);
+    final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(
+      currentOrder.displayEntries,
+    );
+    final afterCount = OrderMapper.suivreSeparatorCount(displayEntries);
+
+    if (afterCount <= beforeCount) {
+      Get.snackbar(
+        'À SUIVRE',
+        'La suite est déjà ouverte.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final suivreEntry = displayEntries.lastWhere(
+      (entry) => entry.type == OrderDisplayEntryType.suivreSeparator,
+    );
+    final sectionIndex = suivreEntry.sectionIndex ?? 0;
+
+    collapsedSuivreSections.remove(sectionIndex);
+    collapsedSuivreSections.refresh();
+    suivreUiRevision.value++;
+    showPaymentOptions.value = false;
+    isBottomPanelExpanded.value = true;
+    activeToolbarIcon.value = Icons.restaurant;
+
+    final id = resolvedOrderId;
+    if (id != null && id > 0) {
+      await _orderRepository.persistSuivreLayoutHints(id, displayEntries);
+    }
+
+    _syncOrderInSession(
+      currentOrder.copyWith(displayEntries: displayEntries),
+      orderNumber,
+      displayEntriesOverride: displayEntries,
+    );
+  }
+
   Future<void> requestNextCourse({BuildContext? context}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
@@ -702,26 +753,29 @@ class TableDetailsController extends GetxController {
 
     AppConfirmDialog.show(
       context: context,
-      title: 'Demander la suite',
+      title: 'Demande',
       message:
-          'Envoyer la demande À SUIVRE pour les articles de cette table ?\n'
-          'Les prochains articles seront ajoutés à la suite suivante.',
+          'Envoyer en cuisine les articles du service en cours ?',
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
-          final updated = await _orderRepository.requestNextCourses(id);
+          final currentOrder = order;
+          final updated = await _orderRepository.requestNextCourses(
+            id,
+            previousDisplayEntries: currentOrder?.displayEntries,
+          );
           _syncOrderInSession(updated, orderNumber);
           await _refreshOrder();
           Get.snackbar(
-            'Suite demandée',
-            'La demande À SUIVRE a été envoyée.',
+            'Demande envoyée',
+            'Le service a été envoyé en cuisine.',
             snackPosition: SnackPosition.BOTTOM,
             duration: const Duration(seconds: 2),
             margin: const EdgeInsets.all(16),
           );
         } on ApiException catch (e) {
           ApiDebugDialog.show(
-            title: 'Erreur suite',
+            title: 'Erreur demande',
             body: e.message,
           );
         } catch (_) {
@@ -800,6 +854,7 @@ class TableDetailsController extends GetxController {
           productId: product.id,
           unitPrice: product.unitPrice,
           qty: 1,
+          layoutHints: order?.displayEntries,
         );
         _syncOrderInSession(updated, orderNumber);
       }
@@ -850,6 +905,7 @@ class TableDetailsController extends GetxController {
         productId: product.id,
         basePrice: product.unitPrice,
         menuSelections: menuSelections,
+        layoutHints: order?.displayEntries,
       );
       _syncOrderInSession(updated, displayNumber);
     } on ApiException catch (e) {
@@ -1007,6 +1063,7 @@ class TableDetailsController extends GetxController {
 
     collapsedSuivreSections.remove(sectionIndex);
     collapsedSuivreSections.refresh();
+    suivreUiRevision.value++;
     if (selectedOrderLineIndex.value != null &&
         lineIndices.contains(selectedOrderLineIndex.value)) {
       selectedOrderLineIndex.value = null;

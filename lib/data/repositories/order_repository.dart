@@ -58,7 +58,16 @@ class OrderRepository {
     if (online) {
       final detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
-      final order = OrderMapper.fromOrderDetail(detail);
+
+      final countHint = previousDisplayEntries == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+      final order = OrderMapper.fromOrderDetail(
+        detail,
+        suivreCountHint: countHint,
+      );
+
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
       return order;
     }
@@ -715,13 +724,14 @@ class OrderRepository {
     final detail = await _remote.fetchOrderDetail(orderId);
     final courseIds = OrderMapper.extractRequestableCourseIds(detail);
     if (courseIds.isEmpty) {
-      throw ApiException(message: 'Aucune suite à demander pour cette table.');
+      throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 
     await _remote.requestCourses(orderId, courseIds);
-    final updated = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, updated);
-    return OrderMapper.fromOrderDetail(updated);
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
   }
 
   Future<SessionOrder> markOrderPrinted(int orderId) async {
@@ -743,6 +753,7 @@ class OrderRepository {
     required double unitPrice,
     int qty = 1,
     String comment = '',
+    List<OrderDisplayEntry>? layoutHints,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -761,12 +772,23 @@ class OrderRepository {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
       final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: layoutHints,
+      );
       final course = OrderMapper.resolveAppendCourse(
         detail,
         seatNumber: seatNumber,
+        suivreSectionCount: suivreHints.count,
+        suivreSplitHints: suivreHints.splits,
       );
 
-      _ensureAddItemCourse(detail, apiLog);
+      _ensureAddItemCourse(
+        detail,
+        apiLog,
+        orderId: orderId,
+        layoutHints: layoutHints,
+      );
 
       final body = OrderMapper.buildSeatOrderItemsPostPayload(
         courseNumber: course.number,
@@ -785,13 +807,25 @@ class OrderRepository {
       );
 
       lastAddItemLog = apiLog.toString();
-      return _fetchAndMapOrder(orderId);
+      return _fetchAndMapOrder(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
     } on ApiException catch (e) {
       apiLog.writeln('POST add failed, fallback PUT: ${e.message}');
 
       try {
         final detail = await _remote.fetchOrderDetail(orderId);
-        _ensureAddItemCourse(detail, apiLog);
+        final suivreHints = _resolveSuivreHints(
+          orderId,
+          layoutHints: layoutHints,
+        );
+        _ensureAddItemCourse(
+          detail,
+          apiLog,
+          orderId: orderId,
+          layoutHints: layoutHints,
+        );
 
         final payload = OrderMapper.addOrIncrementSimpleItem(
           orderDetail: detail,
@@ -799,6 +833,8 @@ class OrderRepository {
           unitPrice: unitPrice,
           qty: qty,
           comment: comment,
+          suivreSectionCount: suivreHints.count,
+          suivreSplitHints: suivreHints.splits,
         );
 
         final updated = await _putOrderUpdate(
@@ -808,7 +844,10 @@ class OrderRepository {
         );
         await _local.saveOrderDetail(orderId, updated);
         lastAddItemLog = apiLog.toString();
-        return _fetchAndMapOrder(orderId);
+        return _fetchAndMapOrder(
+          orderId,
+          previousDisplayEntries: layoutHints,
+        );
       } on ApiException catch (fallbackError) {
         apiLog.writeln('ERREUR: ${fallbackError.message}');
         if (_remote.lastApiLog != null) {
@@ -826,6 +865,7 @@ class OrderRepository {
     required double basePrice,
     required List<Map<String, dynamic>> menuSelections,
     String comment = '',
+    List<OrderDisplayEntry>? layoutHints,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -854,14 +894,25 @@ class OrderRepository {
         },
       );
 
-      _ensureAddItemCourse(detail, apiLog);
+      _ensureAddItemCourse(
+        detail,
+        apiLog,
+        orderId: orderId,
+        layoutHints: layoutHints,
+      );
 
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: layoutHints,
+      );
       final payload = OrderMapper.appendComposedItem(
         orderDetail: detail,
         productId: productId,
         subTotal: basePrice + supplement,
         menuSelections: menuSelections,
         comment: comment,
+        suivreSectionCount: suivreHints.count,
+        suivreSplitHints: suivreHints.splits,
       );
 
       final updated = await _putOrderUpdate(
@@ -871,7 +922,10 @@ class OrderRepository {
       );
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return _fetchAndMapOrder(orderId);
+      return _fetchAndMapOrder(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -1138,14 +1192,41 @@ class OrderRepository {
     }
   }
 
+  ({List<int> splits, int count}) _resolveSuivreHints(
+    int orderId, {
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    if (layoutHints != null &&
+        OrderMapper.suivreSeparatorCount(layoutHints) > 0) {
+      return (
+        splits: OrderMapper.suivreSplitPositions(layoutHints),
+        count: OrderMapper.suivreSeparatorCount(layoutHints),
+      );
+    }
+
+    final count = _local.readSuivreCountHint(orderId);
+    return (
+      splits: _local.readSuivreSplitHint(orderId),
+      count: count,
+    );
+  }
+
   void _ensureAddItemCourse(
     Map<String, dynamic> detail,
-    StringBuffer apiLog,
-  ) {
+    StringBuffer apiLog, {
+    required int orderId,
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
     final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+    final suivreHints = _resolveSuivreHints(
+      orderId,
+      layoutHints: layoutHints,
+    );
     final course = OrderMapper.resolveAppendCourse(
       detail,
       seatNumber: seatNumber,
+      suivreSectionCount: suivreHints.count,
+      suivreSplitHints: suivreHints.splits,
     );
 
     if (course.number <= 0) {

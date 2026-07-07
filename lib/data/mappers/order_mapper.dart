@@ -752,25 +752,34 @@ class OrderMapper {
     int suivreCountHint = 0,
   }) {
     var entries = extractOrderDisplayEntries(data);
+    final apiSuivreCount = suivreSeparatorCount(entries);
 
-    // Hints only when the API has not exposed any course separators yet.
-    if (suivreSeparatorCount(entries) == 0) {
-      if (suivreSplitHints.isNotEmpty) {
-        entries = _rebuildEntriesWithSuivreSplits(entries, suivreSplitHints);
-      } else if (suivreCountHint > 0) {
-        entries = ensureSuivreSeparatorCount(entries, suivreCountHint);
+    // Only overlay local À SUIVRE rows that are not yet reflected by API courses.
+    if (suivreCountHint > apiSuivreCount) {
+      var pending = suivreCountHint - apiSuivreCount;
+      while (pending > 0) {
+        final force = entries.isNotEmpty &&
+            entries.last.type == OrderDisplayEntryType.suivreSeparator;
+        entries = appendSuivreSeparatorAfterRequest(entries, force: force);
+        pending--;
       }
     }
 
-    return _normalizeSuivreLayout(entries);
+    return _normalizeSuivreLayout(
+      entries,
+      keepTrailingEmptySuivre: suivreCountHint > apiSuivreCount,
+    );
   }
 
   static List<OrderDisplayEntry> _normalizeSuivreLayout(
-    List<OrderDisplayEntry> entries,
-  ) {
+    List<OrderDisplayEntry> entries, {
+    bool keepTrailingEmptySuivre = false,
+  }) {
     var result = _dedupeConsecutiveSuivreSeparators(entries);
     result = _stripEmptySuivreSections(result);
-    result = _stripTrailingEmptySuivreSeparators(result);
+    if (!keepTrailingEmptySuivre) {
+      result = _stripTrailingEmptySuivreSeparators(result);
+    }
     return result;
   }
 
@@ -832,7 +841,7 @@ class OrderMapper {
     return end == entries.length ? entries : entries.sublist(0, end);
   }
 
-  /// Appends one À SUIVRE row after the latest items when requesting another course.
+  /// Appends one À SUIVRE row to open the next local course section.
   static List<OrderDisplayEntry> appendSuivreSeparatorAfterRequest(
     List<OrderDisplayEntry> entries, {
     bool force = false,
@@ -1315,6 +1324,9 @@ class OrderMapper {
 
       for (final course in courses) {
         if (course is! Map<String, dynamic>) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        if (_courseWasRequestedToKitchen(course)) continue;
+
         final status = course['status'] as String?;
         final courseId = course['id'];
         final courseIdInt = courseId is int
@@ -1322,9 +1334,11 @@ class OrderMapper {
             : (courseId is num ? courseId.toInt() : null);
         if (courseIdInt == null) continue;
 
-        if (status == 'to_be_continued' || status == 'pending') {
+        if (status == 'to_be_continued' ||
+            status == 'pending' ||
+            status == 'in_progress') {
           final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
-          if (courseNumber >= bestNumber) {
+          if (bestId == null || courseNumber < bestNumber) {
             bestNumber = courseNumber;
             bestId = courseIdInt;
           }
@@ -1342,13 +1356,16 @@ class OrderMapper {
       if (courses is! List) continue;
       for (final course in courses) {
         if (course is! Map<String, dynamic>) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        if (_courseWasRequestedToKitchen(course)) continue;
+
         final courseId = course['id'];
         final courseIdInt = courseId is int
             ? courseId
             : (courseId is num ? courseId.toInt() : null);
         if (courseIdInt == null) continue;
         final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
-        if (courseNumber >= bestNumber) {
+        if (bestId == null || courseNumber < bestNumber) {
           bestNumber = courseNumber;
           bestId = courseIdInt;
         }
@@ -1575,7 +1592,7 @@ class OrderMapper {
     return count;
   }
 
-  /// True when the course was already fired to the kitchen (À SUIVRE done).
+  /// True when the course was already fired to the kitchen (demande done).
   static bool _courseWasRequestedToKitchen(Map<String, dynamic> course) {
     final requestedAt = course['requested_at'];
     if (requestedAt != null && requestedAt.toString().trim().isNotEmpty) {
@@ -1590,10 +1607,38 @@ class OrderMapper {
         status == 'done';
   }
 
-  /// Course that should receive newly added items (latest open / À suivre course).
+  static Map<String, dynamic>? _findCourseByNumber(
+    List<Map<String, dynamic>> courses,
+    int courseNumber,
+  ) {
+    for (final course in courses) {
+      if ((course['course_number'] as num?)?.toInt() == courseNumber) {
+        return course;
+      }
+    }
+    return null;
+  }
+
+  static ({int? id, int number}) _resolveCourseTarget(
+    List<Map<String, dynamic>> courses,
+    int courseNumber,
+  ) {
+    final existing = _findCourseByNumber(courses, courseNumber);
+    if (existing != null) {
+      return (
+        id: (existing['id'] as num?)?.toInt(),
+        number: courseNumber,
+      );
+    }
+    return (id: null, number: courseNumber);
+  }
+
+  /// Course that should receive newly added items (latest open course).
   static ({int? id, int number}) resolveAppendCourse(
     Map<String, dynamic> detail, {
     int? seatNumber,
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
   }) {
     final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
     final courses = _coursesForSeat(detail, seatNumber: targetSeat);
@@ -1601,7 +1646,34 @@ class OrderMapper {
       return (id: null, number: 1);
     }
 
-    // Prefer an empty follow-up course the backend opened after À SUIVRE.
+    var maxCourseNumber = 0;
+    var coursesWithItems = 0;
+    Map<String, dynamic>? latestCourseWithItems;
+    var latestWithItemsNumber = 0;
+
+    for (final course in courses) {
+      final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
+      if (courseNumber > maxCourseNumber) {
+        maxCourseNumber = courseNumber;
+      }
+      if (_visibleItemCountInCourse(course) <= 0) continue;
+
+      coursesWithItems++;
+      if (courseNumber >= latestWithItemsNumber) {
+        latestWithItemsNumber = courseNumber;
+        latestCourseWithItems = course;
+      }
+    }
+
+    // Local À SUIVRE open: next items go to the course after the latest API course.
+    if (suivreSectionCount > 0 && suivreSectionCount >= coursesWithItems) {
+      final nextNumber = latestWithItemsNumber > 0
+          ? latestWithItemsNumber + 1
+          : maxCourseNumber + 1;
+      return _resolveCourseTarget(courses, nextNumber);
+    }
+
+    // Prefer an empty follow-up course the backend may have opened after demande.
     for (var i = courses.length - 1; i >= 0; i--) {
       final course = courses[i];
       if (_visibleItemCountInCourse(course) > 0) continue;
@@ -1615,37 +1687,18 @@ class OrderMapper {
       );
     }
 
-    // Keep adding to the latest course until it has been sent to the kitchen.
-    Map<String, dynamic>? latestWithItems;
-    var latestNumber = 0;
-    for (final course in courses) {
-      if (_visibleItemCountInCourse(course) <= 0) continue;
-
-      final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
-      if (courseNumber >= latestNumber) {
-        latestNumber = courseNumber;
-        latestWithItems = course;
-      }
-    }
-
-    if (latestWithItems != null) {
-      if (!_courseWasRequestedToKitchen(latestWithItems)) {
+    if (latestCourseWithItems != null) {
+      if (!_courseWasRequestedToKitchen(latestCourseWithItems)) {
         return (
-          id: (latestWithItems['id'] as num?)?.toInt(),
-          number: latestNumber,
+          id: (latestCourseWithItems['id'] as num?)?.toInt(),
+          number: latestWithItemsNumber,
         );
       }
 
-      // After À SUIVRE, new items belong to the next course number.
-      return (id: null, number: latestNumber + 1);
+      return _resolveCourseTarget(courses, latestWithItemsNumber + 1);
     }
 
-    final last = courses.last;
-    final lastNumber = (last['course_number'] as num?)?.toInt() ?? 1;
-    return (
-      id: (last['id'] as num?)?.toInt(),
-      number: lastNumber,
-    );
+    return _resolveCourseTarget(courses, maxCourseNumber > 0 ? maxCourseNumber : 1);
   }
 
   /// PUT /api/orders/:id writable body.
@@ -1726,6 +1779,8 @@ class OrderMapper {
     required double unitPrice,
     int qty = 1,
     String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
   }) {
     return appendSimpleItem(
       orderDetail: orderDetail,
@@ -1733,6 +1788,8 @@ class OrderMapper {
       unitPrice: unitPrice,
       qty: qty,
       comment: comment,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
     );
   }
 
@@ -2384,10 +2441,17 @@ class OrderMapper {
     required double unitPrice,
     int qty = 1,
     String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
-    final course = resolveAppendCourse(working, seatNumber: seatNumber);
+    final course = resolveAppendCourse(
+      working,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
+    );
     final itemStatus = _resolveAppendItemStatus(
       working,
       seatNumber: seatNumber,
@@ -2421,10 +2485,17 @@ class OrderMapper {
     required double subTotal,
     required List<Map<String, dynamic>> menuSelections,
     String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
-    final course = resolveAppendCourse(working, seatNumber: seatNumber);
+    final course = resolveAppendCourse(
+      working,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
+    );
     final itemStatus = _resolveAppendItemStatus(
       working,
       seatNumber: seatNumber,

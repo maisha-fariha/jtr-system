@@ -369,6 +369,21 @@ class OrderMapper {
     return null;
   }
 
+  static List<Map<String, dynamic>> _sortedCoursesList(dynamic coursesRaw) {
+    if (coursesRaw is! List) return const [];
+
+    final parsed = <Map<String, dynamic>>[];
+    for (final course in coursesRaw) {
+      if (course is Map<String, dynamic>) parsed.add(course);
+    }
+    parsed.sort((a, b) {
+      final left = (a['course_number'] as num?)?.toInt() ?? 0;
+      final right = (b['course_number'] as num?)?.toInt() ?? 0;
+      return left.compareTo(right);
+    });
+    return parsed;
+  }
+
   static List<OrderProduct> extractProducts(Map<String, dynamic> data) {
     final products = <OrderProduct>[];
     final seatOrders = data['seat_orders'];
@@ -376,11 +391,9 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
         final items = course['items'];
         if (items is! List) continue;
 
@@ -2176,29 +2189,48 @@ class OrderMapper {
     List<OrderDisplayEntry> entries,
     int sectionIndex,
   ) {
-    return entries
-        .where(
-          (entry) =>
-              entry.type == OrderDisplayEntryType.product &&
-              (entry.sectionIndex ?? 0) == sectionIndex,
-        )
-        .map((entry) => entry.lineIndex)
-        .whereType<int>()
-        .toList();
+    return productLineIndicesForSuivreSection(entries, sectionIndex);
+  }
+
+  /// Product line indices displayed below a section divider.
+  static List<int> productLineIndicesForSuivreSection(
+    List<OrderDisplayEntry> entries,
+    int suivreSectionIndex,
+  ) {
+    final dividerIndex = entries.indexWhere(
+      (entry) =>
+          entry.isSectionDivider && entry.sectionIndex == suivreSectionIndex,
+    );
+    if (dividerIndex < 0) return const [];
+
+    final indices = <int>[];
+    for (var i = dividerIndex + 1; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.isSectionDivider) break;
+      if (entry.type == OrderDisplayEntryType.product &&
+          entry.lineIndex != null) {
+        indices.add(entry.lineIndex!);
+      }
+    }
+    return indices;
   }
 
   static List<OrderDisplayEntry> removeSuivreSectionFromDisplay(
     List<OrderDisplayEntry> entries,
     int sectionIndex,
   ) {
-    return entries
-        .where(
-          (entry) =>
-              !((_isSectionDivider(entry) ||
-                      entry.type == OrderDisplayEntryType.product) &&
-                  (entry.sectionIndex ?? 0) == sectionIndex),
-        )
-        .toList();
+    final dividerIndex = entries.indexWhere(
+      (entry) =>
+          entry.isSectionDivider && entry.sectionIndex == sectionIndex,
+    );
+    if (dividerIndex < 0) return entries;
+
+    final result = entries.toList();
+    result.removeAt(dividerIndex);
+    while (dividerIndex < result.length && !result[dividerIndex].isSectionDivider) {
+      result.removeAt(dividerIndex);
+    }
+    return result;
   }
 
   /// Rebuilds display rows using a trimmed suivre layout and fresh API products.
@@ -2257,11 +2289,9 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
         final items = course['items'];
         if (items is! List) continue;
 
@@ -2295,11 +2325,9 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
         final items = course['items'];
         if (items is! List) continue;
 
@@ -2367,11 +2395,9 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
         final items = course['items'];
         if (items is! List) continue;
 

@@ -1115,6 +1115,37 @@ class OrderRepository {
     }
   }
 
+  Future<SessionOrder> syncDisplayFromTrimmedLayout(
+    int orderId, {
+    required List<OrderDisplayEntry> trimmedDisplay,
+  }) async {
+    if (orderId <= 0) {
+      throw ApiException(message: 'Commande introuvable pour cette table.');
+    }
+
+    Map<String, dynamic>? detail = _local.readOrderDetail(orderId);
+    if (detail == null) {
+      if (!await _connectivity.isOnline) {
+        throw ApiException(
+          message: 'Détails de commande indisponibles hors ligne.',
+        );
+      }
+      detail = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, detail);
+    }
+
+    final displayEntries = OrderMapper.applyDemandeSeparatorsFromApi(
+      detail,
+      trimmedDisplay,
+    );
+    final order = OrderMapper.fromOrderDetail(detail).copyWith(
+      displayEntries: displayEntries,
+    );
+
+    await _persistSuivreLayoutHints(orderId, displayEntries);
+    return order;
+  }
+
   Future<SessionOrder> cancelOrderLinesAtIndices({
     required int orderId,
     required List<int> lineIndices,
@@ -1159,20 +1190,12 @@ class OrderRepository {
 
       final order = OrderMapper.fromOrderDetail(
         updated,
-        previousDisplayEntries: previousDisplayEntries,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
       );
 
-      final displayEntries = previousDisplayEntries == null
-          ? order.displayEntries
-          : OrderMapper.applyTrimmedSuivreLayout(
-              products: order.products,
-              trimmedLayout: previousDisplayEntries,
-            );
-
-      await _persistSuivreLayoutHints(orderId, displayEntries);
-      return order.copyWith(displayEntries: displayEntries);
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+      return order;
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -1216,7 +1239,7 @@ class OrderRepository {
       );
       await _local.saveOrderDetail(orderId, updated);
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return getOrderDetail(orderId);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

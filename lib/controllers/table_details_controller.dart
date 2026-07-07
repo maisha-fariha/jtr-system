@@ -1159,14 +1159,14 @@ class TableDetailsController extends GetxController {
         return;
       }
 
-      final displayEntries = OrderMapper.applyTrimmedSuivreLayout(
-        products: currentOrder.products,
-        trimmedLayout: trimmedDisplay,
+      final refreshed = await _orderRepository.syncDisplayFromTrimmedLayout(
+        id,
+        trimmedDisplay: trimmedDisplay,
       );
       _syncOrderInSession(
-        currentOrder.copyWith(displayEntries: displayEntries),
+        refreshed,
         orderNumber,
-        displayEntriesOverride: displayEntries,
+        displayEntriesOverride: refreshed.displayEntries,
       );
     } on ApiException catch (e) {
       ApiDebugDialog.show(

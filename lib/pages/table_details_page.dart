@@ -395,26 +395,34 @@ class _OrderSummary extends GetView<TableDetailsController> {
               context,
               left: 20,
               right: 20,
-              top: 12,
-              bottom: 12,
+              top: 6,
+              bottom: 6,
             ),
             child: Row(
               children: [
-                Text(
-                  'Total',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.darkText,
+                Expanded(
+                  flex: 6,
+                  child: Text(
+                    'Total',
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 14),
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.darkText,
+                    ),
                   ),
                 ),
-                const Spacer(),
-                Text(
-                  resolvedOrder.total,
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 22),
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.darkText,
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    resolvedOrder.total,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 15),
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.darkText,
+                    ),
                   ),
                 ),
               ],

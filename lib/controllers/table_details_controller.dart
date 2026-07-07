@@ -166,7 +166,7 @@ class TableDetailsController extends GetxController {
         previousDisplayEntries: previous?.displayEntries,
       );
       orderId = resolved;
-      _syncOrderInSession(detail.copyWith(number: orderNumber), orderNumber);
+      _syncOrderInSession(detail, detail.number);
       return orderId;
     } catch (_) {
       orderId = null;
@@ -917,7 +917,6 @@ class TableDetailsController extends GetxController {
 
     Get.find<SessionController>().updateOrderRow(
       updated.copyWith(
-        number: displayNumber,
         displayEntries: displayEntries,
       ),
     );

@@ -294,7 +294,6 @@ class OrderMapper {
     int suivreCountHint = 0,
   }) {
     final tableNumber = tableNumberFromDetail(data);
-    final tableId = (data['table_id'] as num?)?.toInt();
     final orderId = orderIdFromDetail(data);
     final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
 
@@ -319,7 +318,6 @@ class OrderMapper {
       id: orderId,
       number: displayKey(
         orderId: orderId,
-        tableId: tableId,
         tableNumber: tableNumber,
       ),
       numberColor: AppTheme.primary,
@@ -350,13 +348,23 @@ class OrderMapper {
       (data['id'] as num?)?.toInt() ?? 0;
 
   static int? tableNumberFromDetail(Map<String, dynamic> data) {
-    final direct = (data['table_number'] as num?)?.toInt();
+    final direct = _readTableNumberField(data['table_number']);
     if (direct != null) return direct;
 
     final table = data['table'];
     if (table is Map<String, dynamic>) {
-      return (table['table_number'] as num?)?.toInt() ??
-          (table['number'] as num?)?.toInt();
+      return _readTableNumberField(table['table_number']) ??
+          _readTableNumberField(table['number']);
+    }
+    return null;
+  }
+
+  static int? _readTableNumberField(dynamic raw) {
+    if (raw is num) return raw.toInt();
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return null;
+      return int.tryParse(trimmed);
     }
     return null;
   }
@@ -856,14 +864,14 @@ class OrderMapper {
     return appendSuivreSeparatorAfterRequest(entries);
   }
 
+  /// Session row label from API fields only (`table_number`, else order `id`).
   static String displayKey({
     required int orderId,
-    int? tableId,
     int? tableNumber,
   }) {
-    final table = tableNumber ?? tableId;
-    if (table != null) return 'T$table';
-    return 'O$orderId';
+    if (tableNumber != null) return 'T$tableNumber';
+    if (orderId > 0) return 'O$orderId';
+    return '—';
   }
 
   static String formatPrice(String value) {
@@ -1026,7 +1034,7 @@ class OrderMapper {
   }) {
     return SessionOrder(
       id: 0,
-      number: tableDisplayNumber('$tableNumber'),
+      number: displayKey(orderId: 0, tableNumber: tableNumber),
       numberColor: AppTheme.primary,
       group: '1',
       poste: '—',
@@ -1277,9 +1285,11 @@ class OrderMapper {
   }
 
   static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {
-    final ids = <int>[];
+    int? bestId;
+    var bestNumber = -1;
+
     final seatOrders = data['seat_orders'];
-    if (seatOrders is! List) return ids;
+    if (seatOrders is! List) return const [];
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
@@ -1296,13 +1306,19 @@ class OrderMapper {
         if (courseIdInt == null) continue;
 
         if (status == 'to_be_continued' || status == 'pending') {
-          ids.add(courseIdInt);
+          final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
+          if (courseNumber >= bestNumber) {
+            bestNumber = courseNumber;
+            bestId = courseIdInt;
+          }
         }
       }
     }
 
-    if (ids.isNotEmpty) return ids;
+    if (bestId != null) return [bestId];
 
+    bestId = null;
+    bestNumber = -1;
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
       final courses = seat['courses'];
@@ -1313,11 +1329,16 @@ class OrderMapper {
         final courseIdInt = courseId is int
             ? courseId
             : (courseId is num ? courseId.toInt() : null);
-        if (courseIdInt != null) ids.add(courseIdInt);
+        if (courseIdInt == null) continue;
+        final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
+        if (courseNumber >= bestNumber) {
+          bestNumber = courseNumber;
+          bestId = courseIdInt;
+        }
       }
     }
 
-    return ids;
+    return bestId != null ? [bestId] : const [];
   }
 
   /// Course ids to fire to the kitchen (send / envoyer).
@@ -1495,68 +1516,119 @@ class OrderMapper {
     );
   }
 
+  static List<Map<String, dynamic>> _coursesForSeat(
+    Map<String, dynamic> detail, {
+    required int seatNumber,
+  }) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return const [];
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      if ((seat['seat_number'] as num?)?.toInt() != seatNumber) continue;
+
+      final courses = seat['courses'];
+      if (courses is! List) return const [];
+
+      final parsed = <Map<String, dynamic>>[];
+      for (final course in courses) {
+        if (course is Map<String, dynamic>) parsed.add(course);
+      }
+      parsed.sort((a, b) {
+        final left = (a['course_number'] as num?)?.toInt() ?? 0;
+        final right = (b['course_number'] as num?)?.toInt() ?? 0;
+        return left.compareTo(right);
+      });
+      return parsed;
+    }
+
+    return const [];
+  }
+
+  static int _visibleItemCountInCourse(Map<String, dynamic> course) {
+    final items = course['items'];
+    if (items is! List) return 0;
+
+    var count = 0;
+    for (final item in items) {
+      if (item is! Map<String, dynamic>) continue;
+      if (item['status'] == 'cancelled') continue;
+      count++;
+    }
+    return count;
+  }
+
+  /// True when the course was already fired to the kitchen (À SUIVRE done).
+  static bool _courseWasRequestedToKitchen(Map<String, dynamic> course) {
+    final requestedAt = course['requested_at'];
+    if (requestedAt != null && requestedAt.toString().trim().isNotEmpty) {
+      return true;
+    }
+
+    final status = course['status'] as String?;
+    return status == 'requested' ||
+        status == 'sent' ||
+        status == 'served' ||
+        status == 'completed' ||
+        status == 'done';
+  }
+
   /// Course that should receive newly added items (latest open / À suivre course).
   static ({int? id, int number}) resolveAppendCourse(
     Map<String, dynamic> detail, {
     int? seatNumber,
   }) {
     final targetSeat = seatNumber ?? resolveDefaultSeatNumber(detail);
-    final seatOrders = detail['seat_orders'];
-    if (seatOrders is! List || seatOrders.isEmpty) {
+    final courses = _coursesForSeat(detail, seatNumber: targetSeat);
+    if (courses.isEmpty) {
       return (id: null, number: 1);
     }
 
-    int? bestId;
-    var bestNumber = 0;
-    var bestScore = -1;
+    // Prefer an empty follow-up course the backend opened after À SUIVRE.
+    for (var i = courses.length - 1; i >= 0; i--) {
+      final course = courses[i];
+      if (_visibleItemCountInCourse(course) > 0) continue;
 
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final seatNo = (seat['seat_number'] as num?)?.toInt();
-      if (seatNo != targetSeat) continue;
+      final courseNumber = (course['course_number'] as num?)?.toInt();
+      if (courseNumber == null) continue;
 
-      final courses = seat['courses'];
-      if (courses is! List) continue;
+      return (
+        id: (course['id'] as num?)?.toInt(),
+        number: courseNumber,
+      );
+    }
 
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
-        final courseNumber = (course['course_number'] as num?)?.toInt();
-        if (courseNumber == null) continue;
+    // Keep adding to the latest course until it has been sent to the kitchen.
+    Map<String, dynamic>? latestWithItems;
+    var latestNumber = 0;
+    for (final course in courses) {
+      if (_visibleItemCountInCourse(course) <= 0) continue;
 
-        final courseId = (course['id'] as num?)?.toInt();
-        final status = course['status'] as String?;
-        final items = course['items'];
-
-        var visibleItemCount = 0;
-        if (items is List) {
-          for (final item in items) {
-            if (item is! Map<String, dynamic>) continue;
-            if (item['status'] == 'cancelled') continue;
-            visibleItemCount++;
-          }
-        }
-
-        var score = courseNumber * 10;
-        if (visibleItemCount == 0) score += 5;
-        if (status == 'to_be_continued' ||
-            status == 'pending' ||
-            status == 'in_progress') {
-          score += 3;
-        }
-
-        if (score >= bestScore) {
-          bestScore = score;
-          bestId = courseId;
-          bestNumber = courseNumber;
-        }
+      final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
+      if (courseNumber >= latestNumber) {
+        latestNumber = courseNumber;
+        latestWithItems = course;
       }
     }
 
-    if (bestNumber > 0) {
-      return (id: bestId, number: bestNumber);
+    if (latestWithItems != null) {
+      if (!_courseWasRequestedToKitchen(latestWithItems)) {
+        return (
+          id: (latestWithItems['id'] as num?)?.toInt(),
+          number: latestNumber,
+        );
+      }
+
+      // After À SUIVRE, new items belong to the next course number.
+      return (id: null, number: latestNumber + 1);
     }
 
-    return resolveActiveCourse(detail, seatNumber: targetSeat);
+    final last = courses.last;
+    final lastNumber = (last['course_number'] as num?)?.toInt() ?? 1;
+    return (
+      id: (last['id'] as num?)?.toInt(),
+      number: lastNumber,
+    );
   }
 
   /// PUT /api/orders/:id writable body.
@@ -2404,7 +2476,6 @@ class OrderMapper {
       if (!itemAdded && seatNo == seatNumber) {
         final courses = seatCopy['courses'];
         if (courses is List && courses.isNotEmpty) {
-          var targetCourseNumber = courseNumber;
           var hasTargetCourse = false;
           for (final course in courses) {
             if (course is! Map<String, dynamic>) continue;
@@ -2414,38 +2485,31 @@ class OrderMapper {
             }
           }
           if (!hasTargetCourse) {
-            Map<String, dynamic>? lastCourse;
-            for (final course in courses) {
-              if (course is! Map<String, dynamic>) continue;
-              final cn = (course['course_number'] as num?)?.toInt();
-              if (cn == null) continue;
-              if (lastCourse == null ||
-                  cn >
-                      ((lastCourse['course_number'] as num?)?.toInt() ?? 0)) {
-                lastCourse = course;
+            final courseList = courses.whereType<Map<String, dynamic>>().toList();
+            courseList.add({
+              'id': 0,
+              'course_number': courseNumber,
+              'seat_number': seatNumber,
+              'items': [newItem],
+            });
+            seatCopy['courses'] = courseList;
+            itemAdded = true;
+          } else {
+            seatCopy['courses'] = courses.map((course) {
+              if (course is! Map<String, dynamic>) return course;
+              final courseCopy = Map<String, dynamic>.from(course);
+              final cn = (courseCopy['course_number'] as num?)?.toInt();
+              if (cn == courseNumber) {
+                final items = courseCopy['items'];
+                final itemsList =
+                    items is List ? List<dynamic>.from(items) : <dynamic>[];
+                itemsList.add(newItem);
+                courseCopy['items'] = itemsList;
+                itemAdded = true;
               }
-            }
-            if (lastCourse != null) {
-              targetCourseNumber =
-                  (lastCourse['course_number'] as num?)?.toInt() ??
-                      courseNumber;
-            }
+              return courseCopy;
+            }).toList();
           }
-
-          seatCopy['courses'] = courses.map((course) {
-            if (course is! Map<String, dynamic>) return course;
-            final courseCopy = Map<String, dynamic>.from(course);
-            final cn = (courseCopy['course_number'] as num?)?.toInt();
-            if (cn == targetCourseNumber) {
-              final items = courseCopy['items'];
-              final itemsList =
-                  items is List ? List<dynamic>.from(items) : <dynamic>[];
-              itemsList.add(newItem);
-              courseCopy['items'] = itemsList;
-              itemAdded = true;
-            }
-            return courseCopy;
-          }).toList();
         } else {
           seatCopy['courses'] = [
             {

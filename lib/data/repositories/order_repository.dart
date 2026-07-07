@@ -268,9 +268,7 @@ class OrderRepository {
     await _sessionLocal.upsertOpenOrderInList(detail);
     apiLog.writeln(formatApiPayload(detail));
 
-    final displayNumber = OrderMapper.tableDisplayNumber('${table.tableNumber}');
     final order = OrderMapper.fromOrderDetail(detail).copyWith(
-      number: displayNumber,
       id: orderId,
     );
 
@@ -311,10 +309,7 @@ class OrderRepository {
       await _local.saveOrderDetail(orderId, detail);
       await _sessionLocal.upsertOpenOrderInList(detail);
 
-      final displayNumber =
-          OrderMapper.tableDisplayNumber('${table.tableNumber}');
       final order = OrderMapper.fromOrderDetail(detail).copyWith(
-        number: displayNumber,
         id: orderId,
       );
 
@@ -608,7 +603,6 @@ class OrderRepository {
     await _sessionLocal.upsertOpenOrderInList(detail);
 
     return OrderMapper.fromOrderDetail(detail).copyWith(
-      number: OrderMapper.tableDisplayNumber('${table.tableNumber}'),
       id: orderId,
     );
   }
@@ -688,7 +682,6 @@ class OrderRepository {
     await _sessionLocal.upsertOpenOrderInList(detail);
 
     return OrderMapper.fromOrderDetail(detail).copyWith(
-      number: OrderMapper.tableDisplayNumber('${table.tableNumber}'),
       id: orderId,
     );
   }

@@ -472,9 +472,7 @@ class MenuSelectionController extends GetxController {
       );
 
       if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().updateOrderRow(
-          updated.copyWith(number: orderNumber),
-        );
+        Get.find<SessionController>().updateOrderRow(updated);
       }
 
       Get.back();

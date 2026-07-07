@@ -188,10 +188,7 @@ class SessionController extends GetxController {
 
     if (pinned == null && ensureOrderId != null && ensureOrderId > 0) {
       try {
-        final detail = await _orderRepository.getOrderDetail(ensureOrderId);
-        pinned = detail.copyWith(
-          number: ensureOrderNumber ?? detail.number,
-        );
+        pinned = await _orderRepository.getOrderDetail(ensureOrderId);
       } catch (_) {
         pinned = findOrder(
           orderNumber: ensureOrderNumber,
@@ -219,17 +216,9 @@ class SessionController extends GetxController {
         continue;
       }
 
-      final needsDetail = summary.products.isEmpty ||
-          summary.total == OrderMapper.formatPrice('0');
-
-      if (!needsDetail) {
-        merged.add(summary);
-        continue;
-      }
-
       try {
         final detail = await _orderRepository.getOrderDetail(summary.id);
-        merged.add(detail.copyWith(number: summary.number));
+        merged.add(detail);
       } catch (_) {
         merged.add(summary);
       }
@@ -360,9 +349,10 @@ class SessionController extends GetxController {
       final previous = orders[idx];
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
-        previousDisplayEntries: previous.displayEntries,
+        previousDisplayEntries:
+            forceRefresh ? null : previous.displayEntries,
       );
-      orders[idx] = detail.copyWith(number: existing.number);
+      orders[idx] = detail;
       orders.refresh();
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
@@ -506,10 +496,9 @@ class SessionController extends GetxController {
           if (resolved != null && resolved > 0) {
             try {
               final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.copyWith(
-                number: OrderMapper.tableDisplayNumber(tableNumber),
-                id: resolved,
-              );
+              created = detail.id > 0
+                  ? detail
+                  : detail.copyWith(id: resolved);
             } catch (_) {
               // Keep session placeholder — order will be POSTed on first item.
             }
@@ -523,10 +512,9 @@ class SessionController extends GetxController {
           if (resolved != null && resolved > 0) {
             try {
               final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.copyWith(
-                number: OrderMapper.tableDisplayNumber(tableNumber),
-                id: resolved,
-              );
+              created = detail.id > 0
+                  ? detail
+                  : detail.copyWith(id: resolved);
             } catch (_) {}
           }
         }
@@ -760,7 +748,7 @@ class SessionController extends GetxController {
         );
       } else {
         final updated = await _orderRepository.applyTableOffer(order.id);
-        _upsertOrderInList(updated.copyWith(number: order.number));
+        _upsertOrderInList(updated);
       }
 
       _showSnack(
@@ -809,7 +797,7 @@ class SessionController extends GetxController {
 
     try {
       final updated = await _orderRepository.markOrderPrinted(order.id);
-      _upsertOrderInList(updated.copyWith(number: order.number));
+      _upsertOrderInList(updated);
 
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();

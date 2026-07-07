@@ -216,12 +216,79 @@ class _TableDetailsHeader extends StatelessWidget {
 
 // ── Order summary ──────────────────────────────────────────────────────────────
 
-class _OrderSummary extends GetView<TableDetailsController> {
+class _OrderSummary extends StatefulWidget {
   const _OrderSummary({required this.orderNumber});
 
   final String orderNumber;
 
+  @override
+  State<_OrderSummary> createState() => _OrderSummaryState();
+}
+
+class _OrderSummaryState extends State<_OrderSummary> {
   static const _productSlidableGroupTag = 'table-details-products';
+
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _lastRowKey = GlobalKey();
+  int _lastProductCount = -1;
+
+  TableDetailsController get controller => Get.find<TableDetailsController>();
+
+  String get orderNumber => widget.orderNumber;
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToLatestItemIfNeeded(SessionOrder order) {
+    final lineCount = order.displayEntries
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .length;
+
+    if (_lastProductCount < 0) {
+      _lastProductCount = lineCount;
+      return;
+    }
+
+    if (lineCount <= _lastProductCount) {
+      _lastProductCount = lineCount;
+      return;
+    }
+
+    _lastProductCount = lineCount;
+    _scrollToLastRow();
+  }
+
+  void _scrollToLastRow() {
+    void attemptScroll(int attempt) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final targetContext = _lastRowKey.currentContext;
+        if (targetContext != null) {
+          Scrollable.ensureVisible(
+            targetContext,
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOut,
+            alignment: 1.0,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          );
+          return;
+        }
+
+        if (_scrollController.hasClients) {
+          final position = _scrollController.position;
+          _scrollController.jumpTo(position.maxScrollExtent);
+        }
+
+        if (attempt < 4) {
+          attemptScroll(attempt + 1);
+        }
+      });
+    }
+
+    attemptScroll(0);
+  }
 
   SessionOrder? _resolveOrder() {
     if (!Get.isRegistered<SessionController>()) return null;
@@ -334,9 +401,7 @@ class _OrderSummary extends GetView<TableDetailsController> {
       }
 
       final rows = _buildVisibleRows(context, resolvedOrder);
-      final suivreCount = resolvedOrder.displayEntries
-          .where((e) => e.type == OrderDisplayEntryType.suivreSeparator)
-          .length;
+      _scrollToLatestItemIfNeeded(resolvedOrder);
 
       return Column(
         children: [
@@ -375,17 +440,24 @@ class _OrderSummary extends GetView<TableDetailsController> {
           Expanded(
             child: SlidableAutoCloseBehavior(
               child: ListView.separated(
-                key: ValueKey(
-                  '${resolvedOrder.id}-${resolvedOrder.displayEntries.length}-$suivreCount',
-                ),
+                controller: _scrollController,
+                key: ValueKey(resolvedOrder.id),
                 padding: JtrResponsive.getResponsivePadding(
                   context,
                   horizontal: 20,
+                  bottom: 12,
                 ),
                 itemCount: rows.length,
                 separatorBuilder: (_, _) =>
                     JtrResponsive.getResponsiveSpacing(context, 4),
-                itemBuilder: (context, index) => rows[index],
+                itemBuilder: (context, index) {
+                  final row = rows[index];
+                  if (index != rows.length - 1) return row;
+                  return KeyedSubtree(
+                    key: _lastRowKey,
+                    child: row,
+                  );
+                },
               ),
             ),
           ),

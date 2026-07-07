@@ -5,7 +5,6 @@ import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
 import '../data/mappers/menu_mapper.dart';
-import '../data/mappers/order_mapper.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../models/menu_active_selection.dart';
@@ -333,34 +332,10 @@ class MenuSelectionController extends GetxController {
       onConfirm: () async {
         isSaving.value = true;
         try {
-          final current = Get.isRegistered<SessionController>()
-              ? Get.find<SessionController>().findOrder(
-                  orderNumber: orderNumber,
-                  orderId: id,
-                )
-              : null;
-          final updated = await _orderRepository.requestNextCourses(
-            id,
-            previousDisplayEntries: current?.displayEntries,
-          );
-          final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(
-            updated.displayEntries,
-            force: true,
-          );
+          final updated = await _orderRepository.requestNextCourses(id);
           if (Get.isRegistered<SessionController>()) {
-            Get.find<SessionController>().updateOrderRow(
-              updated.copyWith(
-                number: orderNumber,
-                displayEntries: displayEntries,
-              ),
-            );
+            Get.find<SessionController>().updateOrderRow(updated);
           }
-          unawaited(
-            _orderRepository.persistSuivreLayoutHints(
-              id,
-              displayEntries,
-            ),
-          );
           if (context.mounted) {
             _showSnack(
               context,

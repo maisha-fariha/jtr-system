@@ -709,43 +709,9 @@ class TableDetailsController extends GetxController {
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
-          final current = order;
-          final updated = await _orderRepository.requestNextCourses(
-            id,
-            previousDisplayEntries: current?.displayEntries,
-          );
-          _syncOrderInSession(
-            _withSuivreDisplayAfterRequest(updated),
-            orderNumber,
-          );
-          final synced = order;
+          final updated = await _orderRepository.requestNextCourses(id);
+          _syncOrderInSession(updated, orderNumber);
           await _refreshOrder();
-          final refreshed = order;
-          if (refreshed != null && synced != null) {
-            final previousSuivreCount = synced.displayEntries
-                .where(
-                  (entry) =>
-                      entry.type == OrderDisplayEntryType.suivreSeparator,
-                )
-                .length;
-            final refreshedSuivreCount = refreshed.displayEntries
-                .where(
-                  (entry) =>
-                      entry.type == OrderDisplayEntryType.suivreSeparator,
-                )
-                .length;
-            if (refreshedSuivreCount < previousSuivreCount) {
-              _syncOrderInSession(
-                refreshed.copyWith(
-                  displayEntries: OrderMapper.reconcileSuivreDisplay(
-                    previous: synced.displayEntries,
-                    next: refreshed.displayEntries,
-                  ),
-                ),
-                orderNumber,
-              );
-            }
-          }
           Get.snackbar(
             'Suite demandée',
             'La demande À SUIVRE a été envoyée.',
@@ -899,21 +865,11 @@ class TableDetailsController extends GetxController {
   void _syncOrderInSession(
     SessionOrder updated,
     String displayNumber, {
-    List<OrderDisplayEntry>? reconcileAgainst,
     List<OrderDisplayEntry>? displayEntriesOverride,
   }) {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
-    if (displayEntriesOverride == null) {
-      final previousEntries = reconcileAgainst ?? order?.displayEntries;
-      if (previousEntries != null) {
-        displayEntries = OrderMapper.reconcileSuivreDisplay(
-          previous: previousEntries,
-          next: displayEntries,
-        );
-      }
-    }
 
     Get.find<SessionController>().updateOrderRow(
       updated.copyWith(
@@ -930,15 +886,6 @@ class TableDetailsController extends GetxController {
         ),
       );
     }
-  }
-
-  SessionOrder _withSuivreDisplayAfterRequest(SessionOrder order) {
-    return order.copyWith(
-      displayEntries: OrderMapper.appendSuivreSeparatorAfterRequest(
-        order.displayEntries,
-        force: true,
-      ),
-    );
   }
 
   bool isProductInOrder(

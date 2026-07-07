@@ -624,26 +624,8 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          final updated = await _orderRepository.requestNextCourses(
-            order.id,
-            previousDisplayEntries: order.displayEntries,
-          );
-          final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(
-            updated.displayEntries,
-            force: true,
-          );
-          _upsertOrderInList(
-            updated.copyWith(
-              number: order.number,
-              displayEntries: displayEntries,
-            ),
-          );
-          unawaited(
-            _orderRepository.persistSuivreLayoutHints(
-              order.id,
-              displayEntries,
-            ),
-          );
+          final updated = await _orderRepository.requestNextCourses(order.id);
+          _upsertOrderInList(updated);
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

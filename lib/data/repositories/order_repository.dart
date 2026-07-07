@@ -54,31 +54,18 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final online = await _connectivity.isOnline;
-    final splitHint = _local.readSuivreSplitHint(orderId);
-    final countHint = _local.readSuivreCountHint(orderId);
 
     if (online) {
       final detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
-      final order = OrderMapper.fromOrderDetail(
-        detail,
-        previousDisplayEntries: previousDisplayEntries,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
-      );
+      final order = OrderMapper.fromOrderDetail(detail);
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
       return order;
     }
 
     final cached = _local.readOrderDetail(orderId);
     if (cached != null) {
-      final order = OrderMapper.fromOrderDetail(
-        cached,
-        previousDisplayEntries: previousDisplayEntries,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
-      );
-      return order;
+      return OrderMapper.fromOrderDetail(cached);
     }
 
     throw ApiException(
@@ -734,14 +721,7 @@ class OrderRepository {
     await _remote.requestCourses(orderId, courseIds);
     final updated = await _remote.fetchOrderDetail(orderId);
     await _local.saveOrderDetail(orderId, updated);
-    final splitHint = _local.readSuivreSplitHint(orderId);
-    final countHint = _local.readSuivreCountHint(orderId);
-    return OrderMapper.fromOrderDetail(
-      updated,
-      previousDisplayEntries: previousDisplayEntries,
-      suivreSplitHints: splitHint,
-      suivreCountHint: countHint,
-    );
+    return OrderMapper.fromOrderDetail(updated);
   }
 
   Future<SessionOrder> markOrderPrinted(int orderId) async {

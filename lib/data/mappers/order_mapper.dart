@@ -507,13 +507,6 @@ class OrderMapper {
         var suivreHeaderForCourse = false;
 
         if (isFollowUpCourse && visibleItems.isEmpty) {
-          suivreSectionIndex++;
-          activeSection = suivreSectionIndex;
-          _appendSuivreIfNeeded(
-            entries: entries,
-            sectionIndex: activeSection,
-          );
-          suivreHeaderForCourse = true;
           continue;
         }
 
@@ -653,7 +646,8 @@ class OrderMapper {
     if (products.isEmpty) return entries;
 
     final validSplits = splitPositions
-        .where((splitAt) => splitAt > 0 && splitAt <= products.length)
+        .where((splitAt) => splitAt > 0 && splitAt < products.length)
+        .toSet()
         .toList()
       ..sort();
     if (validSplits.isEmpty) return entries;
@@ -678,13 +672,6 @@ class OrderMapper {
           sectionIndex: sectionIndex,
         ),
       );
-    }
-
-    while (splitIdx < validSplits.length &&
-        validSplits[splitIdx] == products.length) {
-      sectionIndex++;
-      rebuilt.add(_suivreEntry(sectionIndex));
-      splitIdx++;
     }
 
     return rebuilt;
@@ -758,18 +745,6 @@ class OrderMapper {
     return _rebuildEntriesWithSuivreSplits(entries, [splitAt]);
   }
 
-  static List<int> _maxSuivreSplitPositions({
-    required List<int> extracted,
-    List<int> hints = const [],
-    List<OrderDisplayEntry>? previous,
-  }) {
-    return _mergeSuivreSplitPositions(
-      extracted: extracted,
-      hints: hints,
-      previous: previous,
-    );
-  }
-
   static List<OrderDisplayEntry> finalizeDisplayEntries(
     Map<String, dynamic> data, {
     List<OrderDisplayEntry>? previousDisplayEntries,
@@ -777,42 +752,84 @@ class OrderMapper {
     int suivreCountHint = 0,
   }) {
     var entries = extractOrderDisplayEntries(data);
-    final extractedSplits = suivreSplitPositions(entries);
-    final targetSplits = _maxSuivreSplitPositions(
-      extracted: extractedSplits,
-      hints: suivreSplitHints,
-      previous: previousDisplayEntries,
-    );
 
-    if (targetSplits.length > extractedSplits.length) {
-      entries = _rebuildEntriesWithSuivreSplits(entries, targetSplits);
+    // Hints only when the API has not exposed any course separators yet.
+    if (suivreSeparatorCount(entries) == 0) {
+      if (suivreSplitHints.isNotEmpty) {
+        entries = _rebuildEntriesWithSuivreSplits(entries, suivreSplitHints);
+      } else if (suivreCountHint > 0) {
+        entries = ensureSuivreSeparatorCount(entries, suivreCountHint);
+      }
     }
 
-    if (previousDisplayEntries != null) {
-      entries = reconcileSuivreDisplay(
-        previous: previousDisplayEntries,
-        next: entries,
-      );
+    return _normalizeSuivreLayout(entries);
+  }
+
+  static List<OrderDisplayEntry> _normalizeSuivreLayout(
+    List<OrderDisplayEntry> entries,
+  ) {
+    var result = _dedupeConsecutiveSuivreSeparators(entries);
+    result = _stripEmptySuivreSections(result);
+    result = _stripTrailingEmptySuivreSeparators(result);
+    return result;
+  }
+
+  static List<OrderDisplayEntry> _dedupeConsecutiveSuivreSeparators(
+    List<OrderDisplayEntry> entries,
+  ) {
+    final result = <OrderDisplayEntry>[];
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.suivreSeparator &&
+          result.isNotEmpty &&
+          result.last.type == OrderDisplayEntryType.suivreSeparator) {
+        continue;
+      }
+      result.add(entry);
+    }
+    return result;
+  }
+
+  /// Drops À SUIVRE headers that are not followed by any product line.
+  static List<OrderDisplayEntry> _stripEmptySuivreSections(
+    List<OrderDisplayEntry> entries,
+  ) {
+    final result = <OrderDisplayEntry>[];
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) {
+        result.add(entry);
+        continue;
+      }
+
+      var hasProducts = false;
+      for (var j = i + 1; j < entries.length; j++) {
+        if (entries[j].type == OrderDisplayEntryType.suivreSeparator) break;
+        if (entries[j].type == OrderDisplayEntryType.product) {
+          hasProducts = true;
+          break;
+        }
+      }
+
+      if (hasProducts) {
+        result.add(entry);
+      }
+    }
+    return result;
+  }
+
+  /// Removes À SUIVRE rows that have no products after them.
+  static List<OrderDisplayEntry> _stripTrailingEmptySuivreSeparators(
+    List<OrderDisplayEntry> entries,
+  ) {
+    if (entries.isEmpty) return entries;
+
+    var end = entries.length;
+    while (end > 0 &&
+        entries[end - 1].type == OrderDisplayEntryType.suivreSeparator) {
+      end--;
     }
 
-    final targetCount = [
-      suivreCountHint,
-      if (previousDisplayEntries != null)
-        suivreSeparatorCount(previousDisplayEntries)
-      else
-        0,
-      suivreSeparatorCount(entries),
-    ].reduce((left, right) => left > right ? left : right);
-
-    if (targetCount > suivreSeparatorCount(entries)) {
-      entries = ensureSuivreSeparatorCount(
-        entries,
-        targetCount,
-        forceAppend: true,
-      );
-    }
-
-    return entries;
+    return end == entries.length ? entries : entries.sublist(0, end);
   }
 
   /// Appends one À SUIVRE row after the latest items when requesting another course.

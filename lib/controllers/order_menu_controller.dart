@@ -9,6 +9,7 @@ import '../models/preset_menu.dart';
 class OrderMenuController extends GetxController {
   final currentTable = ''.obs;
   final _selected = RxMap<String, bool>();
+  final collapsedCategories = <int>{}.obs;
 
   bool returnToSelection = false;
   PresetMenu? presetMenu;
@@ -16,6 +17,18 @@ class OrderMenuController extends GetxController {
 
   List<MenuCategory> get visibleCategories =>
       presetMenu?.categories ?? const [];
+
+  bool isCategoryExpanded(int courseNumber) =>
+      !collapsedCategories.contains(courseNumber);
+
+  void toggleCategoryExpanded(int courseNumber) {
+    if (collapsedCategories.contains(courseNumber)) {
+      collapsedCategories.remove(courseNumber);
+    } else {
+      collapsedCategories.add(courseNumber);
+    }
+    collapsedCategories.refresh();
+  }
 
   @override
   void onInit() {
@@ -40,6 +53,16 @@ class OrderMenuController extends GetxController {
           _selected[_key(item)] = true;
         }
       }
+    }
+
+    final focusCourse = args['focusCourse'];
+    if (focusCourse is int && focusCourse > 0) {
+      for (final category in visibleCategories) {
+        if (category.number != focusCourse) {
+          collapsedCategories.add(category.number);
+        }
+      }
+      collapsedCategories.refresh();
     }
   }
 

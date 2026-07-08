@@ -50,6 +50,7 @@ class MenuPage extends GetView<OrderMenuController> {
       child: Scaffold(
         backgroundColor: AppTheme.connectBackground,
         body: SafeArea(
+          bottom: false,
           child: Column(
             children: [
               const _MenuHeader(),
@@ -58,10 +59,9 @@ class MenuPage extends GetView<OrderMenuController> {
                 child: SingleChildScrollView(
                   padding: JtrResponsive.getResponsivePadding(
                     context,
-                    bottom: 88,
+                    bottom: 16,
                   ),
                   child: Padding(
-                    // Figma: content starts at x=24, width=342
                     padding: JtrResponsive.getResponsivePadding(
                       context,
                       horizontal: 24,
@@ -70,10 +70,10 @@ class MenuPage extends GetView<OrderMenuController> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         JtrResponsive.getResponsiveSpacing(context, 24),
-                        for (final category in controller.visibleCategories) ...[
+                        for (final category
+                            in controller.visibleCategories) ...[
                           _CourseSectionHeader(category: category),
-                          JtrResponsive.getResponsiveSpacing(context, 16),
-                          _CourseItemsGrid(category: category),
+                          _CourseSectionBody(category: category),
                           JtrResponsive.getResponsiveSpacing(context, 32),
                         ],
                       ],
@@ -81,11 +81,13 @@ class MenuPage extends GetView<OrderMenuController> {
                   ),
                 ),
               ),
-              const _MenuBottomNav(),
             ],
           ),
         ),
-        floatingActionButton: const _ConfirmFab(),
+        bottomNavigationBar: const SafeArea(
+          top: false,
+          child: _MenuBottomNav(),
+        ),
       ),
     );
   }
@@ -222,22 +224,57 @@ class _OrderDisplay extends GetView<OrderMenuController> {
   }
 }
 
-// Confirm icon — enabled when items are selected.
+// Confirm icon — enabled when items are selected; shows selection count.
 class _ConfirmIconButton extends GetView<OrderMenuController> {
   const _ConfirmIconButton();
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      final enabled = controller.selectedCount > 0;
-      return IconButton(
-        onPressed: enabled ? controller.confirmOrder : null,
-        icon: Icon(
-          Icons.check_circle_outline,
-          size: JtrResponsive.getResponsiveSize(context, 24),
-          color: enabled
-              ? AppTheme.primary
-              : AppTheme.textSecondary.withValues(alpha: 0.35),
+      final count = controller.selectedCount;
+      final enabled = count > 0;
+      final buttonSize = JtrResponsive.getResponsiveSize(context, 44);
+
+      return SizedBox(
+        width: buttonSize,
+        height: buttonSize,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton(
+              onPressed: enabled ? controller.confirmOrder : null,
+              icon: Icon(
+                Icons.check_circle,
+                size: JtrResponsive.getResponsiveSize(context, 28),
+                color: enabled
+                    ? AppTheme.primary
+                    : AppTheme.textSecondary.withValues(alpha: 0.35),
+              ),
+            ),
+            if (count > 0)
+              Positioned(
+                right: 4,
+                top: 4,
+                child: Container(
+                  width: JtrResponsive.getResponsiveSize(context, 18),
+                  height: JtrResponsive.getResponsiveSize(context, 18),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      color: AppTheme.primary,
+                      fontSize: _menuPageFontSize(context, 9),
+                      fontWeight: FontWeight.bold,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     });
@@ -246,7 +283,7 @@ class _ConfirmIconButton extends GetView<OrderMenuController> {
 
 // ─── Course Section Header ─────────────────────────────────────────────────────
 
-class _CourseSectionHeader extends StatelessWidget {
+class _CourseSectionHeader extends GetView<OrderMenuController> {
   const _CourseSectionHeader({required this.category});
 
   final MenuCategory category;
@@ -255,48 +292,81 @@ class _CourseSectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final circleSize = JtrResponsive.getResponsiveSize(context, 24);
 
-    // Figma: header h=33, circle 24×24, heading at x=32
-    return SizedBox(
-      height: JtrResponsive.getResponsiveHeight(context, 33),
-      child: Row(
-        children: [
-          Container(
-            width: circleSize,
-            height: circleSize,
-            decoration: BoxDecoration(
-              color: category.color,
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              '${category.number}',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: _menuPageFontSize(context, 12),
-                fontWeight: FontWeight.bold,
-                height: 1,
+    return Obx(() {
+      final expanded = controller.isCategoryExpanded(category.number);
+
+      return InkWell(
+        onTap: () => controller.toggleCategoryExpanded(category.number),
+        borderRadius: BorderRadius.circular(
+          JtrResponsive.getResponsiveRadius(context, 8),
+        ),
+        child: SizedBox(
+          height: JtrResponsive.getResponsiveHeight(context, 33),
+          child: Row(
+            children: [
+              Container(
+                width: circleSize,
+                height: circleSize,
+                decoration: BoxDecoration(
+                  color: category.color,
+                  shape: BoxShape.circle,
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  '${category.number}',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: _menuPageFontSize(context, 12),
+                    fontWeight: FontWeight.bold,
+                    height: 1,
+                  ),
+                ),
               ),
-            ),
+              JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+              Expanded(
+                child: Text(
+                  'CHOIX ${category.number} — ${category.label}',
+                  style: TextStyle(
+                    fontSize: _menuPageFontSize(context, 13),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+              Icon(
+                expanded ? Icons.expand_more : Icons.chevron_right,
+                size: JtrResponsive.getResponsiveSize(context, 20),
+                color: AppTheme.textSecondary.withValues(alpha: 0.6),
+              ),
+            ],
           ),
-          JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-          Text(
-            'CHOIX ${category.number} — ${category.label}',
-            style: TextStyle(
-              fontSize: _menuPageFontSize(context, 13),
-              fontWeight: FontWeight.w700,
-              color: AppTheme.darkText,
-              letterSpacing: 0.4,
-            ),
-          ),
-          const Spacer(),
-          Icon(
-            Icons.expand_more,
-            size: JtrResponsive.getResponsiveSize(context, 16),
-            color: AppTheme.textSecondary.withValues(alpha: 0.6),
-          ),
+        ),
+      );
+    });
+  }
+}
+
+class _CourseSectionBody extends GetView<OrderMenuController> {
+  const _CourseSectionBody({required this.category});
+
+  final MenuCategory category;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      if (!controller.isCategoryExpanded(category.number)) {
+        return const SizedBox.shrink();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          JtrResponsive.getResponsiveSpacing(context, 16),
+          _CourseItemsGrid(category: category),
         ],
-      ),
-    );
+      );
+    });
   }
 }
 
@@ -429,7 +499,7 @@ class _MenuItemButton extends GetView<OrderMenuController> {
                     children: [
                       // Price text — y=16 in Figma (12px below accent bar)
                       Text(
-                        item.formattedPrice,
+                        item.displayPriceLabel,
                         style: TextStyle(
                           fontSize: _menuPageFontSize(context, 11),
                           fontWeight: FontWeight.w600,
@@ -467,62 +537,8 @@ class _MenuItemButton extends GetView<OrderMenuController> {
   }
 }
 
-// ─── FAB (Figma: x=302 y=724, 64×64) ─────────────────────────────────────────
-
-class _ConfirmFab extends GetView<OrderMenuController> {
-  const _ConfirmFab();
-
-  @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final count = controller.selectedCount;
-      final enabled = count > 0;
-      final badgeSize = JtrResponsive.getResponsiveSize(context, 18);
-
-      return FloatingActionButton(
-        onPressed: enabled ? controller.confirmOrder : null,
-        backgroundColor: enabled
-            ? AppTheme.primary
-            : AppTheme.primary.withValues(alpha: 0.4),
-        elevation: enabled ? 6 : 0,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Icon(
-              Icons.check,
-              color: Colors.white,
-              size: JtrResponsive.getResponsiveSize(context, 28),
-            ),
-            if (count > 0)
-              Positioned(
-                top: 0,
-                right: 0,
-                child: Container(
-                  width: badgeSize,
-                  height: badgeSize,
-                  decoration: const BoxDecoration(
-                    color: Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    '$count',
-                    style: TextStyle(
-                      color: AppTheme.primary,
-                      fontSize: _menuPageFontSize(context, 9),
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    });
-  }
-}
-
-// ─── Bottom Nav (Figma: y=820, h=64, 3 buttons) ───────────────────────────────
+// Confirm action lives in the header (_ConfirmIconButton) to avoid overlapping
+// the bottom navigation bar.
 
 class _MenuBottomNav extends GetView<OrderMenuController> {
   const _MenuBottomNav();

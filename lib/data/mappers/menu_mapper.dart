@@ -70,6 +70,10 @@ class MenuMapper {
                   menuCategoryId: menuCategory.id,
                   menuCategoryName: menuCategory.name,
                   supplement: option.supplement,
+                  basePrice: double.tryParse(
+                        option.basePrice.replaceAll(',', '.'),
+                      ) ??
+                      0,
                 ),
               )
               .toList(),

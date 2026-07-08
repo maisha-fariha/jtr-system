@@ -94,12 +94,18 @@ class _MenuListColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const _SidebarToolbar(),
-        Expanded(child: _MenuList()),
-      ],
-    );
+    final controller = Get.find<MenuSelectionController>();
+
+    return Obx(() {
+      final expanded = controller.isSidebarExpanded.value;
+
+      return Column(
+        children: [
+          const _SidebarToolbar(),
+          if (expanded) Expanded(child: _MenuList()),
+        ],
+      );
+    });
   }
 }
 
@@ -757,7 +763,7 @@ class _SidebarToolbar extends GetView<MenuSelectionController> {
                       controller.openActiveMenuChoices();
                       return;
                     }
-                    controller.requestNextCourse(context: context);
+                    controller.promptSelectMenuFirst(context);
                   },
                 ),
               ),
@@ -771,10 +777,14 @@ class _SidebarToolbar extends GetView<MenuSelectionController> {
               ),
               SizedBox(width: gap),
               Expanded(
-                child: _SidebarToolButton(
-                  icon: Icons.keyboard_arrow_down,
-                  onTap: () => controller.requestNextCourse(context: context),
-                  size: buttonSize,
+                child: Obx(
+                  () => _SidebarToolButton(
+                    icon: controller.isSidebarExpanded.value
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    onTap: controller.toggleSidebarExpanded,
+                    size: buttonSize,
+                  ),
                 ),
               ),
             ],
@@ -833,8 +843,9 @@ class _SidebarToolButton extends StatelessWidget {
               child: Icon(
                 icon,
                 size: iconSize,
-                color: icon == Icons.keyboard_arrow_down
-                    ? AppTheme.toolbarSuivre
+                color: icon == Icons.keyboard_arrow_down ||
+                        icon == Icons.keyboard_arrow_right
+                    ? AppTheme.toolbarPanel
                     : AppTheme.toolbarIconColor(icon),
               ),
             ),

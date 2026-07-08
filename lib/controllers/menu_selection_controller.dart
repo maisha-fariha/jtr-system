@@ -291,6 +291,14 @@ class MenuSelectionController extends GetxController {
     isSidebarExpanded.value = !isSidebarExpanded.value;
   }
 
+  void promptSelectMenuFirst(BuildContext context) {
+    _showSnack(
+      context,
+      title: 'Sélection requise',
+      message: 'Sélectionnez un menu pour commencer.',
+    );
+  }
+
   void editMessageForCourse({
     required BuildContext context,
     required int courseNumber,

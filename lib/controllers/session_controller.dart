@@ -86,6 +86,13 @@ class SessionController extends GetxController {
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
 
+  /// When deleting an order we optimistically remove it from [orders],
+  /// but a subsequent forced refresh may temporarily still return the
+  /// deleted row (backend eventual consistency).
+  /// We suppress re-adding those orders until the server list stops
+  /// containing them.
+  final Set<String> _suppressedTableNumbers = <String>{};
+
   @override
   void onInit() {
     super.onInit();
@@ -153,7 +160,24 @@ class SessionController extends GetxController {
       final loaded = enrichDetails
           ? await _mergeThinOrderRows(summaries)
           : summaries;
-      orders.assignAll(loaded);
+
+      // Hide "recently deleted" orders until the backend stops returning them.
+      final filtered = loaded.where((o) {
+        for (final suppressed in _suppressedTableNumbers) {
+          if (_tableKeysMatch(o.number, suppressed)) return false;
+        }
+        return true;
+      }).toList();
+
+      orders.assignAll(filtered);
+
+      if (forceRefresh && _suppressedTableNumbers.isNotEmpty) {
+        // Remove suppression entries once the server no longer includes them.
+        _suppressedTableNumbers.removeWhere(
+          (suppressed) =>
+              !loaded.any((o) => _tableKeysMatch(o.number, suppressed)),
+        );
+      }
       if (retainOrders != null) {
         for (final order in retainOrders) {
           _upsertOrderInList(order);
@@ -227,7 +251,20 @@ class SessionController extends GetxController {
     return merged;
   }
 
+  bool _isOrderSuppressed(String orderNumber) {
+    for (final suppressed in _suppressedTableNumbers) {
+      if (_tableKeysMatch(orderNumber, suppressed)) return true;
+    }
+    return false;
+  }
+
   void _upsertOrderInList(SessionOrder order) {
+    if (_isOrderSuppressed(order.number)) {
+      orders.removeWhere((item) => _tableKeysMatch(item.number, order.number));
+      orders.refresh();
+      return;
+    }
+
     if (order.id <= 0) {
       final byNumber = orders.indexWhere(
         (item) => _tableKeysMatch(item.number, order.number),
@@ -754,6 +791,8 @@ class SessionController extends GetxController {
     final order = findOrder(orderNumber: orderNumber);
     if (order == null) return;
 
+    _suppressedTableNumbers.add(order.number);
+
     try {
       if (order.isLocalOnly) {
         final tableId = -order.id;
@@ -771,10 +810,22 @@ class SessionController extends GetxController {
       _clearUiStateForOrder(order.number);
 
       unawaited(_sessionRepository.getTablesList(forceRefresh: true));
-      unawaited(loadSessionOrders(forceRefresh: true));
+      // Reload without showing loading indicator; the suppression filter
+      // prevents the deleted order from reappearing during eventual
+      // consistency window.
+      unawaited(loadSessionOrders(
+        forceRefresh: true,
+        showLoading: false,
+      ));
     } on ApiException catch (e) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) => _tableKeysMatch(suppressed, order.number),
+      );
       _showSnack('Erreur', e.message);
     } catch (_) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) => _tableKeysMatch(suppressed, order.number),
+      );
       _showSnack('Erreur', 'Impossible d\'annuler la table.');
     }
   }

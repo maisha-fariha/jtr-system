@@ -1245,6 +1245,8 @@ class _MenuGrid extends GetView<TableDetailsController> {
         return const Center(child: CircularProgressIndicator(strokeWidth: 2));
       }
 
+      controller.orderUiRevision.value;
+
       if (controller.catalogError.value != null &&
           controller.categoryRoots.isEmpty &&
           controller.products.isEmpty) {

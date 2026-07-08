@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -8,6 +7,7 @@ import '../core/network/api_exception.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
+import '../data/order_optimistic_sync.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
@@ -33,6 +33,7 @@ class TableDetailsController extends GetxController {
 
   final CatalogRepository _catalogRepository;
   final OrderRepository _orderRepository;
+  final OrderOptimisticSync _optimisticSync = OrderOptimisticSync();
 
   final selectedCategoryIndex = 0.obs;
   final isBottomPanelExpanded = true.obs;
@@ -57,6 +58,7 @@ class TableDetailsController extends GetxController {
   final collapsedSuivreSections = <int>{}.obs;
   final selectedSuivreSection = RxnInt();
   final suivreUiRevision = 0.obs;
+  final orderUiRevision = 0.obs;
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
@@ -142,6 +144,7 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _refreshOrder() async {
+    if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
@@ -163,6 +166,16 @@ class TableDetailsController extends GetxController {
     final current = order;
     if (current != null && current.id > 0) return current.id;
     return null;
+  }
+
+  /// Cached API order id — no network verification (hot path for optimistic UI).
+  int? get _fastResolvedOrderId => resolvedOrderId;
+
+  int get _optimisticSyncKey => orderNumber.hashCode;
+
+  int get _parsedTableNumber {
+    final normalized = orderNumber.replaceFirst(RegExp(r'^T'), '').trim();
+    return int.tryParse(normalized) ?? 0;
   }
 
   int get _currentWaiterId {
@@ -885,71 +898,62 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  Future<void> onProductTap(CatalogProductModel product) async {
+  void onProductTap(CatalogProductModel product) {
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
 
+    selectedProductId.value = product.id;
+
+    if (product.isComposed) {
+      unawaited(_handleComposedProductTap(product));
+      return;
+    }
+
+    final rollbackSnapshot =
+        order != null ? OrderOptimisticSync.deepSnapshot(order!) : null;
+
+    _applyAddSimpleProductToUi(product);
+    unawaited(
+      _syncAddSimpleProductInBackground(
+        product: product,
+        rollbackSnapshot: rollbackSnapshot,
+      ),
+    );
+  }
+
+  Future<void> _handleComposedProductTap(CatalogProductModel product) async {
     var id = await _ensureResolvedOrderId();
     logOrderFlow('onProductTap resolvedOrderId=${id ?? 'none'}');
 
-    selectedProductId.value = product.id;
-
     try {
-      if (product.isComposed) {
-        final detail = await _catalogRepository.getProductDetail(product.id);
-        List<Map<String, dynamic>>? selections;
-        await ComposedProductPickerSheet.show(
-          product: detail,
-          onConfirm: (picked) => selections = picked,
-        );
-        if (selections == null) return;
+      final detail = await _catalogRepository.getProductDetail(product.id);
+      List<Map<String, dynamic>>? selections;
+      await ComposedProductPickerSheet.show(
+        product: detail,
+        onConfirm: (picked) => selections = picked,
+      );
+      if (selections == null) return;
 
-        id = await _ensureResolvedOrderId();
-        if (id == null || id <= 0) {
-          final created =
-              await _orderRepository.createOrderWithFirstComposedProduct(
-            tableNumber: orderNumber,
-            waiterId: _currentWaiterId,
-            productId: detail.id,
-            basePrice: detail.unitPrice,
-            menuSelections: selections!,
-          );
-          orderId = created.id;
-          _syncOrderInSession(created, orderNumber);
-        } else {
-          await _addComposedProduct(
-            orderId: id,
-            product: detail,
-            menuSelections: selections!,
-            displayNumber: orderNumber,
-          );
-        }
-      } else if (id == null || id <= 0) {
-        if (kDebugMode) {
-          print('ORDER POST: no order id — creating with first item ${product.id}');
-        }
-        final created = await _orderRepository.createOrderWithFirstSimpleProduct(
+      id = await _ensureResolvedOrderId();
+      if (id == null || id <= 0) {
+        final created =
+            await _orderRepository.createOrderWithFirstComposedProduct(
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
-          productId: product.id,
-          unitPrice: product.unitPrice,
-          qty: 1,
+          productId: detail.id,
+          basePrice: detail.unitPrice,
+          menuSelections: selections!,
         );
         orderId = created.id;
         _syncOrderInSession(created, orderNumber);
       } else {
-        if (kDebugMode) {
-          print('ORDER PUT: adding item to existing order $id');
-        }
-        final updated = await _orderRepository.addSimpleProductToOrder(
+        await _addComposedProduct(
           orderId: id,
-          productId: product.id,
-          unitPrice: product.unitPrice,
-          qty: 1,
-          layoutHints: order?.displayEntries,
+          product: detail,
+          menuSelections: selections!,
+          displayNumber: orderNumber,
         );
-        _syncOrderInSession(updated, orderNumber);
       }
     } on ApiException catch (e) {
       ApiDebugDialog.show(
@@ -961,28 +965,114 @@ class TableDetailsController extends GetxController {
     }
   }
 
+  void _applyAddSimpleProductToUi(CatalogProductModel product) {
+    var current = order;
+    if (current == null) {
+      current = OrderMapper.buildSessionPlaceholderOrder(
+        tableNumber: _parsedTableNumber,
+        numberOfGuests: 1,
+      );
+    }
+
+    final layoutHints = current.displayEntries;
+    final suivreCount = OrderMapper.suivreSeparatorCount(layoutHints);
+    final suivreSplits = OrderMapper.suivreSplitPositions(layoutHints);
+    final fastId = _fastResolvedOrderId;
+    final cached =
+        fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
+
+    final predicted = OrderMapper.predictAfterAppendSimpleProduct(
+      current: current,
+      cachedDetail: cached,
+      productId: product.id,
+      productName: product.name,
+      unitPrice: product.unitPrice,
+      suivreSectionCount: suivreCount,
+      suivreSplitHints: suivreSplits,
+    );
+    _syncOrderInSession(predicted, orderNumber);
+  }
+
+  Future<void> _syncAddSimpleProductInBackground({
+    required CatalogProductModel product,
+    SessionOrder? rollbackSnapshot,
+  }) async {
+    final snapshot = rollbackSnapshot ??
+        order ??
+        OrderMapper.buildSessionPlaceholderOrder(
+          tableNumber: _parsedTableNumber,
+          numberOfGuests: 1,
+        );
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      sync: () async {
+        final id = await _resolveOrderIdForBackgroundSync();
+        final layoutHints = order?.displayEntries ?? snapshot.displayEntries;
+
+        if (id == null || id <= 0) {
+          final created =
+              await _orderRepository.createOrderWithFirstSimpleProduct(
+            tableNumber: orderNumber,
+            waiterId: _currentWaiterId,
+            productId: product.id,
+            unitPrice: product.unitPrice,
+            qty: 1,
+          );
+          orderId = created.id;
+          return created;
+        }
+
+        orderId = id;
+        return _orderRepository.addSimpleProductToOrder(
+          orderId: id,
+          productId: product.id,
+          unitPrice: product.unitPrice,
+          qty: 1,
+          layoutHints: layoutHints,
+        );
+      },
+      recover: (snap) async {
+        final id = _fastResolvedOrderId;
+        if (id != null && id > 0) {
+          return _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        }
+        return snap;
+      },
+      onError: (error) => _showOptimisticMutationError('ajouter l\'article', error),
+    );
+  }
+
+  Future<int?> _resolveOrderIdForBackgroundSync() async {
+    final fast = _fastResolvedOrderId;
+    if (fast != null) return fast;
+
+    final resolved =
+        await _orderRepository.resolveOrderIdForTableNumber(orderNumber);
+    if (resolved != null && resolved > 0) {
+      orderId = resolved;
+    }
+    return resolved;
+  }
+
   Future<void> _setOrderLineQuantity(int lineIndex, int qty) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) return;
 
-    isAddingProduct.value = true;
-    try {
-      final updated = await _orderRepository.setOrderLineQuantityAtIndex(
-        orderId: id,
-        lineIndex: lineIndex,
-        qty: qty,
-      );
-      _syncOrderInSession(updated, orderNumber);
-    } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur quantité',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
-    } catch (_) {
-      Get.snackbar('Erreur', 'Impossible de modifier la quantité.');
-    } finally {
-      isAddingProduct.value = false;
-    }
+    final current = order;
+    if (current == null) return;
+
+    await _optimisticSetLineQuantity(
+      orderId: id,
+      current: current,
+      lineIndex: lineIndex,
+      qty: qty,
+    );
   }
 
   Future<void> _addComposedProduct({
@@ -1025,6 +1115,7 @@ class TableDetailsController extends GetxController {
         displayEntries: displayEntries,
       ),
     );
+    orderUiRevision.value++;
 
     final id = updated.id;
     if (id > 0 && Get.isRegistered<OrderRepository>()) {
@@ -1110,29 +1201,17 @@ class TableDetailsController extends GetxController {
     if (delta < 0) {
       final qty = int.tryParse(line.quantity) ?? 1;
       if (qty <= 1) {
-        await cancelOrderLine(productIndex);
+        cancelOrderLine(productIndex);
         return;
       }
     }
 
-    isAddingProduct.value = true;
-    try {
-      final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
-        orderId: id,
-        lineIndex: productIndex,
-        delta: delta,
-      );
-      _syncOrderInSession(updated, orderNumber);
-    } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur quantité',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
-    } catch (_) {
-      Get.snackbar('Erreur', 'Impossible de modifier la quantité.');
-    } finally {
-      isAddingProduct.value = false;
-    }
+    await _optimisticAdjustLineQuantity(
+      orderId: id,
+      current: currentOrder,
+      lineIndex: productIndex,
+      delta: delta,
+    );
   }
 
   Future<void> cancelSuivreSection(int sectionIndex) async {
@@ -1199,13 +1278,7 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  Future<void> cancelOrderLine(int productIndex) async {
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
-      return;
-    }
-
+  void cancelOrderLine(int productIndex) {
     final currentOrder = order;
     if (currentOrder == null ||
         productIndex < 0 ||
@@ -1222,22 +1295,129 @@ class TableDetailsController extends GetxController {
       selectedOrderLineIndex.value = null;
     }
 
-    isAddingProduct.value = true;
-    try {
-      final updated = await _orderRepository.cancelOrderLineAtIndex(
-        orderId: id,
+    final snapshot = OrderOptimisticSync.deepSnapshot(currentOrder);
+    final predicted = OrderMapper.predictAfterCancelLineAtIndex(
+      currentOrder,
+      productIndex,
+    );
+    _syncOrderInSession(predicted, orderNumber);
+
+    unawaited(
+      _syncCancelLineInBackground(
         lineIndex: productIndex,
-      );
-      _syncOrderInSession(updated, orderNumber);
-    } on ApiException catch (e) {
+        rollbackSnapshot: snapshot,
+      ),
+    );
+  }
+
+  Future<void> _syncCancelLineInBackground({
+    required int lineIndex,
+    required SessionOrder rollbackSnapshot,
+  }) async {
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: rollbackSnapshot,
+      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      sync: () async {
+        final id = await _resolveOrderIdForBackgroundSync();
+        if (id == null || id <= 0) {
+          return order ?? rollbackSnapshot;
+        }
+
+        orderId = id;
+        return _orderRepository.cancelOrderLineAtIndex(
+          orderId: id,
+          lineIndex: lineIndex,
+        );
+      },
+      recover: (snap) async {
+        final id = _fastResolvedOrderId;
+        if (id != null && id > 0) {
+          return _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        }
+        return snap;
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('annuler l\'article', error),
+    );
+  }
+
+  Future<void> _optimisticAdjustLineQuantity({
+    required int orderId,
+    required SessionOrder current,
+    required int lineIndex,
+    required int delta,
+  }) async {
+    final snapshot = OrderOptimisticSync.deepSnapshot(current);
+
+    final predicted = OrderMapper.predictAfterAdjustLineQuantityAtIndex(
+      current: current,
+      lineIndex: lineIndex,
+      delta: delta,
+    );
+    _syncOrderInSession(predicted, orderNumber);
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      sync: () => _orderRepository.adjustOrderLineQuantityAtIndex(
+        orderId: orderId,
+        lineIndex: lineIndex,
+        delta: delta,
+      ),
+      recover: (snap) => _orderRepository.getOrderDetail(
+        orderId,
+        previousDisplayEntries: snap.displayEntries,
+      ),
+      onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
+    );
+  }
+
+  Future<void> _optimisticSetLineQuantity({
+    required int orderId,
+    required SessionOrder current,
+    required int lineIndex,
+    required int qty,
+  }) async {
+    final snapshot = OrderOptimisticSync.deepSnapshot(current);
+
+    final predicted = OrderMapper.predictAfterSetLineQuantityAtIndex(
+      current: current,
+      lineIndex: lineIndex,
+      qty: qty,
+    );
+    _syncOrderInSession(predicted, orderNumber);
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      sync: () => _orderRepository.setOrderLineQuantityAtIndex(
+        orderId: orderId,
+        lineIndex: lineIndex,
+        qty: qty,
+      ),
+      recover: (snap) => _orderRepository.getOrderDetail(
+        orderId,
+        previousDisplayEntries: snap.displayEntries,
+      ),
+      onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
+    );
+  }
+
+  void _showOptimisticMutationError(String action, Object error) {
+    if (error is ApiException) {
       ApiDebugDialog.show(
-        title: 'Erreur annulation',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
+        title: 'Erreur',
+        body:
+            '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}',
       );
-    } catch (_) {
-      Get.snackbar('Erreur', 'Impossible d\'annuler l\'article.');
-    } finally {
-      isAddingProduct.value = false;
+      return;
     }
+    Get.snackbar('Erreur', 'Impossible de $action.');
   }
 }

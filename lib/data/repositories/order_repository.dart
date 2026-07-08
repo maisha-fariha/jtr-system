@@ -53,6 +53,11 @@ class OrderRepository {
   List<Map<String, dynamic>> _cachedPaymentModes = [];
 
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
+  Map<String, dynamic>? cachedOrderDetail(int orderId) {
+    if (orderId <= 0) return null;
+    return _local.readOrderDetail(orderId);
+  }
+
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,

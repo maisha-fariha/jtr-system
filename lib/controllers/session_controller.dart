@@ -228,6 +228,20 @@ class SessionController extends GetxController {
   }
 
   void _upsertOrderInList(SessionOrder order) {
+    if (order.id <= 0) {
+      final byNumber = orders.indexWhere(
+        (item) => _tableKeysMatch(item.number, order.number),
+      );
+      if (byNumber >= 0) {
+        orders[byNumber] = order;
+        orders.refresh();
+        return;
+      }
+      orders.insert(0, order);
+      orders.refresh();
+      return;
+    }
+
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
       orders[idx] = order;

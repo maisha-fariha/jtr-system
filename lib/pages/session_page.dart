@@ -206,11 +206,22 @@ class _SessionHeader extends GetView<SessionController> {
 class _SessionTableLayout {
   _SessionTableLayout._();
 
+  static const List<int> columnFlexes = [2, 1, 2, 3, 1, 2, 4];
+  static const List<Alignment> columnAlignments = [
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.centerRight,
+  ];
+
   static EdgeInsets outerPadding(BuildContext context) =>
       JtrResponsive.getResponsivePadding(context, horizontal: 8);
 
   static EdgeInsets innerPadding(BuildContext context) =>
-      JtrResponsive.getResponsivePadding(context, horizontal: 0, vertical: 12);
+      JtrResponsive.getResponsivePadding(context, horizontal: 8, vertical: 12);
 
   static TextStyle headerStyle(BuildContext context) => TextStyle(
         fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
@@ -247,9 +258,13 @@ class _SessionTableRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            for (final cell in cells)
+            for (var i = 0; i < cells.length; i++)
               Expanded(
-                child: Center(child: cell),
+                flex: _SessionTableLayout.columnFlexes[i],
+                child: Align(
+                  alignment: _SessionTableLayout.columnAlignments[i],
+                  child: cells[i],
+                ),
               ),
           ],
         ),
@@ -278,7 +293,7 @@ class _TableHeader extends StatelessWidget {
           Text('CTR.\nPROFIT', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
           Text('CVT.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
           Text('IMP.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
-          Text('TOTAL', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('TOTAL', textAlign: TextAlign.right, style: _SessionTableLayout.headerStyle(context)),
         ],
       ),
     );
@@ -369,6 +384,7 @@ class _OrderRow extends GetView<SessionController> {
                     children: [
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[0],
                         expandOnTap: true,
                         child: Text(
                           order.number,
@@ -382,6 +398,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[1],
                         child: Text(
                           order.group,
                           textAlign: TextAlign.center,
@@ -390,6 +407,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[2],
                         child: Text(
                           order.poste,
                           textAlign: TextAlign.center,
@@ -398,6 +416,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[3],
                         child: Text(
                           order.profitCenter,
                           textAlign: TextAlign.center,
@@ -409,6 +428,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[4],
                         child: Text(
                           order.couverts,
                           textAlign: TextAlign.center,
@@ -417,6 +437,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[5],
                         child: Container(
                           width: JtrResponsive.getResponsiveSize(context, 22),
                           height: JtrResponsive.getResponsiveSize(context, 22),
@@ -439,13 +460,19 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
-                        child: Text(
-                          order.total,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.darkText,
+                        flex: _SessionTableLayout.columnFlexes[6],
+                        alignment: Alignment.centerRight,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            order.total,
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.darkText,
+                            ),
                           ),
                         ),
                       ),
@@ -513,23 +540,28 @@ class _OrderTableCell extends GetView<SessionController> {
   const _OrderTableCell({
     required this.orderNumber,
     required this.child,
+    this.flex = 1,
+    this.alignment = Alignment.center,
     this.expandOnTap = false,
   });
 
   final String orderNumber;
   final Widget child;
+  final int flex;
+  final Alignment alignment;
   final bool expandOnTap;
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
+      flex: flex,
       child: GestureDetector(
         onTap: () => controller.selectRow(
           orderNumber: orderNumber,
           expandOnNumberTap: expandOnTap,
         ),
         behavior: HitTestBehavior.opaque,
-        child: Center(child: child),
+        child: Align(alignment: alignment, child: child),
       ),
     );
   }

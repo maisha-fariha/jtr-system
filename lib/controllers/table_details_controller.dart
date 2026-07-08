@@ -1019,7 +1019,9 @@ class TableDetailsController extends GetxController {
       apply: (updated) => _syncOrderInSession(updated, orderNumber),
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
-        final layoutHints = order?.displayEntries ?? snapshot.displayEntries;
+        // Keep the tap-time layout as source of truth so open À SUIVRE sections
+        // don't get lost when background responses arrive out of order.
+        final layoutHints = snapshot.displayEntries;
 
         if (id == null || id <= 0) {
           final created =

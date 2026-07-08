@@ -2034,6 +2034,16 @@ class OrderMapper {
     };
   }
 
+  /// PUT payload that only changes couverts / number_of_guests.
+  static Map<String, dynamic> buildUpdateGuestCountPayload(
+    Map<String, dynamic> orderDetail, {
+    required int numberOfGuests,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    working['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
+    return buildOrderUpdatePayload(working);
+  }
+
   static int quantityForSimpleProduct(
     Map<String, dynamic> orderDetail,
     int productId,

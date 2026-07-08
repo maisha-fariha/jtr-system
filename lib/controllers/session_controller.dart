@@ -446,6 +446,16 @@ class SessionController extends GetxController {
       return;
     }
 
+    // Own open order already in this app's session list → reopen + optional guest PUT.
+    final existingOwn = _findOwnOpenOrderForTable(tableNumber);
+    if (existingOwn != null) {
+      await _reopenOwnOrderAndUpdateGuests(
+        existing: existingOwn,
+        guests: guests,
+      );
+      return;
+    }
+
     isCreatingOrder.value = true;
     SessionOrder? created;
     var attemptedCreate = false;
@@ -465,7 +475,8 @@ class SessionController extends GetxController {
         return;
       }
       if (OrderMapper.isTableInUse(tables, tableNumber)) {
-        logOrderFlow('_createTableAndOpenDetails ABORT table occupied');
+        // Table in use by another waiter / session — not in our list.
+        logOrderFlow('_createTableAndOpenDetails ABORT table occupied (other)');
         if (context.mounted) {
           TableOccupiedDialog.show(
             context: context,
@@ -555,9 +566,75 @@ class SessionController extends GetxController {
     }
   }
 
+  /// Finds an open order for [tableNumber] already shown in this waiter's list.
+  SessionOrder? _findOwnOpenOrderForTable(String tableNumber) {
+    final normalized = OrderMapper.normalizeTableKey(tableNumber);
+    if (normalized.isEmpty) return null;
+
+    for (final order in orders) {
+      if (_tableKeysMatch(order.number, normalized) ||
+          _tableKeysMatch(order.number, OrderMapper.tableDisplayNumber(normalized))) {
+        return order;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _reopenOwnOrderAndUpdateGuests({
+    required SessionOrder existing,
+    required int guests,
+  }) async {
+    logOrderFlow(
+      '_reopenOwnOrderAndUpdateGuests table=${existing.number} orderId=${existing.id} guests=$guests',
+    );
+
+    var target = existing;
+    final currentGuests = int.tryParse(existing.couverts.trim()) ?? 0;
+    final nextGuests = guests < 1 ? 1 : guests;
+
+    if (existing.id > 0 && currentGuests != nextGuests) {
+      isCreatingOrder.value = true;
+      try {
+        target = await _orderRepository.updateOrderGuestCount(
+          orderId: existing.id,
+          numberOfGuests: nextGuests,
+        );
+        _upsertOrderInList(target);
+      } on ApiException catch (e) {
+        _showSnack('Erreur', e.message);
+        // Still open details with local guest count so waiter can continue.
+        target = existing.copyWith(couverts: '$nextGuests');
+        _upsertOrderInList(target);
+      } catch (_) {
+        _showSnack('Erreur', 'Impossible de mettre à jour les couverts.');
+        target = existing.copyWith(couverts: '$nextGuests');
+        _upsertOrderInList(target);
+      } finally {
+        isCreatingOrder.value = false;
+      }
+    } else if (currentGuests != nextGuests) {
+      target = existing.copyWith(couverts: '$nextGuests');
+      _upsertOrderInList(target);
+    }
+
+    openTableDetails(
+      target.number,
+      orderId: target.id > 0 ? target.id : null,
+    );
+    unawaited(
+      refreshOrderList(
+        pinOrder: target.id > 0 ? target : null,
+        background: true,
+      ),
+    );
+  }
+
   bool isTableOccupied(String tableNumber) {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
+
+    // Own list order is reopened via nouvelle commande — not "occupied" for this waiter.
+    if (_findOwnOpenOrderForTable(normalized) != null) return false;
 
     if (OrderMapper.isTableInUse(
       _sessionRepository.cachedTables,
@@ -566,10 +643,7 @@ class SessionController extends GetxController {
       return true;
     }
 
-    return orders.any((order) {
-      final orderTable = order.number.replaceFirst(RegExp(r'^T'), '');
-      return orderTable == normalized || order.number == 'T$normalized';
-    });
+    return false;
   }
 
   String get _currentUserDisplayName {

@@ -201,6 +201,28 @@ class OrderRepository {
     return OrderMapper.fromOrderDetail(updated);
   }
 
+  /// Updates couverts via PUT /api/orders/:id and returns the mapped order.
+  Future<SessionOrder> updateOrderGuestCount({
+    required int orderId,
+    required int numberOfGuests,
+  }) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final payload = OrderMapper.buildUpdateGuestCountPayload(
+      detail,
+      numberOfGuests: numberOfGuests,
+    );
+    final updated = await _remote.updateOrder(orderId, payload);
+    await _local.saveOrderDetail(orderId, updated);
+    await _sessionLocal.upsertOpenOrderInList(updated);
+    return OrderMapper.fromOrderDetail(updated);
+  }
+
   Future<CreateTableOrderResult> createTableOrder({
     required int waiterId,
     required String tableNumber,

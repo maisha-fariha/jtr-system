@@ -11,14 +11,15 @@ import '../data/order_optimistic_sync.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/mappers/menu_mapper.dart';
 import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
+import '../models/menu_active_selection.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
-import '../widgets/composed_product_picker_sheet.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
@@ -972,19 +973,33 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _handleComposedProductTap(CatalogProductModel product) async {
-    var id = await _ensureResolvedOrderId();
-    logOrderFlow('onProductTap resolvedOrderId=${id ?? 'none'}');
-
     try {
       final detail = await _catalogRepository.getProductDetail(product.id);
-      List<Map<String, dynamic>>? selections;
-      await ComposedProductPickerSheet.show(
-        product: detail,
-        onConfirm: (picked) => selections = picked,
+      final presetMenu = MenuMapper.presetFromProduct(
+        detail,
+        badgeNumber: 1,
       );
-      if (selections == null) return;
 
-      id = await _ensureResolvedOrderId();
+      final result = await Get.toNamed(
+        AppRoutes.menu,
+        arguments: {
+          'table': orderNumber,
+          'presetMenu': presetMenu,
+          'choiceNumber': 1,
+          'returnToSelection': false,
+        },
+      );
+
+      if (result is! MenuActiveSelection) return;
+
+      final menuSelections = MenuMapper.menuSelectionsFromItems(
+        result.allSelectedItems,
+      );
+      if (menuSelections.isEmpty) return;
+
+      var id = await _ensureResolvedOrderId();
+      logOrderFlow('onProductTap composed resolvedOrderId=${id ?? 'none'}');
+
       if (id == null || id <= 0) {
         final created =
             await _orderRepository.createOrderWithFirstComposedProduct(
@@ -992,18 +1007,19 @@ class TableDetailsController extends GetxController {
           waiterId: _currentWaiterId,
           productId: detail.id,
           basePrice: detail.unitPrice,
-          menuSelections: selections!,
+          menuSelections: menuSelections,
         );
         orderId = created.id;
         _syncOrderInSession(created, orderNumber);
-      } else {
-        await _addComposedProduct(
-          orderId: id,
-          product: detail,
-          menuSelections: selections!,
-          displayNumber: orderNumber,
-        );
+        return;
       }
+
+      await _addComposedProduct(
+        orderId: id,
+        product: detail,
+        menuSelections: menuSelections,
+        displayNumber: orderNumber,
+      );
     } on ApiException catch (e) {
       ApiDebugDialog.show(
         title: 'Erreur ajout article',

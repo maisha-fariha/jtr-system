@@ -280,6 +280,8 @@ class MenuSelectionController extends GetxController {
         current == null ? result : current.merge(result);
     selectedMenuIndex.value =
         menus.indexWhere((menu) => menu.number == result.menu.number);
+    // Ensure the sidebar content is visible after selecting a menu.
+    isSidebarExpanded.value = true;
   }
 
   void dismissActiveSelection() {

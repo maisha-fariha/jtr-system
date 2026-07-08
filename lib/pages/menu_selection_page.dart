@@ -427,7 +427,8 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
           ),
           Obx(
             () => controller.isSidebarExpanded.value
-                ? Expanded(
+                ? Flexible(
+                    fit: FlexFit.loose,
                     child: ListView(
               padding: JtrResponsive.getResponsivePadding(
                 context,

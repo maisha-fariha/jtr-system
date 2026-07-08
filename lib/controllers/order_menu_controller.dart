@@ -120,7 +120,7 @@ class OrderMenuController extends GetxController {
       return;
     }
 
-    if (returnToSelection && presetMenu != null) {
+    if (presetMenu != null) {
       Get.back(
         result: MenuActiveSelection(
           menu: presetMenu!,

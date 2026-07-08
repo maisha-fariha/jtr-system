@@ -37,6 +37,7 @@ class MenuPage extends GetView<OrderMenuController> {
 
   @override
   Widget build(BuildContext context) {
+    final presetMenu = controller.presetMenu;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -56,29 +57,56 @@ class MenuPage extends GetView<OrderMenuController> {
               const _MenuHeader(),
               Divider(height: 1, color: AppTheme.cardBorder),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    bottom: 16,
-                  ),
-                  child: Padding(
-                    padding: JtrResponsive.getResponsivePadding(
-                      context,
-                      horizontal: 24,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final showSidePanel = presetMenu != null;
+                    final sideWidth = (constraints.maxWidth * 0.28)
+                        .clamp(110.0, 190.0);
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        JtrResponsive.getResponsiveSpacing(context, 24),
-                        for (final category
-                            in controller.visibleCategories) ...[
-                          _CourseSectionHeader(category: category),
-                          _CourseSectionBody(category: category),
-                          JtrResponsive.getResponsiveSpacing(context, 32),
-                        ],
+                        if (showSidePanel)
+                          SizedBox(
+                            width: sideWidth,
+                            child: const _SelectedMenuSidePanel(),
+                          ),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: JtrResponsive.getResponsivePadding(
+                              context,
+                              bottom: 16,
+                            ),
+                            child: Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                horizontal: 16,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  JtrResponsive.getResponsiveSpacing(context, 24),
+                                  for (final category
+                                      in controller.visibleCategories) ...[
+                                    _CourseSectionHeader(
+                                      category: category,
+                                    ),
+                                    _CourseSectionBody(
+                                      category: category,
+                                    ),
+                                    JtrResponsive.getResponsiveSpacing(
+                                      context,
+                                      32,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -220,6 +248,89 @@ class _OrderDisplay extends GetView<OrderMenuController> {
               ),
             )),
       ],
+    );
+  }
+}
+
+class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
+  const _SelectedMenuSidePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final menu = controller.presetMenu;
+    if (menu == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        left: 12,
+        right: 10,
+        top: 18,
+        bottom: 12,
+      ),
+      decoration: BoxDecoration(
+        border: Border(
+          right: BorderSide(color: AppTheme.cardBorder),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: JtrResponsive.getResponsiveSize(context, 46),
+            height: JtrResponsive.getResponsiveSize(context, 46),
+            decoration: BoxDecoration(
+              color: AppTheme.lightButton,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: AppTheme.primary.withValues(alpha: 0.25),
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              menu.badgeLabel,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                fontWeight: FontWeight.w800,
+                color: AppTheme.primary,
+              ),
+            ),
+          ),
+          JtrResponsive.getResponsiveSpacing(context, 10),
+          Text(
+            'CHOIX ${controller.choiceNumber}',
+            style: TextStyle(
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+              fontWeight: FontWeight.w700,
+              color: AppTheme.textSecondary,
+              letterSpacing: 0.4,
+            ),
+          ),
+          JtrResponsive.getResponsiveSpacing(context, 6),
+          Text(
+            menu.label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: _menuPageFontSize(context, 13),
+              fontWeight: FontWeight.w800,
+              color: AppTheme.darkText,
+              height: 1.2,
+            ),
+          ),
+          JtrResponsive.getResponsiveSpacing(context, 6),
+          Text(
+            menu.formattedPrice,
+            style: TextStyle(
+              fontSize: _menuPageFontSize(context, 12),
+              fontWeight: FontWeight.w700,
+              color: AppTheme.primary,
+              height: 1.2,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -537,13 +537,29 @@ class OrderMapper {
         continue;
       }
 
-      final course = findCourseInOrderDetail(data, courseNumber);
-      if (course == null || !_courseWasRequestedToKitchen(course)) {
+      // À SUIVRE headers store the course-number "above" (used to route new
+      // items into the next course). For UI, we want to display DEMANDÉE only
+      // when the follow-up course itself was requested to the kitchen.
+      //
+      // So we first check `courseNumber + 1` for `requested_at`/status.
+      final courseCurrent = findCourseInOrderDetail(data, courseNumber);
+      final courseNext = courseNumber > 0
+          ? findCourseInOrderDetail(data, courseNumber + 1)
+          : null;
+
+      final courseToUse = (courseNext != null &&
+              _courseWasRequestedToKitchen(courseNext))
+          ? courseNext
+          : ((courseCurrent != null && _courseWasRequestedToKitchen(courseCurrent))
+              ? courseCurrent
+              : null);
+
+      if (courseToUse == null) {
         result.add(entry);
         continue;
       }
 
-      final timeLabel = formatDemandeTime(course['requested_at']);
+      final timeLabel = formatDemandeTime(courseToUse['requested_at']);
       if (timeLabel == null) {
         result.add(entry);
         continue;

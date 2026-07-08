@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/session_repository.dart';
 import '../models/user_suggestion.dart';
 import '../routes/app_pages.dart';
 import '../widgets/user_identifiant_field_controller.dart';
@@ -111,6 +112,9 @@ class LoginController extends GetxController {
         userOrId: user.id,
         passcode: passcode,
       );
+      if (Get.isRegistered<SessionRepository>()) {
+        await Get.find<SessionRepository>().clearOpenOrdersCache();
+      }
       Get.offNamed(AppRoutes.session);
     } on ApiException catch (error) {
       Get.snackbar(

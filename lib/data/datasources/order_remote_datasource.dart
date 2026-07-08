@@ -50,6 +50,25 @@ class OrderRemoteDataSource {
     }
   }
 
+  Future<void> endTableSession(int tableId) async {
+    final path = ApiEndpoints.tableSession(tableId);
+    final response = await _client.delete<Map<String, dynamic>>(path);
+    final data = response.data;
+    if (data is! Map<String, dynamic>) return;
+
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      data,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to end table session.',
+        statusCode: envelope.status,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> updateOrder(
     int orderId,
     Map<String, dynamic> body,
@@ -104,6 +123,7 @@ class OrderRemoteDataSource {
         request: body,
         response: response.data,
         statusCode: response.statusCode,
+        writeToConsole: false,
       );
 
       final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
@@ -127,10 +147,20 @@ class OrderRemoteDataSource {
 
   Future<Map<String, dynamic>> createOrder(Map<String, dynamic> body) async {
     const path = ApiEndpoints.createOrder;
+    logOrderFlow('OrderRemoteDataSource.createOrder CALLED');
+    logOrderPost(phase: 'sending', request: body);
+
     try {
       final response = await _client.post<Map<String, dynamic>>(
         path,
         data: body,
+      );
+
+      logOrderPost(
+        phase: 'response',
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
       );
       _recordApiLog(
         method: 'POST',
@@ -138,6 +168,7 @@ class OrderRemoteDataSource {
         request: body,
         response: response.data,
         statusCode: response.statusCode,
+        writeToConsole: false,
       );
 
       final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
@@ -154,7 +185,20 @@ class OrderRemoteDataSource {
 
       return OrderMapper.unwrapOrderDetail(envelope.data!);
     } on ApiException catch (error) {
-      _appendApiError(error);
+      logOrderPost(
+        phase: 'error',
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
       rethrow;
     }
   }
@@ -166,6 +210,7 @@ class OrderRemoteDataSource {
     Object? response,
     int? statusCode,
     String? error,
+    bool writeToConsole = true,
   }) {
     final buffer = StringBuffer()
       ..writeln('$method $path'
@@ -194,14 +239,16 @@ class OrderRemoteDataSource {
 
     lastApiLog = buffer.toString();
 
-    logApiCall(
-      method: method,
-      path: path,
-      request: request,
-      response: response,
-      statusCode: statusCode,
-      error: error,
-    );
+    if (writeToConsole) {
+      logApiCall(
+        method: method,
+        path: path,
+        request: request,
+        response: response,
+        statusCode: statusCode,
+        error: error,
+      );
+    }
   }
 
   void _appendApiError(ApiException error) {
@@ -229,21 +276,278 @@ class OrderRemoteDataSource {
     }
   }
 
-  Future<void> markOrderPrinted(int orderId) async {
-    final response = await _client.post<Map<String, dynamic>>(
-      ApiEndpoints.markOrderPrinted,
-      data: {'order_id': orderId},
+  Future<void> addSeatOrderItems({
+    required int orderId,
+    required int seatNumber,
+    required Map<String, dynamic> body,
+  }) async {
+    final path = ApiEndpoints.orderSeatOrderItems(orderId, seatNumber);
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to add seat order items.',
+          statusCode: envelope.status,
+        );
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> generateReceipt(
+    int orderId, {
+    String type = 'preview',
+  }) async {
+    final body = {
+      'order_id': orderId,
+      'type': type,
+      'mark_printed': true,
+    };
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        ApiEndpoints.generateReceipt,
+        data: body,
+      );
+      final raw = response.data;
+      if (raw is! Map<String, dynamic>) {
+        throw ApiException(
+          message:
+              'Réponse ticket invalide (HTTP ${response.statusCode}): $raw',
+          statusCode: response.statusCode,
+        );
+      }
+
+      final envelope = ApiEnvelope.parseResponse(raw);
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to generate receipt.',
+          statusCode: envelope.status,
+        );
+      }
+
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        response: raw,
+        statusCode: response.statusCode,
+      );
+      return raw;
+    } on ApiException catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
+      rethrow;
+    } catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.generateReceipt,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
+      throw ApiException(message: 'Erreur ticket: $error');
+    }
+  }
+
+  Future<Map<String, dynamic>> markOrderPrinted(int orderId) async {
+    final body = {'order_id': orderId};
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        ApiEndpoints.markOrderPrinted,
+        data: body,
+      );
+      final raw = response.data;
+      if (raw is! Map<String, dynamic>) {
+        throw ApiException(
+          message:
+              'Réponse mark-printed invalide (HTTP ${response.statusCode}): $raw',
+          statusCode: response.statusCode,
+        );
+      }
+
+      final envelope = ApiEnvelope.parseResponse(raw);
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to mark order as printed.',
+          statusCode: envelope.status,
+        );
+      }
+
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        response: raw,
+        statusCode: response.statusCode,
+      );
+      return raw;
+    } on ApiException catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+        writeToConsole: false,
+      );
+      rethrow;
+    } catch (error) {
+      _recordApiLog(
+        method: 'POST',
+        path: ApiEndpoints.markOrderPrinted,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
+      throw ApiException(message: 'Erreur mark-printed: $error');
+    }
+  }
+
+  Future<void> payOrder({
+    required int orderId,
+    required double amount,
+    required int paymentModeId,
+  }) async {
+    final path = ApiEndpoints.payOrder(orderId);
+    final body = {
+      'amount': amount,
+      'payment_mode_id': paymentModeId,
+    };
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to pay order.',
+          statusCode: envelope.status,
+        );
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchPaymentModes() async {
+    final errors = <String>[];
+    final attempts = <String>[];
+
+    for (final path in [
+      ApiEndpoints.activePaymentModes,
+      ApiEndpoints.paymentModesList,
+      ApiEndpoints.paymentModesForCheckout,
+    ]) {
+      try {
+        final response = await _client.get<dynamic>(path);
+        _recordApiLog(
+          method: 'GET',
+          path: path,
+          response: response.data,
+          statusCode: response.statusCode,
+        );
+
+        final modes = OrderMapper.extractPaymentModes(response.data);
+        attempts.add('$path → ${modes.length} mode(s)');
+        if (modes.isNotEmpty) return modes;
+
+        errors.add('$path: réponse vide ou format non reconnu.');
+      } on ApiException catch (error) {
+        attempts.add('$path → erreur');
+        errors.add(
+          '${error.message}${error.statusCode != null ? ' (HTTP ${error.statusCode})' : ''}',
+        );
+        _appendApiError(error);
+      } catch (error) {
+        attempts.add('$path → exception');
+        errors.add('$path: $error');
+      }
+    }
+
+    try {
+      final settings = await fetchPaymentSettings();
+      final fallback = OrderMapper.paymentModesFromSettings(settings);
+      attempts.add(
+        '${ApiEndpoints.paymentSettings} → ${fallback.length} mode(s)',
+      );
+      if (fallback.isNotEmpty) return fallback;
+    } on ApiException catch (error) {
+      errors.add(error.message);
+    } catch (error) {
+      errors.add('$error');
+    }
+
+    lastApiLog = [
+      if (lastApiLog != null) lastApiLog,
+      'Tentatives modes de paiement:',
+      ...attempts,
+      if (errors.isNotEmpty) 'Erreurs:',
+      ...errors,
+    ].join('\n');
+
+    throw ApiException(
+      message: errors.isEmpty
+          ? 'Impossible de charger les modes de paiement.'
+          : errors.last,
     );
-    final envelope = ApiEnvelope<dynamic>.fromJson(
+  }
+
+  Future<Map<String, dynamic>> fetchPaymentSettings() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.paymentSettings,
+    );
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
       response.data!,
-      (json) => json,
+      (json) => json as Map<String, dynamic>,
     );
 
-    if (!envelope.success) {
+    if (!envelope.success || envelope.data == null) {
       throw ApiException(
-        message: envelope.message ?? 'Failed to mark order as printed.',
+        message: envelope.message ?? 'Failed to load payment settings.',
         statusCode: envelope.status,
       );
     }
+
+    return envelope.data!;
   }
 }

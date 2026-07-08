@@ -71,19 +71,26 @@ class SessionRemoteDataSource {
   }
 
   /// Open orders for the active business day only ([active_day]=true).
-  Future<List<Map<String, dynamic>>> fetchOrdersList() async {
+  Future<List<Map<String, dynamic>>> fetchOrdersList({
+    int? waiterId,
+  }) async {
     final allOrders = <Map<String, dynamic>>[];
     var page = 1;
     var lastPage = 1;
 
     while (page <= lastPage && page <= 25) {
+      final queryParameters = <String, dynamic>{
+        'active_day': true,
+        'per_page': 100,
+        'page': page,
+      };
+      if (waiterId != null && waiterId > 0) {
+        queryParameters['waiter_id'] = waiterId;
+      }
+
       final response = await _client.get<Map<String, dynamic>>(
         ApiEndpoints.orders,
-        queryParameters: {
-          'active_day': true,
-          'per_page': 100,
-          'page': page,
-        },
+        queryParameters: queryParameters,
       );
       final envelope = ApiEnvelope<dynamic>.fromJson(
         response.data!,
@@ -378,6 +385,28 @@ class SessionLocalDataSource {
     );
   }
 
+  Future<void> upsertOpenOrderInList(Map<String, dynamic> order) async {
+    final orderId = (order['id'] as num?)?.toInt() ?? 0;
+    if (orderId <= 0) return;
+
+    final current = readOpenOrdersList();
+    final updated = [
+      order,
+      ...current.where((entry) => (entry['id'] as num?)?.toInt() != orderId),
+    ];
+    await saveOpenOrdersList(updated);
+  }
+
+  Future<void> removeOpenOrderFromList(int orderId) async {
+    if (orderId <= 0) return;
+
+    final current = readOpenOrdersList();
+    final updated = current
+        .where((entry) => (entry['id'] as num?)?.toInt() != orderId)
+        .toList(growable: false);
+    await saveOpenOrdersList(updated);
+  }
+
   List<Map<String, dynamic>> readOpenOrdersList() {
     final raw = _storage.readString(StorageConstants.openOrdersKey);
     if (raw == null || raw.isEmpty) return const [];
@@ -386,5 +415,9 @@ class SessionLocalDataSource {
     if (decoded is! List) return const [];
 
     return decoded.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> clearOpenOrdersList() async {
+    await _storage.delete(StorageConstants.openOrdersKey);
   }
 }

@@ -3,6 +3,7 @@ import '../../core/network/api_endpoints.dart';
 import '../../core/network/api_exception.dart';
 import '../models/api_envelope.dart';
 import '../models/catalog/catalog_product_model.dart';
+import '../models/catalog/category_tree_node.dart';
 import '../models/catalog/leaf_category_model.dart';
 
 class CatalogRemoteDataSource {
@@ -31,6 +32,33 @@ class CatalogRemoteDataSource {
         .map(LeafCategoryModel.fromJson)
         .where((category) => category.isActive)
         .toList();
+  }
+
+  Future<List<CategoryTreeNode>> fetchCategoryTree() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.categoriesTree,
+    );
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Impossible de charger les catégories.',
+        statusCode: envelope.status,
+      );
+    }
+
+    final nodes = parseCategoryTreeResponse(envelope.data);
+    if (nodes.isEmpty) {
+      throw ApiException(
+        message: 'Arborescence des catégories vide.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return nodes;
   }
 
   Future<List<CatalogProductModel>> fetchAllProducts() async {

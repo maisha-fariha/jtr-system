@@ -32,6 +32,11 @@ class AuthRepository {
 
   AuthSessionModel? get cachedSession => _local.readSession();
 
+  bool get isAuthenticated {
+    final token = cachedSession?.token ?? _local.readToken();
+    return token != null && token.isNotEmpty;
+  }
+
   List<UserSuggestion> get cachedUserSuggestions =>
       cachedUsers.map((user) => user.toSuggestion()).toList();
 
@@ -128,10 +133,19 @@ class AuthRepository {
     return session;
   }
 
-  Future<void> clearSessionOnAppStart() async {
-    await _local.clearSession();
-    _apiClient.setAuthToken(null);
-    logAuthTokenCleared(source: 'app_start');
+  /// Restores the saved auth token into [ApiClient] after a cold start.
+  Future<bool> restoreSessionOnAppStart() async {
+    final session = _local.readSession();
+    final token = session?.token ?? _local.readToken();
+    if (token == null || token.isEmpty) {
+      _apiClient.setAuthToken(null);
+      logAuthTokenCleared(source: 'app_start_no_session');
+      return false;
+    }
+
+    _apiClient.setAuthToken(token);
+    logAuthToken(token, source: 'app_start_restore');
+    return true;
   }
 
   Future<void> logout() async {

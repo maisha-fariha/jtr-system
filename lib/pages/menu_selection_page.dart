@@ -94,12 +94,18 @@ class _MenuListColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const _SidebarToolbar(),
-        Expanded(child: _MenuList()),
-      ],
-    );
+    final controller = Get.find<MenuSelectionController>();
+
+    return Obx(() {
+      final expanded = controller.isSidebarExpanded.value;
+
+      return Column(
+        children: [
+          const _SidebarToolbar(),
+          if (expanded) Expanded(child: _MenuList()),
+        ],
+      );
+    });
   }
 }
 
@@ -152,7 +158,7 @@ class _ActiveSelectionHeader extends GetView<MenuSelectionController> {
                         ),
                         alignment: Alignment.center,
                         child: Text(
-                          '1',
+                          '${selection.choiceNumber}',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: JtrResponsive.getResponsiveFontSize(
@@ -358,10 +364,15 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                 ),
                 JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                  child: InkWell(
+                    onTap: controller.toggleSidebarExpanded,
+                    borderRadius: BorderRadius.circular(
+                      JtrResponsive.getResponsiveRadius(context, 8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
                         children: [
                           Expanded(
                             child: Text(
@@ -378,13 +389,17 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                               ),
                             ),
                           ),
-                          Icon(
-                            Icons.keyboard_arrow_down,
-                            size: JtrResponsive.getResponsiveSize(
-                              context,
-                              18,
+                          Obx(
+                            () => Icon(
+                              controller.isSidebarExpanded.value
+                                  ? Icons.keyboard_arrow_down
+                                  : Icons.keyboard_arrow_right,
+                              size: JtrResponsive.getResponsiveSize(
+                                context,
+                                18,
+                              ),
+                              color: AppTheme.textSecondary,
                             ),
-                            color: AppTheme.textSecondary,
                           ),
                         ],
                       ),
@@ -400,6 +415,7 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                         ),
                       ),
                     ],
+                    ),
                   ),
                 ),
               ],
@@ -409,8 +425,10 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
             height: JtrResponsive.getResponsiveHeight(context, 1),
             color: AppTheme.cardBorder,
           ),
-          Expanded(
-            child: ListView(
+          Obx(
+            () => controller.isSidebarExpanded.value
+                ? Expanded(
+                    child: ListView(
               padding: JtrResponsive.getResponsivePadding(
                 context,
                 left: 12,
@@ -459,36 +477,45 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                           if (selection.messageForCourse(item.courseNumber) !=
                               null) ...[
                             JtrResponsive.getResponsiveSpacing(context, 2),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    selection.messageForCourse(
-                                      item.courseNumber,
-                                    )!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize:
-                                          JtrResponsive.getResponsiveFontSize(
-                                        context,
-                                        11,
+                            InkWell(
+                              onTap: () => controller.editMessageForCourse(
+                                context: context,
+                                courseNumber: item.courseNumber,
+                              ),
+                              borderRadius: BorderRadius.circular(
+                                JtrResponsive.getResponsiveRadius(context, 6),
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      selection.messageForCourse(
+                                        item.courseNumber,
+                                      )!,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize:
+                                            JtrResponsive.getResponsiveFontSize(
+                                          context,
+                                          11,
+                                        ),
+                                        fontWeight: FontWeight.w600,
+                                        color: AppTheme.primary,
+                                        letterSpacing: 0.3,
                                       ),
-                                      fontWeight: FontWeight.w600,
-                                      color: AppTheme.primary,
-                                      letterSpacing: 0.3,
                                     ),
                                   ),
-                                ),
-                                Icon(
-                                  Icons.keyboard_arrow_down,
-                                  size: JtrResponsive.getResponsiveSize(
-                                    context,
-                                    14,
+                                  Icon(
+                                    Icons.edit_outlined,
+                                    size: JtrResponsive.getResponsiveSize(
+                                      context,
+                                      14,
+                                    ),
+                                    color: AppTheme.primary,
                                   ),
-                                  color: AppTheme.primary,
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ],
                         ],
@@ -497,6 +524,8 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                 ],
               ],
             ),
+                  )
+                : const SizedBox.shrink(),
           ),
           Divider(
             height: JtrResponsive.getResponsiveHeight(context, 1),
@@ -510,9 +539,7 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
               right: 12,
               bottom: 12,
             ),
-            child: _SidebarToolbar(
-              onEditTap: controller.showMessagePicker,
-            ),
+            child: const _SidebarToolbar(compact: true),
           ),
         ],
       );
@@ -704,47 +731,61 @@ class _SelectionHeader extends GetView<MenuSelectionController> {
   }
 }
 
-class _SidebarToolbar extends StatelessWidget {
-  const _SidebarToolbar({this.onEditTap});
+class _SidebarToolbar extends GetView<MenuSelectionController> {
+  const _SidebarToolbar({this.compact = false});
 
-  final VoidCallback? onEditTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: JtrResponsive.getResponsivePadding(
         context,
-        left: 12,
-        top: 12,
-        right: 12,
-        bottom: 8,
+        left: compact ? 0 : 12,
+        top: compact ? 0 : 12,
+        right: compact ? 0 : 12,
+        bottom: compact ? 0 : 8,
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final gap = JtrResponsive.getResponsiveWidth(context, 8);
-          final preferredButtonSize =
-              JtrResponsive.getResponsiveSize(context, 40);
-          final maxButtonSize = (constraints.maxWidth - gap * 2) / 3;
-          final buttonSize = preferredButtonSize <= maxButtonSize
-              ? preferredButtonSize
-              : maxButtonSize;
+          final gap = JtrResponsive.getResponsiveWidth(context, 6);
+          final availableWidth = constraints.maxWidth - gap * 2;
+          final buttonSize = (availableWidth / 3).clamp(28.0, 40.0);
 
           return Row(
             children: [
-              _SidebarToolButton(
-                icon: Icons.restaurant,
-                size: buttonSize,
+              Expanded(
+                child: _SidebarToolButton(
+                  icon: Icons.restaurant,
+                  size: buttonSize,
+                  onTap: () {
+                    if (controller.hasActiveSelection) {
+                      controller.openActiveMenuChoices();
+                      return;
+                    }
+                    controller.promptSelectMenuFirst(context);
+                  },
+                ),
               ),
               SizedBox(width: gap),
-              _SidebarToolButton(
-                icon: Icons.edit_outlined,
-                onTap: onEditTap,
-                size: buttonSize,
+              Expanded(
+                child: _SidebarToolButton(
+                  icon: Icons.edit_outlined,
+                  onTap: () => controller.showMessagePicker(context: context),
+                  size: buttonSize,
+                ),
               ),
               SizedBox(width: gap),
-              _SidebarToolButton(
-                icon: Icons.keyboard_arrow_down,
-                size: buttonSize,
+              Expanded(
+                child: Obx(
+                  () => _SidebarToolButton(
+                    icon: controller.isSidebarExpanded.value
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_right,
+                    onTap: controller.toggleSidebarExpanded,
+                    size: buttonSize,
+                  ),
+                ),
               ),
             ],
           );
@@ -778,27 +819,36 @@ class _SidebarToolButton extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(buttonRadius),
-        child: Container(
-          width: buttonSize,
+        child: SizedBox(
           height: buttonSize,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(buttonRadius),
-            border: Border.all(color: AppTheme.cardBorder),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: JtrResponsive.getResponsiveSize(context, 4),
-                offset: Offset(
-                  0,
-                  JtrResponsive.getResponsiveHeight(context, 1),
-                ),
+          width: double.infinity,
+          child: Center(
+            child: Container(
+              width: buttonSize,
+              height: buttonSize,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(buttonRadius),
+                border: Border.all(color: AppTheme.cardBorder),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: JtrResponsive.getResponsiveSize(context, 4),
+                    offset: Offset(
+                      0,
+                      JtrResponsive.getResponsiveHeight(context, 1),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Icon(
-            icon,
-            size: iconSize,
-            color: AppTheme.textSecondary,
+              child: Icon(
+                icon,
+                size: iconSize,
+                color: icon == Icons.keyboard_arrow_down ||
+                        icon == Icons.keyboard_arrow_right
+                    ? AppTheme.toolbarPanel
+                    : AppTheme.toolbarIconColor(icon),
+              ),
+            ),
           ),
         ),
       ),
@@ -1075,7 +1125,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             onPressed: () => Get.offAllNamed(AppRoutes.session),
             icon: Icon(
               Icons.home,
-              color: AppTheme.primary,
+              color: AppTheme.toolbarIconColor(Icons.home),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),
@@ -1086,7 +1136,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             ),
             icon: Icon(
               Icons.arrow_back,
-              color: AppTheme.darkText,
+              color: AppTheme.toolbarIconColor(Icons.arrow_back),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),
@@ -1094,7 +1144,7 @@ class _SelectionBottomNav extends GetView<MenuSelectionController> {
             onPressed: AppNavigation.logout,
             icon: Icon(
               Icons.logout,
-              color: const Color(0xFF2EC4B6),
+              color: AppTheme.toolbarIconColor(Icons.logout),
               size: JtrResponsive.getResponsiveSize(context, 28),
             ),
           ),

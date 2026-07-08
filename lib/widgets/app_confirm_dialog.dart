@@ -20,20 +20,28 @@ class AppConfirmDialog extends StatelessWidget {
     required String title,
     required String message,
     VoidCallback? onConfirm,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      AppConfirmDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: AppTheme.dialogBarrier,
+      builder: (_) => AppConfirmDialog(
         title: title,
         message: message,
         onConfirm: onConfirm,
       ),
-      barrierDismissible: false,
-      barrierColor: AppTheme.dialogBarrier,
     );
   }
 
-  void _confirm() {
-    Get.back();
+  void _confirm(BuildContext context) {
+    Navigator.of(context, rootNavigator: true).pop();
     onConfirm?.call();
   }
 
@@ -80,7 +88,8 @@ class AppConfirmDialog extends StatelessWidget {
                 child: Row(
                   children: [
                     _HeaderIconButton(
-                      onTap: () => Get.back(),
+                      onTap: () =>
+                          Navigator.of(context, rootNavigator: true).pop(),
                       child: Icon(
                         Icons.chevron_left,
                         color: AppTheme.darkText,
@@ -102,7 +111,7 @@ class AppConfirmDialog extends StatelessWidget {
                       ),
                     ),
                     _HeaderIconButton(
-                      onTap: _confirm,
+                      onTap: () => _confirm(context),
                       backgroundColor: AppTheme.lightButton,
                       child: Icon(
                         Icons.check,

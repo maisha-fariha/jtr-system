@@ -309,7 +309,8 @@ class _OrderRow extends GetView<SessionController> {
             extentRatio: 0.14,
             children: [
               SlidableAction(
-                onPressed: (_) => controller.requestDeleteOrder(order.number),
+                onPressed: (_) =>
+                    controller.requestDeleteOrder(order.number, context: context),
                 backgroundColor: AppTheme.background,
                 foregroundColor: const Color(0xFFE74C3C),
                 icon: CupertinoIcons.delete,
@@ -323,7 +324,8 @@ class _OrderRow extends GetView<SessionController> {
             extentRatio: 0.14,
             children: [
               SlidableAction(
-                onPressed: (_) => controller.requestApplyOffer(order.number),
+                onPressed: (_) =>
+                    controller.requestApplyOffer(order.number, context: context),
                 backgroundColor: AppTheme.background,
                 foregroundColor: AppTheme.primary,
                 icon: Icons.local_offer_outlined,
@@ -700,11 +702,11 @@ class _ActionButtons extends GetView<SessionController> {
                   onTap: () {
                     final action = _actions[i].action;
                     if (action == SessionAction.ticket) {
-                      controller.printTicket();
+                      controller.printTicket(context: context);
                     } else if (action == SessionAction.nouvelleCommande) {
-                      controller.showTableNumberDialog();
+                      controller.showTableNumberDialog(context: context);
                     } else if (action == SessionAction.demanderSuite) {
-                      controller.requestNextCourse();
+                      controller.requestNextCourse(context: context);
                     } else if (action == SessionAction.statistics) {
                       controller.openStatistics();
                     } else {
@@ -741,7 +743,9 @@ class _ActionButton extends StatelessWidget {
     final backgroundColor =
         isActive ? AppTheme.primary : AppTheme.inactiveSurface;
     final labelColor = isActive ? Colors.white : AppTheme.darkText;
-    final iconColor = isActive ? Colors.white : AppTheme.actionIcon;
+    final iconColor = isActive
+        ? Colors.white
+        : AppTheme.toolbarIconColor(icon);
     final responsiveIconSize = JtrResponsive.getResponsiveSize(context, iconSize);
 
     return GestureDetector(

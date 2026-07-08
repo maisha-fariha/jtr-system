@@ -18,4 +18,25 @@ abstract class ApiEnvelope<T> with _$ApiEnvelope<T> {
     T Function(Object? json) fromJsonT,
   ) =>
       _$ApiEnvelopeFromJson(json, fromJsonT);
+
+  /// Tolerant parser for endpoints that omit `status` or `success`.
+  factory ApiEnvelope.parseResponse(
+    Map<String, dynamic> json, {
+    T Function(Object? json)? fromJsonT,
+  }) {
+    final rawSuccess = json['success'];
+    final success = rawSuccess is bool
+        ? rawSuccess
+        : json['message'] == null;
+
+    return ApiEnvelope(
+      success: success,
+      status: (json['status'] as num?)?.toInt() ?? 200,
+      locale: json['locale'] as String?,
+      message: json['message'] as String?,
+      data: json['data'] == null
+          ? null
+          : (fromJsonT != null ? fromJsonT(json['data']) : json['data'] as T?),
+    );
+  }
 }

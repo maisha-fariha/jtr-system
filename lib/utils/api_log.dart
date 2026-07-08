@@ -2,6 +2,90 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+/// Trace logs for order create / add-item flow (always printed).
+void logOrderFlow(String message) {
+  final line = '[ORDER_FLOW] $message';
+  print(line);
+  debugPrint(line);
+}
+
+/// Logs POST /api/orders to the console (uses [print] so it always appears).
+void logOrderPost({
+  required String phase,
+  Object? request,
+  Object? response,
+  int? statusCode,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ POST /api/orders [$phase]'
+        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(request));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(response));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('ERROR:')
+      ..writeln(error);
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
+/// Ticket/receipt print trace (always printed — useful without a physical POS).
+void logTicketPrint({
+  required String phase,
+  Object? request,
+  Object? response,
+  int? statusCode,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ TICKET $phase'
+        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(request));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(response));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('STATUS: ERREUR')
+      ..writeln('ERROR:')
+      ..writeln(error);
+  } else if (response != null) {
+    buffer.writeln('STATUS: OK');
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
 /// Logs API request/response to the debug console (visible in `flutter run`).
 void logApiCall({
   required String method,

@@ -20,14 +20,22 @@ class MenuMessagePickerDialog extends StatelessWidget {
   static Future<void> show({
     required List<MenuMessageTarget> items,
     MenuMessageTargetCallback? onItemSelected,
+    BuildContext? context,
   }) {
-    return Get.dialog(
-      MenuMessagePickerDialog(
+    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    if (dialogContext == null || !dialogContext.mounted) {
+      return Future.value();
+    }
+
+    return showDialog<void>(
+      context: dialogContext,
+      useRootNavigator: true,
+      barrierDismissible: false,
+      barrierColor: AppTheme.dialogBarrier,
+      builder: (_) => MenuMessagePickerDialog(
         items: items,
         onItemSelected: onItemSelected,
       ),
-      barrierDismissible: false,
-      barrierColor: AppTheme.dialogBarrier,
     );
   }
 
@@ -74,7 +82,8 @@ class MenuMessagePickerDialog extends StatelessWidget {
                 child: Row(
                   children: [
                     _HeaderIconButton(
-                      onTap: () => Get.back(),
+                      onTap: () =>
+                          Navigator.of(context, rootNavigator: true).pop(),
                       child: Icon(
                         Icons.chevron_left,
                         color: AppTheme.darkText,
@@ -113,7 +122,7 @@ class MenuMessagePickerDialog extends StatelessWidget {
                       _MessageTargetButton(
                         label: items[i].label,
                         onTap: () {
-                          Get.back();
+                          Navigator.of(context, rootNavigator: true).pop();
                           onItemSelected?.call(items[i]);
                         },
                       ),

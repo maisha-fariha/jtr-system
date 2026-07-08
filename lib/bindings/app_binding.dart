@@ -61,7 +61,9 @@ class AppBinding extends Bindings {
         remote: Get.find<OrderRemoteDataSource>(),
         local: Get.find<OrderLocalDataSource>(),
         sessionRemote: Get.find<SessionRemoteDataSource>(),
+        sessionLocal: Get.find<SessionLocalDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
+        catalog: Get.find<CatalogRepository>(),
       ),
       fenix: true,
     );

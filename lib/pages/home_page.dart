@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
+import '../core/config/api_config.dart';
 import '../controllers/theme_controller.dart';
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -64,7 +66,11 @@ class HomePage extends StatelessWidget {
               PopupMenuButton<String>(
                 icon: Icon(Icons.more_vert, color: AppTheme.primary),
                 color: AppTheme.background,
-                onSelected: (_) {},
+                onSelected: (value) {
+                  if (value == 'about') {
+                    _showAboutDialog(context);
+                  }
+                },
                 itemBuilder: (context) => [
                   PopupMenuItem(
                     value: 'about',
@@ -94,7 +100,14 @@ class HomePage extends StatelessWidget {
                       width: double.infinity,
                       height: JtrResponsive.getResponsiveHeight(context, 56),
                       child: ElevatedButton(
-                        onPressed: () => Get.toNamed(AppRoutes.connect),
+                        onPressed: () {
+                          final auth = Get.find<AuthRepository>();
+                          if (auth.isAuthenticated) {
+                            Get.offNamed(AppRoutes.session);
+                            return;
+                          }
+                          Get.toNamed(AppRoutes.connect);
+                        },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppTheme.primary,
                           foregroundColor: Colors.white,
@@ -176,4 +189,77 @@ class HomePage extends StatelessWidget {
       );
     });
   }
+}
+
+void _showAboutDialog(BuildContext context) {
+  final radius = JtrResponsive.getResponsiveRadius(context, 16);
+
+  showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Dialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(radius),
+      ),
+      child: Padding(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 24,
+          vertical: 22,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'JTR POS',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 20),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.primary,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 8),
+            Text(
+              'Version 1.0.0',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
+                color: AppTheme.darkText,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 12),
+            Text(
+              'API: ${ApiConfig.baseUrl}',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            Text(
+              'Tenant: ${ApiConfig.tenantSchema}',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                color: AppTheme.textSecondary,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 16),
+            const AppFooter(),
+            JtrResponsive.getResponsiveSpacing(context, 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(
+                  'Fermer',
+                  style: TextStyle(
+                    color: AppTheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

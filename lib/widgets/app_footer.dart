@@ -54,7 +54,6 @@ class AppFooter extends StatelessWidget {
                     decoration: TextDecoration.underline,
                   ),
                 ),
-                const TextSpan(text: ' "to be modified"'),
               ],
             ),
           ),

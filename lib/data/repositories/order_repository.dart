@@ -1,28 +1,39 @@
+import 'package:flutter/foundation.dart';
+
 import '../../core/network/api_exception.dart';
+import '../../core/network/api_endpoints.dart';
 import '../../models/session_order.dart';
+import '../../models/order_display_entry.dart';
 import '../models/create_table_order_result.dart';
 import '../../services/connectivity_service.dart';
 import '../datasources/order_local_datasource.dart';
 import '../datasources/order_remote_datasource.dart';
 import '../datasources/session_datasource.dart';
-import '../mappers/order_mapper.dart';
 import '../../utils/api_log.dart';
+import '../mappers/order_mapper.dart';
+import 'catalog_repository.dart';
 
 class OrderRepository {
   OrderRepository({
     required OrderRemoteDataSource remote,
     required OrderLocalDataSource local,
     required SessionRemoteDataSource sessionRemote,
+    required SessionLocalDataSource sessionLocal,
     required ConnectivityService connectivity,
+    required CatalogRepository catalog,
   })  : _remote = remote,
         _local = local,
         _sessionRemote = sessionRemote,
-        _connectivity = connectivity;
+        _sessionLocal = sessionLocal,
+        _connectivity = connectivity,
+        _catalog = catalog;
 
   final OrderRemoteDataSource _remote;
   final OrderLocalDataSource _local;
   final SessionRemoteDataSource _sessionRemote;
+  final SessionLocalDataSource _sessionLocal;
   final ConnectivityService _connectivity;
+  final CatalogRepository _catalog;
 
   /// Last create-order debug trace (for on-screen error/success dialog).
   String? lastCreateOrderLog;
@@ -30,14 +41,39 @@ class OrderRepository {
   /// Last add-item debug trace.
   String? lastAddItemLog;
 
+  /// Last payment debug trace.
+  String? lastPaymentLog;
+
+  /// Last payment-modes fetch debug trace.
+  String? lastPaymentModesLog;
+
+  /// Last ticket/receipt print debug trace.
+  String? lastPrintLog;
+
+  List<Map<String, dynamic>> _cachedPaymentModes = [];
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
-  Future<SessionOrder> getOrderDetail(int orderId) async {
+  Future<SessionOrder> getOrderDetail(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     final online = await _connectivity.isOnline;
 
     if (online) {
       final detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
-      return OrderMapper.fromOrderDetail(detail);
+
+      final countHint = previousDisplayEntries == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+      final order = OrderMapper.fromOrderDetail(
+        detail,
+        suivreCountHint: countHint,
+      );
+
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+      return order;
     }
 
     final cached = _local.readOrderDetail(orderId);
@@ -50,15 +86,100 @@ class OrderRepository {
     );
   }
 
-  Future<void> closeOrder(int orderId) async {
+  Future<void> persistSuivreSplitHint(int orderId, List<int> splitPositions) async {
+    if (orderId <= 0) return;
+    await _local.saveSuivreSplitHint(orderId, splitPositions);
+  }
+
+  Future<void> persistSuivreLayoutHints(
+    int orderId,
+    List<OrderDisplayEntry> displayEntries,
+  ) async {
+    if (orderId <= 0) return;
+    await _persistSuivreLayoutHints(orderId, displayEntries);
+  }
+
+  Future<void> _persistSuivreLayoutHints(
+    int orderId,
+    List<OrderDisplayEntry> displayEntries,
+  ) async {
+    final splits = OrderMapper.suivreSplitPositions(displayEntries);
+    final count = OrderMapper.suivreSeparatorCount(displayEntries);
+    await _local.saveSuivreSplitHint(orderId, splits);
+    await _local.saveSuivreCountHint(orderId, count);
+  }
+
+  Future<void> closeOrder(
+    int orderId, {
+    String? tableNumber,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    await _remote.closeOrder(orderId);
-    await _local.removeOrderDetail(orderId);
+    final tableId = await _resolveTableIdForClose(
+      orderId: orderId,
+      tableNumber: tableNumber,
+    );
+
+    if (orderId > 0) {
+      await _remote.closeOrder(orderId);
+      await _local.removeOrderDetail(orderId);
+      await _sessionLocal.removeOpenOrderFromList(orderId);
+    }
+
+    if (tableId != null && tableId > 0) {
+      try {
+        await _remote.endTableSession(tableId);
+      } on ApiException catch (error) {
+        if (orderId <= 0) rethrow;
+        final message = error.message.toLowerCase();
+        if (!message.contains('session') && !message.contains('404')) {
+          rethrow;
+        }
+      }
+    }
+  }
+
+  Future<void> endTableSession(int tableId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    await _remote.endTableSession(tableId);
+  }
+
+  Future<int?> _resolveTableIdForClose({
+    required int orderId,
+    String? tableNumber,
+  }) async {
+    if (orderId < 0) return -orderId;
+
+    if (orderId > 0) {
+      try {
+        final detail = await _remote.fetchOrderDetail(orderId);
+        final tableId = (detail['table_id'] as num?)?.toInt();
+        if (tableId != null && tableId > 0) return tableId;
+      } catch (_) {}
+    }
+
+    if (tableNumber == null || tableNumber.isEmpty) return null;
+
+    try {
+      final tables = await _sessionRemote.fetchTablesList();
+      final normalized = OrderMapper.normalizeTableKey(tableNumber);
+      return OrderMapper.resolveTableId(tables, normalized) ??
+          OrderMapper.resolveTableId(
+            tables,
+            OrderMapper.tableDisplayNumber(normalized),
+          );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<SessionOrder> applyTableOffer(int orderId) async {
@@ -82,6 +203,9 @@ class OrderRepository {
     required List<Map<String, dynamic>> tables,
     int? salesZoneId,
   }) async {
+    logOrderFlow(
+      'createTableOrder START table=$tableNumber guests=$numberOfGuests waiter=$waiterId',
+    );
     final apiLog = StringBuffer();
 
     if (!await _connectivity.isOnline) {
@@ -114,7 +238,7 @@ class OrderRepository {
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
 
-    final orderId = await _createOrderOnTable(
+    var orderId = await _createOrderOnTable(
       table: table,
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
@@ -124,21 +248,29 @@ class OrderRepository {
     );
 
     if (orderId == null || orderId <= 0) {
-      lastCreateOrderLog = apiLog.toString();
-      throw ApiException(
-        message:
-            'Commande créée mais introuvable. Tirez pour rafraîchir la liste.',
+      apiLog.writeln(
+        '── POST /api/orders échoué — commande créée au premier article ──',
       );
+      final order = OrderMapper.buildSessionPlaceholderOrder(
+        tableNumber: table.tableNumber,
+        numberOfGuests: numberOfGuests,
+      );
+      lastCreateOrderLog = apiLog.toString();
+      logOrderFlow(
+        'createTableOrder END session-only table=$tableNumber (POST /api/orders on first item)',
+      );
+      return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
     }
 
     apiLog.writeln('── GET /api/orders/$orderId (seat_orders) ──');
     final detail = await _remote.fetchOrderDetail(orderId);
     await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
     apiLog.writeln(formatApiPayload(detail));
 
-    final displayNumber = OrderMapper.tableDisplayNumber('${table.tableNumber}');
-    final order =
-        OrderMapper.fromOrderDetail(detail).copyWith(number: displayNumber);
+    final order = OrderMapper.fromOrderDetail(detail).copyWith(
+      id: orderId,
+    );
 
     apiLog
       ..writeln()
@@ -146,7 +278,48 @@ class OrderRepository {
       ..writeln('orderId=${order.id}, affichage=${order.number}');
 
     lastCreateOrderLog = apiLog.toString();
+    logOrderFlow('createTableOrder END orderId=$orderId table=$tableNumber');
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
+  }
+
+  /// When POST returned an error but the backend may have created the order.
+  Future<CreateTableOrderResult?> tryRecoverCreatedOrder({
+    required String tableNumber,
+  }) async {
+    if (!await _connectivity.isOnline) return null;
+
+    try {
+      final tables = await _sessionRemote.fetchTablesList();
+      final normalized = OrderMapper.normalizeTableKey(tableNumber);
+      final table = OrderMapper.resolveTable(tables, normalized) ??
+          OrderMapper.resolveTable(
+            tables,
+            OrderMapper.tableDisplayNumber(normalized),
+          );
+      if (table == null) return null;
+
+      final orderId = await _resolveOrderIdForTable(
+        tableId: table.id,
+        tableNumber: table.tableNumber,
+        initialTables: tables,
+      );
+      if (orderId == null || orderId <= 0) return null;
+
+      final detail = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, detail);
+      await _sessionLocal.upsertOpenOrderInList(detail);
+
+      final order = OrderMapper.fromOrderDetail(detail).copyWith(
+        id: orderId,
+      );
+
+      return CreateTableOrderResult(
+        order: order,
+        apiLog: '── Commande récupérée après erreur POST: $orderId ──',
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<int?> _createOrderOnTable({
@@ -157,71 +330,54 @@ class OrderRepository {
     required List<Map<String, dynamic>> tables,
     required StringBuffer apiLog,
   }) async {
-    final orderPayload = OrderMapper.buildCreateOrderPayload(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: table.id,
-      salesZoneId: salesZoneId,
+    logOrderFlow(
+      '_createOrderOnTable table=${table.tableNumber} id=${table.id}',
     );
-
     apiLog
       ..writeln('── Données table (GET /api/tables/list) ──')
       ..writeln('table_id=${table.id}')
       ..writeln('table_number=${table.tableNumber}')
       ..writeln('status=${table.status ?? '—'}')
-      ..writeln('sales_zone_id=${salesZoneId ?? '—'}')
-      ..writeln()
-      ..writeln('── POST /api/orders payload ──')
-      ..writeln(formatApiPayload(orderPayload));
+      ..writeln('sales_zone_id=${salesZoneId ?? '—'}');
 
-    Map<String, dynamic>? created;
-    _remote.lastApiLog = null;
-    try {
-      created = await _remote.createOrder(orderPayload);
-      apiLog.writeln('── Via POST /api/orders ──');
-    } on ApiException catch (orderError) {
-      apiLog.writeln('── POST /api/orders échoué ──');
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
-      apiLog.writeln('Raison: ${orderError.message}');
-      created = await _startTableSessionFallback(
+    // 1. POST /api/orders first (main API for opening a table).
+    logOrderFlow('POST /api/orders FIRST (before session)');
+    var orderId = await _postCreateOrderRecord(
+      table: table,
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      salesZoneId: salesZoneId,
+      apiLog: apiLog,
+    );
+    if (orderId != null && orderId > 0) {
+      logOrderFlow('POST /api/orders OK before session → orderId=$orderId');
+      await _tryStartTableSession(
         table: table,
         waiterId: waiterId,
         numberOfGuests: numberOfGuests,
         apiLog: apiLog,
       );
-    }
-
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
-
-    var orderId = created == null
-        ? null
-        : OrderMapper.extractOrderIdFromPayload(created);
-
-    if (orderId != null && orderId > 0) {
       return orderId;
     }
 
-    apiLog.writeln('── Order id absent après POST /api/orders ──');
-    created = await _startTableSessionFallback(
+    // 2. Open session, then retry POST /api/orders.
+    await _tryStartTableSession(
       table: table,
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
       apiLog: apiLog,
     );
 
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
-
-    orderId = created == null
-        ? null
-        : OrderMapper.extractOrderIdFromPayload(created);
-
+    logOrderFlow('POST /api/orders RETRY (after session)');
+    orderId = await _postCreateOrderRecord(
+      table: table,
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      salesZoneId: salesZoneId,
+      apiLog: apiLog,
+    );
     if (orderId != null && orderId > 0) {
+      logOrderFlow('POST /api/orders OK after session → orderId=$orderId');
       return orderId;
     }
 
@@ -229,54 +385,316 @@ class OrderRepository {
       tableId: table.id,
       tableNumber: table.tableNumber,
       initialTables: tables,
+      maxAttempts: 2,
     );
     if (orderId != null && orderId > 0) {
       apiLog.writeln('── Order id résolu via GET /api/tables/list: $orderId ──');
       return orderId;
     }
 
-    orderId = OrderMapper.activeOrderIdForTableId(tables, table.id);
-    if (orderId != null && orderId > 0) {
-      apiLog.writeln('── Order id depuis tables list: $orderId ──');
-    }
-
-    return orderId;
+    return null;
   }
 
-  Future<Map<String, dynamic>?> _startTableSessionFallback({
+  Future<int?> _postCreateOrderRecord({
+    required ResolvedTable table,
+    required int waiterId,
+    required int numberOfGuests,
+    required int? salesZoneId,
+    required StringBuffer apiLog,
+  }) async {
+    final defaultProduct = await _catalog.resolveDefaultOrderProduct();
+    if (defaultProduct == null) {
+      logOrderFlow(
+        'POST /api/orders ABORT no default product in catalog for seat_orders.items',
+      );
+      apiLog.writeln(
+        '── Aucun produit simple disponible pour POST /api/orders (seat_orders.items requis) ──',
+      );
+      return null;
+    }
+
+    logOrderFlow(
+      'POST /api/orders default product id=${defaultProduct.id} '
+      '${defaultProduct.name} price=${defaultProduct.unitPrice}',
+    );
+    apiLog.writeln(
+      '── Produit par défaut: id=${defaultProduct.id}, '
+      '${defaultProduct.name}, ${defaultProduct.unitPrice} ──',
+    );
+
+    final payloads = OrderMapper.createOrderPayloadCandidates(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: salesZoneId,
+      productId: defaultProduct.id,
+      unitPrice: defaultProduct.unitPrice,
+    );
+
+    for (var i = 0; i < payloads.length; i++) {
+      final payload = payloads[i];
+      apiLog
+        ..writeln()
+        ..writeln('── POST /api/orders (tentative ${i + 1}/${payloads.length}) ──')
+        ..writeln(formatApiPayload(payload));
+
+      logOrderFlow(
+        'POST /api/orders attempt ${i + 1}/${payloads.length} table_id=${table.id}',
+      );
+
+      _remote.lastApiLog = null;
+      try {
+        final created = await _remote.createOrder(payload);
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+
+        final orderId = OrderMapper.extractOrderIdFromPayload(created);
+        if (orderId != null && orderId > 0) {
+          apiLog.writeln('── Commande créée via POST /api/orders: $orderId ──');
+          logOrderFlow('POST /api/orders SUCCESS orderId=$orderId');
+          return orderId;
+        }
+        apiLog.writeln('── Réponse POST sans order id ──');
+      } on ApiException catch (orderError) {
+        apiLog.writeln('── POST /api/orders échoué ──');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        apiLog.writeln('Raison: ${orderError.message}');
+        logOrderFlow('POST /api/orders FAILED: ${orderError.message}');
+      }
+    }
+
+    return null;
+  }
+
+  Future<void> _tryStartTableSession({
     required ResolvedTable table,
     required int waiterId,
     required int numberOfGuests,
     required StringBuffer apiLog,
   }) async {
+    logOrderFlow('POST /api/tables/${table.id}/session START');
     final sessionPayload = OrderMapper.buildStartTableSessionPayload(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
     );
 
+    apiLog
+      ..writeln()
+      ..writeln('── POST /api/tables/${table.id}/session payload ──')
+      ..writeln(formatApiPayload(sessionPayload));
+
     _remote.lastApiLog = null;
     try {
-      final created = await _remote.startTableSession(table.id, sessionPayload);
-      apiLog.writeln('── Fallback POST /api/tables/${table.id}/session ──');
-      return created;
+      await _remote.startTableSession(table.id, sessionPayload);
+      logOrderFlow('POST /api/tables/${table.id}/session OK');
+      apiLog.writeln('── Via POST /api/tables/${table.id}/session ──');
     } on ApiException catch (sessionError) {
+      logOrderFlow(
+        'POST /api/tables/${table.id}/session FAILED: ${sessionError.message}',
+      );
       apiLog.writeln('── POST /api/tables/${table.id}/session échoué ──');
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
       apiLog.writeln('Raison: ${sessionError.message}');
-      rethrow;
     }
+
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+  }
+
+  /// Finds the active order id for a table display key (e.g. `T5` or `5`).
+  Future<int?> resolveOrderIdForTableNumber(String tableNumber) async {
+    if (!await _connectivity.isOnline) return null;
+
+    try {
+      final tables = await _sessionRemote.fetchTablesList();
+      final normalized = OrderMapper.normalizeTableKey(tableNumber);
+      final table = OrderMapper.resolveTable(tables, normalized) ??
+          OrderMapper.resolveTable(
+            tables,
+            OrderMapper.tableDisplayNumber(normalized),
+          );
+      if (table == null) return null;
+
+      return _resolveOrderIdForTable(
+        tableId: table.id,
+        tableNumber: table.tableNumber,
+        initialTables: tables,
+        maxAttempts: 2,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Creates a real order with the first simple product when only a session exists.
+  Future<SessionOrder> createOrderWithFirstSimpleProduct({
+    required String tableNumber,
+    required int waiterId,
+    required int productId,
+    required double unitPrice,
+    int qty = 1,
+    String comment = '',
+  }) async {
+    logOrderFlow(
+      'createOrderWithFirstSimpleProduct START table=$tableNumber product=$productId waiter=$waiterId',
+    );
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Création impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final tables = await _sessionRemote.fetchTablesList();
+    final normalized = OrderMapper.normalizeTableKey(tableNumber);
+    final table = OrderMapper.resolveTable(tables, normalized) ??
+        OrderMapper.resolveTable(
+          tables,
+          OrderMapper.tableDisplayNumber(normalized),
+        );
+    if (table == null) {
+      throw ApiException(message: 'Table introuvable.');
+    }
+
+    final guests = OrderMapper.guestsForTable(tables, table.id);
+    final salesZoneId = OrderMapper.inferSalesZoneId(tables, table: table);
+    final payload = OrderMapper.buildCreateOrderWithItemPayload(
+      waiterId: waiterId,
+      numberOfGuests: guests,
+      productId: productId,
+      unitPrice: unitPrice,
+      tableId: table.id,
+      salesZoneId: salesZoneId,
+      qty: qty,
+      comment: comment,
+    );
+
+    if (kDebugMode) {
+      print('ORDER POST: createOrderWithFirstSimpleProduct table=$tableNumber');
+    }
+    logOrderFlow('createOrderWithFirstSimpleProduct → POST /api/orders');
+    final created = await _remote.createOrder(payload);
+    var orderId = OrderMapper.extractOrderIdFromPayload(created);
+    orderId ??= await _resolveOrderIdForTable(
+      tableId: table.id,
+      tableNumber: table.tableNumber,
+      initialTables: tables,
+      maxAttempts: 2,
+    );
+    if (orderId == null || orderId <= 0) {
+      throw ApiException(
+        message: 'Impossible de créer la commande avec cet article.',
+      );
+    }
+
+    final detail = OrderMapper.orderIdFromDetail(
+              OrderMapper.unwrapOrderDetail(created),
+            ) ==
+            orderId
+        ? OrderMapper.unwrapOrderDetail(created)
+        : await _remote.fetchOrderDetail(orderId);
+
+    await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
+
+    return OrderMapper.fromOrderDetail(detail).copyWith(
+      id: orderId,
+    );
+  }
+
+  /// Creates a real order with the first composed product when only a session exists.
+  Future<SessionOrder> createOrderWithFirstComposedProduct({
+    required String tableNumber,
+    required int waiterId,
+    required int productId,
+    required double basePrice,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+  }) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Création impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final tables = await _sessionRemote.fetchTablesList();
+    final normalized = OrderMapper.normalizeTableKey(tableNumber);
+    final table = OrderMapper.resolveTable(tables, normalized) ??
+        OrderMapper.resolveTable(
+          tables,
+          OrderMapper.tableDisplayNumber(normalized),
+        );
+    if (table == null) {
+      throw ApiException(message: 'Table introuvable.');
+    }
+
+    final supplement = menuSelections.fold<double>(
+      0,
+      (sum, selection) {
+        final price = selection['price'];
+        if (price is num) return sum + price.toDouble();
+        return sum +
+            (double.tryParse(price?.toString().replaceAll(',', '.') ?? '') ??
+                0);
+      },
+    );
+
+    final guests = OrderMapper.guestsForTable(tables, table.id);
+    final salesZoneId = OrderMapper.inferSalesZoneId(tables, table: table);
+    final payload = OrderMapper.buildCreateOrderWithItemPayload(
+      waiterId: waiterId,
+      numberOfGuests: guests,
+      productId: productId,
+      unitPrice: basePrice + supplement,
+      tableId: table.id,
+      salesZoneId: salesZoneId,
+      comment: comment,
+      menuSelections: menuSelections,
+    );
+
+    final created = await _remote.createOrder(payload);
+    var orderId = OrderMapper.extractOrderIdFromPayload(created);
+    orderId ??= await _resolveOrderIdForTable(
+      tableId: table.id,
+      tableNumber: table.tableNumber,
+      initialTables: tables,
+      maxAttempts: 2,
+    );
+    if (orderId == null || orderId <= 0) {
+      throw ApiException(
+        message: 'Impossible de créer la commande avec cet article.',
+      );
+    }
+
+    final detail = OrderMapper.orderIdFromDetail(
+              OrderMapper.unwrapOrderDetail(created),
+            ) ==
+            orderId
+        ? OrderMapper.unwrapOrderDetail(created)
+        : await _remote.fetchOrderDetail(orderId);
+
+    await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
+
+    return OrderMapper.fromOrderDetail(detail).copyWith(
+      id: orderId,
+    );
   }
 
   Future<int?> _resolveOrderIdForTable({
     required int tableId,
     int? tableNumber,
     List<Map<String, dynamic>>? initialTables,
+    int maxAttempts = 5,
   }) async {
-    for (var attempt = 0; attempt < 5; attempt++) {
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0) {
-        await Future.delayed(Duration(milliseconds: 350 * attempt));
+        await Future.delayed(Duration(milliseconds: 250 * attempt));
       }
 
       final tables = attempt == 0 && initialTables != null
@@ -297,7 +715,10 @@ class OrderRepository {
     return null;
   }
 
-  Future<void> requestNextCourses(int orderId) async {
+  Future<SessionOrder> requestNextCourses(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
@@ -307,24 +728,161 @@ class OrderRepository {
     final detail = await _remote.fetchOrderDetail(orderId);
     final courseIds = OrderMapper.extractRequestableCourseIds(detail);
     if (courseIds.isEmpty) {
-      throw ApiException(message: 'Aucune suite à demander pour cette table.');
+      throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 
     await _remote.requestCourses(orderId, courseIds);
-    await _local.saveOrderDetail(orderId, detail);
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
   }
 
-  Future<SessionOrder> markOrderPrinted(int orderId) async {
+  Future<SessionOrder> requestCourseForSuivreSection(
+    int orderId, {
+    required int courseNumber,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Demande impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+      detail,
+      courseNumber: courseNumber,
+    );
+    if (courseIds.isEmpty) {
+      throw ApiException(
+        message: OrderMapper.describeWhySuivreSectionNotRequestable(
+          detail,
+          courseNumber: courseNumber,
+        ),
+      );
+    }
+
+    await _remote.requestCourses(orderId, courseIds);
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+  }
+
+  Future<SessionOrder> markOrderPrinted(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    final apiLog = StringBuffer();
+    lastPrintLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastPrintLog = 'Hors ligne — impression ticket impossible.';
       throw ApiException(
         message: 'Impression impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    await _remote.markOrderPrinted(orderId);
-    final detail = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, detail);
-    return OrderMapper.fromOrderDetail(detail);
+    apiLog.writeln('── Impression ticket ──');
+    apiLog.writeln('order_id=$orderId');
+
+    try {
+      final requestBody = {
+        'order_id': orderId,
+        'type': 'preview',
+        'mark_printed': true,
+      };
+      apiLog.writeln('── POST ${ApiEndpoints.generateReceipt} ──');
+      apiLog.writeln(formatApiPayload(requestBody));
+      final response = await _remote.generateReceipt(orderId);
+      apiLog.writeln('STATUS: OK');
+      apiLog.writeln('RESPONSE:');
+      apiLog.writeln(formatApiPayload(response));
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      logTicketPrint(
+        phase: 'generate',
+        request: requestBody,
+        response: response,
+        statusCode: 200,
+      );
+
+      final order = await getOrderDetail(
+        orderId,
+        previousDisplayEntries: previousDisplayEntries,
+      );
+      apiLog.writeln('receipt_print_count=${order.impressionCount}');
+      lastPrintLog = apiLog.toString();
+      return order;
+    } on ApiException catch (e) {
+      apiLog.writeln('STATUS: ERREUR (generate)');
+      apiLog.writeln('MESSAGE: ${e.message}');
+      lastPrintLog = apiLog.toString();
+      logTicketPrint(
+        phase: 'generate',
+        request: {
+          'order_id': orderId,
+          'type': 'preview',
+          'mark_printed': true,
+        },
+        statusCode: e.statusCode,
+        error: e.message,
+      );
+      apiLog.writeln('generate failed, fallback mark-printed: ${e.message}');
+      try {
+        final fallbackBody = {'order_id': orderId};
+        apiLog.writeln('── POST ${ApiEndpoints.markOrderPrinted} ──');
+        apiLog.writeln(formatApiPayload(fallbackBody));
+        final response = await _remote.markOrderPrinted(orderId);
+        apiLog.writeln('STATUS: OK (fallback mark-printed)');
+        apiLog.writeln('RESPONSE:');
+        apiLog.writeln(formatApiPayload(response));
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        logTicketPrint(
+          phase: 'mark-printed',
+          request: fallbackBody,
+          response: response,
+          statusCode: 200,
+        );
+
+        final order = await getOrderDetail(
+          orderId,
+          previousDisplayEntries: previousDisplayEntries,
+        );
+        apiLog.writeln('receipt_print_count=${order.impressionCount}');
+        lastPrintLog = apiLog.toString();
+        return order;
+      } on ApiException catch (fallbackError) {
+        apiLog.writeln('STATUS: ERREUR (fallback)');
+        apiLog.writeln('ERREUR: ${fallbackError.message}');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        logTicketPrint(
+          phase: 'mark-printed',
+          request: {'order_id': orderId},
+          statusCode: fallbackError.statusCode,
+          error: fallbackError.message,
+        );
+        lastPrintLog = apiLog.toString();
+        rethrow;
+      }
+    } catch (e) {
+      apiLog.writeln('STATUS: ERREUR (inattendue)');
+      apiLog.writeln('$e');
+      lastPrintLog = apiLog.toString();
+      logTicketPrint(
+        phase: 'ticket',
+        request: {'order_id': orderId},
+        error: e.toString(),
+      );
+      if (e is ApiException) rethrow;
+      throw ApiException(message: 'Erreur ticket: $e');
+    }
   }
 
   Future<SessionOrder> addSimpleProductToOrder({
@@ -333,6 +891,7 @@ class OrderRepository {
     required double unitPrice,
     int qty = 1,
     String comment = '',
+    List<OrderDisplayEntry>? layoutHints,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -350,32 +909,93 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: layoutHints,
+      );
+      final course = OrderMapper.resolveAppendCourse(
+        detail,
+        seatNumber: seatNumber,
+        suivreSectionCount: suivreHints.count,
+        suivreSplitHints: suivreHints.splits,
+        layoutHints: layoutHints,
+      );
 
-      _ensureAddItemCourse(detail, apiLog);
+      _ensureAddItemCourse(
+        detail,
+        apiLog,
+        orderId: orderId,
+        layoutHints: layoutHints,
+      );
 
-      final payload = OrderMapper.appendSimpleItem(
-        orderDetail: detail,
+      final body = OrderMapper.buildSeatOrderItemsPostPayload(
+        courseNumber: course.number,
         productId: productId,
-        unitPrice: unitPrice,
         qty: qty,
+        subTotal: unitPrice * qty,
         comment: comment,
       );
 
-      final updated = await _putOrderUpdate(
+      await _postSeatOrderItems(
         orderId: orderId,
-        payload: payload,
+        detail: detail,
+        seatNumber: seatNumber,
+        body: body,
         apiLog: apiLog,
       );
-      await _local.saveOrderDetail(orderId, updated);
+
       lastAddItemLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
+      return _fetchAndMapOrder(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
     } on ApiException catch (e) {
-      apiLog.writeln('ERREUR: ${e.message}');
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
+      apiLog.writeln('POST add failed, fallback PUT: ${e.message}');
+
+      try {
+        final detail = await _remote.fetchOrderDetail(orderId);
+        final suivreHints = _resolveSuivreHints(
+          orderId,
+          layoutHints: layoutHints,
+        );
+        _ensureAddItemCourse(
+          detail,
+          apiLog,
+          orderId: orderId,
+          layoutHints: layoutHints,
+        );
+
+        final payload = OrderMapper.addOrIncrementSimpleItem(
+          orderDetail: detail,
+          productId: productId,
+          unitPrice: unitPrice,
+          qty: qty,
+          comment: comment,
+          suivreSectionCount: suivreHints.count,
+          suivreSplitHints: suivreHints.splits,
+          layoutHints: layoutHints,
+        );
+
+        final updated = await _putOrderUpdate(
+          orderId: orderId,
+          payload: payload,
+          apiLog: apiLog,
+        );
+        await _local.saveOrderDetail(orderId, updated);
+        lastAddItemLog = apiLog.toString();
+        return _fetchAndMapOrder(
+          orderId,
+          previousDisplayEntries: layoutHints,
+        );
+      } on ApiException catch (fallbackError) {
+        apiLog.writeln('ERREUR: ${fallbackError.message}');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        lastAddItemLog = apiLog.toString();
+        rethrow;
       }
-      lastAddItemLog = apiLog.toString();
-      rethrow;
     }
   }
 
@@ -385,6 +1005,7 @@ class OrderRepository {
     required double basePrice,
     required List<Map<String, dynamic>> menuSelections,
     String comment = '',
+    List<OrderDisplayEntry>? layoutHints,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -413,14 +1034,123 @@ class OrderRepository {
         },
       );
 
-      _ensureAddItemCourse(detail, apiLog);
+      _ensureAddItemCourse(
+        detail,
+        apiLog,
+        orderId: orderId,
+        layoutHints: layoutHints,
+      );
 
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: layoutHints,
+      );
       final payload = OrderMapper.appendComposedItem(
         orderDetail: detail,
         productId: productId,
         subTotal: basePrice + supplement,
         menuSelections: menuSelections,
         comment: comment,
+        suivreSectionCount: suivreHints.count,
+        suivreSplitHints: suivreHints.splits,
+        layoutHints: layoutHints,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return _fetchAndMapOrder(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> setProductQuantityInOrder({
+    required int orderId,
+    required int productId,
+    required int qty,
+    required double unitPrice,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Mise à jour quantité ──');
+    apiLog.writeln('order_id=$orderId product_id=$productId qty=$qty');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.setSimpleProductQuantity(
+        orderDetail: detail,
+        productId: productId,
+        qty: qty,
+        unitPrice: unitPrice,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return _fetchAndMapOrder(orderId);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> setOrderLineQuantityAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required int qty,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Mise à jour quantité ligne ──');
+    apiLog.writeln('order_id=$orderId line_index=$lineIndex qty=$qty');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.setLineQuantityAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        qty: qty,
       );
 
       final updated = await _putOrderUpdate(
@@ -441,17 +1171,230 @@ class OrderRepository {
     }
   }
 
-  void _ensureAddItemCourse(
-    Map<String, dynamic> detail,
-    StringBuffer apiLog,
-  ) {
-    final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-    final course = OrderMapper.resolveActiveCourse(
-      detail,
-      seatNumber: seatNumber,
+  Future<SessionOrder> adjustProductQuantityInOrder({
+    required int orderId,
+    required int productId,
+    required int delta,
+    required double unitPrice,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajustement quantité ──');
+    apiLog.writeln(
+      'order_id=$orderId product_id=$productId delta=$delta',
     );
 
-    if (course.id == null) {
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.adjustSimpleProductQuantity(
+        orderDetail: detail,
+        productId: productId,
+        delta: delta,
+        unitPrice: unitPrice,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> syncDisplayFromTrimmedLayout(
+    int orderId, {
+    required List<OrderDisplayEntry> trimmedDisplay,
+  }) async {
+    if (orderId <= 0) {
+      throw ApiException(message: 'Commande introuvable pour cette table.');
+    }
+
+    Map<String, dynamic>? detail = _local.readOrderDetail(orderId);
+    if (detail == null) {
+      if (!await _connectivity.isOnline) {
+        throw ApiException(
+          message: 'Détails de commande indisponibles hors ligne.',
+        );
+      }
+      detail = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, detail);
+    }
+
+    final displayEntries = OrderMapper.applyDemandeSeparatorsFromApi(
+      detail,
+      trimmedDisplay,
+    );
+    final order = OrderMapper.fromOrderDetail(detail).copyWith(
+      displayEntries: displayEntries,
+    );
+
+    await _persistSuivreLayoutHints(orderId, displayEntries);
+    return order;
+  }
+
+  Future<SessionOrder> cancelOrderLinesAtIndices({
+    required int orderId,
+    required List<int> lineIndices,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Annulation articles (section) ──');
+    apiLog.writeln('order_id=$orderId lines=$lineIndices');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.cancelOrderLinesAtIndices(
+        orderDetail: detail,
+        lineIndices: lineIndices.toSet(),
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+
+      final splitHint = previousDisplayEntries == null
+          ? _local.readSuivreSplitHint(orderId)
+          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
+      final countHint = previousDisplayEntries == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+      final order = OrderMapper.fromOrderDetail(
+        updated,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+      return order;
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> cancelOrderLineAtIndex({
+    required int orderId,
+    required int lineIndex,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Annulation article ──');
+    apiLog.writeln('order_id=$orderId line_index=$lineIndex');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+
+      final payload = OrderMapper.cancelOrderLineAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return getOrderDetail(orderId);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  ({List<int> splits, int count}) _resolveSuivreHints(
+    int orderId, {
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    if (layoutHints != null &&
+        OrderMapper.suivreSeparatorCount(layoutHints) > 0) {
+      return (
+        splits: OrderMapper.suivreSplitPositions(layoutHints),
+        count: OrderMapper.suivreSeparatorCount(layoutHints),
+      );
+    }
+
+    final count = _local.readSuivreCountHint(orderId);
+    return (
+      splits: _local.readSuivreSplitHint(orderId),
+      count: count,
+    );
+  }
+
+  void _ensureAddItemCourse(
+    Map<String, dynamic> detail,
+    StringBuffer apiLog, {
+    required int orderId,
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+    final suivreHints = _resolveSuivreHints(
+      orderId,
+      layoutHints: layoutHints,
+    );
+    final course = OrderMapper.resolveAppendCourse(
+      detail,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreHints.count,
+      suivreSplitHints: suivreHints.splits,
+      layoutHints: layoutHints,
+    );
+
+    if (course.number <= 0) {
       apiLog.writeln(
         'ERREUR: aucune suite (course) sur la commande. '
         'La commande doit avoir au moins un seat_order/course.',
@@ -463,9 +1406,67 @@ class OrderRepository {
     }
 
     apiLog.writeln(
-      'seat_number=$seatNumber course_id=${course.id} '
-      'course_sequence=${course.number}',
+      'seat_number=$seatNumber course_id=${course.id ?? '—'} '
+      'course_number=${course.number}',
     );
+  }
+
+  Future<SessionOrder> _fetchAndMapOrder(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    return getOrderDetail(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+  }
+
+  Future<void> _postSeatOrderItems({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required int seatNumber,
+    required Map<String, dynamic> body,
+    required StringBuffer apiLog,
+  }) async {
+    apiLog.writeln(
+      '── POST /api/orders/$orderId/seat-orders/$seatNumber/items ──',
+    );
+    apiLog.writeln(formatApiPayload(body));
+
+    try {
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatNumber,
+        body: body,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      return;
+    } on ApiException {
+      final seatRecordId = OrderMapper.resolveSeatOrderRecordId(
+        detail,
+        seatNumber: seatNumber,
+      );
+      if (seatRecordId == null || seatRecordId == seatNumber) {
+        rethrow;
+      }
+
+      apiLog.writeln(
+        'RETRY seat_number=$seatNumber → seat_record_id=$seatRecordId',
+      );
+      apiLog.writeln(
+        '── POST /api/orders/$orderId/seat-orders/$seatRecordId/items ──',
+      );
+      await _remote.addSeatOrderItems(
+        orderId: orderId,
+        seatNumber: seatRecordId,
+        body: body,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _putOrderUpdate({
@@ -481,5 +1482,202 @@ class OrderRepository {
       apiLog.writeln(_remote.lastApiLog);
     }
     return updated;
+  }
+
+  Future<SessionOrder> adjustOrderLineQuantityAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required int delta,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Ajustement quantité ligne',
+      mutate: (detail) => OrderMapper.adjustLineQuantityAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        delta: delta,
+      ),
+    );
+  }
+
+  Future<SessionOrder> applyOfferAtLineIndex({
+    required int orderId,
+    required int lineIndex,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Offre article',
+      mutate: (detail) => OrderMapper.applyOfferAtLineIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+      ),
+    );
+  }
+
+  Future<SessionOrder> requestAllCourses(int orderId) async {
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractKitchenSendCourseIds(detail);
+    if (courseIds.isEmpty) {
+      throw ApiException(
+        message: 'Aucun article à envoyer en cuisine pour cette table.',
+      );
+    }
+
+    await _remote.requestCourses(orderId, courseIds);
+    final updated = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, updated);
+    return OrderMapper.fromOrderDetail(updated);
+  }
+
+  Future<List<Map<String, dynamic>>> getPaymentModes({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _cachedPaymentModes.isNotEmpty) {
+      return _cachedPaymentModes;
+    }
+
+    if (!await _connectivity.isOnline) {
+      if (_cachedPaymentModes.isNotEmpty) return _cachedPaymentModes;
+      throw ApiException(
+        message: 'Modes de paiement indisponibles hors ligne.',
+      );
+    }
+
+    try {
+      final modes = await _remote.fetchPaymentModes();
+      final active = OrderMapper.activePaymentModes(modes);
+      final resolved = active.isEmpty ? modes : active;
+      if (resolved.isEmpty) {
+        throw ApiException(
+          message: 'Aucun mode de paiement actif configuré.',
+        );
+      }
+
+      _cachedPaymentModes = resolved;
+      lastPaymentModesLog = _remote.lastApiLog;
+      return resolved;
+    } on ApiException {
+      lastPaymentModesLog = _remote.lastApiLog;
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> payOrder({
+    required int orderId,
+    required bool isCash,
+  }) async {
+    final apiLog = StringBuffer();
+    lastPaymentLog = null;
+
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Paiement impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Paiement commande ──');
+    apiLog.writeln('order_id=$orderId isCash=$isCash');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final amount = OrderMapper.formatPaymentAmount(
+        OrderMapper.parseOrderPayableAmount(detail),
+      );
+      if (amount <= 0) {
+        throw ApiException(message: 'Montant à encaisser invalide.');
+      }
+
+      apiLog.writeln('amount=$amount');
+
+      final modes = await getPaymentModes();
+      final paymentModeId =
+          OrderMapper.resolvePaymentModeId(modes, isCash: isCash);
+      if (paymentModeId == null) {
+        throw ApiException(
+          message: isCash
+              ? 'Mode espèces introuvable. Vérifiez la configuration caisse.'
+              : 'Mode carte introuvable. Vérifiez la configuration caisse.',
+        );
+      }
+
+      apiLog.writeln('payment_mode_id=$paymentModeId');
+      apiLog.writeln('── POST /api/orders/$orderId/pay ──');
+      apiLog.writeln(
+        formatApiPayload({
+          'amount': amount,
+          'payment_mode_id': paymentModeId,
+        }),
+      );
+
+      _remote.lastApiLog = null;
+      await _remote.payOrder(
+        orderId: orderId,
+        amount: amount,
+        paymentModeId: paymentModeId,
+      );
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      final updated = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, updated);
+      lastPaymentLog = apiLog.toString();
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastPaymentLog = apiLog.toString();
+      rethrow;
+    }
+  }
+
+  Future<SessionOrder> _mutateOrderLine({
+    required int orderId,
+    required String logTitle,
+    required Map<String, dynamic> Function(Map<String, dynamic> detail) mutate,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — modification impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── $logTitle ──');
+    apiLog.writeln('order_id=$orderId');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final payload = mutate(detail);
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      await _local.saveOrderDetail(orderId, updated);
+      lastAddItemLog = apiLog.toString();
+      return _fetchAndMapOrder(orderId);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
   }
 }

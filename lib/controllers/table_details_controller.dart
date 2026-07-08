@@ -410,12 +410,21 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    final currentOrder = order;
     final orderNumber = this.orderNumber;
     final orderId = this.orderId;
     if (Get.isRegistered<SessionController>()) {
-      await Get.find<SessionController>().refreshOrderList(
-        ensureOrderNumber: orderNumber,
-        ensureOrderId: orderId,
+      final session = Get.find<SessionController>();
+      if (currentOrder != null) {
+        session.updateOrderRow(currentOrder);
+      }
+      unawaited(
+        session.refreshOrderList(
+          pinOrder: currentOrder,
+          ensureOrderNumber: orderNumber,
+          ensureOrderId: orderId,
+          background: true,
+        ),
       );
     }
     Get.back();

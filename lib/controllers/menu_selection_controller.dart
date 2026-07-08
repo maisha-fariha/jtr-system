@@ -23,8 +23,8 @@ class MenuSelectionController extends GetxController {
   MenuSelectionController({
     required CatalogRepository catalogRepository,
     required OrderRepository orderRepository,
-  })  : _catalogRepository = catalogRepository,
-        _orderRepository = orderRepository;
+  }) : _catalogRepository = catalogRepository,
+       _orderRepository = orderRepository;
 
   final CatalogRepository _catalogRepository;
   final OrderRepository _orderRepository;
@@ -86,10 +86,7 @@ class MenuSelectionController extends GetxController {
 
       menus.assignAll([
         for (var i = 0; i < composed.length; i++)
-          MenuMapper.thinPresetFromProduct(
-            composed[i],
-            badgeNumber: i + 1,
-          ),
+          MenuMapper.thinPresetFromProduct(composed[i], badgeNumber: i + 1),
       ]);
     } on ApiException catch (error) {
       menusError.value = error.message;
@@ -108,7 +105,8 @@ class MenuSelectionController extends GetxController {
     selectedMenuIndex.value = index;
     var menu = menus[index];
 
-    if (hasActiveSelection && activeSelection.value?.menu.number != menu.number) {
+    if (hasActiveSelection &&
+        activeSelection.value?.menu.number != menu.number) {
       activeSelection.value = null;
     }
 
@@ -195,11 +193,13 @@ class MenuSelectionController extends GetxController {
       return;
     }
 
-    final targets = selection.allSelectedItems
+    // One message per CHOIX (course).
+    final targets = selection.selectedItemsByCourse.entries
+        .where((e) => e.value.isNotEmpty)
         .map(
-          (item) => MenuMessageTarget(
-            courseNumber: item.courseNumber,
-            label: '1x ${item.name}',
+          (e) => MenuMessageTarget(
+            courseNumber: e.key,
+            label: '${e.value.length}x ${e.value.first.name}',
           ),
         )
         .toList();
@@ -222,38 +222,33 @@ class MenuSelectionController extends GetxController {
       context: context,
       itemLabel: target.label,
       initialMessage: selection.messageForCourse(target.courseNumber) ?? '',
-      onSave: (message) => setItemMessage(
-        courseNumber: target.courseNumber,
-        message: message,
-      ),
+      onSave: (message) =>
+          setItemMessage(courseNumber: target.courseNumber, message: message),
     );
   }
 
-  void setItemMessage({
-    required int courseNumber,
-    required String message,
-  }) {
+  void setItemMessage({required int courseNumber, required String message}) {
     final selection = activeSelection.value;
     if (selection == null) return;
 
-    activeSelection.value =
-        selection.withMessage(courseNumber: courseNumber, message: message);
+    activeSelection.value = selection.withMessage(
+      courseNumber: courseNumber,
+      message: message,
+    );
   }
 
   void _showChoiceNumberDialog(PresetMenu menu) {
     MenuChoiceNumberDialog.show(
       menuLabel: menu.label,
-      onConfirm: (choiceNumber) => _openMenuPage(
-        menu: menu,
-        choiceNumber: choiceNumber,
-      ),
+      onConfirm: (choiceNumber) =>
+          _openMenuPage(menu: menu, choiceNumber: choiceNumber),
     );
   }
 
   Future<void> _openMenuPage({
     required PresetMenu menu,
     required int choiceNumber,
-    Map<int, MenuItem>? initialSelections,
+    Map<int, List<MenuItem>>? initialSelections,
     int? focusCourse,
   }) async {
     final result = await Get.toNamed(
@@ -263,8 +258,7 @@ class MenuSelectionController extends GetxController {
         'presetMenu': menu,
         'choiceNumber': choiceNumber,
         'returnToSelection': true,
-        if (initialSelections != null)
-          'initialSelections': initialSelections,
+        if (initialSelections != null) 'initialSelections': initialSelections,
         if (focusCourse != null) 'focusCourse': focusCourse,
       },
     );
@@ -276,10 +270,10 @@ class MenuSelectionController extends GetxController {
 
   void _applyMenuSelectionResult(MenuActiveSelection result) {
     final current = activeSelection.value;
-    activeSelection.value =
-        current == null ? result : current.merge(result);
-    selectedMenuIndex.value =
-        menus.indexWhere((menu) => menu.number == result.menu.number);
+    activeSelection.value = current == null ? result : current.merge(result);
+    selectedMenuIndex.value = menus.indexWhere(
+      (menu) => menu.number == result.menu.number,
+    );
     // Ensure the sidebar content is visible after selecting a menu.
     isSidebarExpanded.value = true;
   }
@@ -308,14 +302,14 @@ class MenuSelectionController extends GetxController {
     final selection = activeSelection.value;
     if (selection == null) return;
 
-    final item = selection.selectedItemsByCourse[courseNumber];
-    if (item == null) return;
+    final items = selection.selectedItemsByCourse[courseNumber];
+    if (items == null || items.isEmpty) return;
 
     _showMessageTypingDialog(
       context,
       MenuMessageTarget(
         courseNumber: courseNumber,
-        label: '1x ${item.name}',
+        label: '${items.length}x ${items.first.name}',
       ),
     );
   }
@@ -354,10 +348,7 @@ class MenuSelectionController extends GetxController {
             );
           }
         } on ApiException catch (error) {
-          ApiDebugDialog.show(
-            title: 'Erreur suite',
-            body: error.message,
-          );
+          ApiDebugDialog.show(title: 'Erreur suite', body: error.message);
         } catch (_) {
           if (context.mounted) {
             _showSnack(
@@ -422,21 +413,32 @@ class MenuSelectionController extends GetxController {
       return;
     }
 
-    final requiredCategories = selection.menu.categories
-        .where((category) => category.items.isNotEmpty)
-        .length;
-    if (selection.selectedItemsByCourse.length < requiredCategories) {
-      Get.snackbar(
-        'Sélection incomplète',
-        'Choisissez un article pour chaque choix du menu.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-      );
-      return;
+    final requestedPerCourse = selection.choiceNumber < 1
+        ? 1
+        : selection.choiceNumber;
+
+    // For each CHOIX category, we require selecting exactly N items.
+    for (final category in selection.menu.categories) {
+      if (category.items.isEmpty) continue;
+
+      final required = requestedPerCourse.clamp(0, category.items.length);
+      final selectedCount =
+          selection.selectedItemsByCourse[category.number]?.length ?? 0;
+
+      if (selectedCount != required) {
+        Get.snackbar(
+          'Sélection incomplète',
+          'Choisissez $required article(s) pour CHOIX ${category.number}.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+        );
+        return;
+      }
     }
 
-    final menuSelections =
-        MenuMapper.menuSelectionsFromItems(selection.allSelectedItems);
+    final menuSelections = MenuMapper.menuSelectionsFromItems(
+      selection.allSelectedItems,
+    );
     if (menuSelections.isEmpty) {
       Get.snackbar('Erreur', 'Aucune sélection menu valide.');
       return;
@@ -465,18 +467,12 @@ class MenuSelectionController extends GetxController {
       final logBody =
           '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}';
       debugPrint(logBody);
-      ApiDebugDialog.show(
-        title: 'Erreur ajout menu',
-        body: logBody,
-      );
+      ApiDebugDialog.show(title: 'Erreur ajout menu', body: logBody);
     } catch (error) {
-      final logBody = _orderRepository.lastAddItemLog ??
-          'Erreur inconnue: $error';
+      final logBody =
+          _orderRepository.lastAddItemLog ?? 'Erreur inconnue: $error';
       debugPrint(logBody);
-      ApiDebugDialog.show(
-        title: 'Erreur ajout menu',
-        body: logBody,
-      );
+      ApiDebugDialog.show(title: 'Erreur ajout menu', body: logBody);
       Get.snackbar('Erreur', 'Impossible d\'ajouter le menu à la commande.');
     } finally {
       isSaving.value = false;

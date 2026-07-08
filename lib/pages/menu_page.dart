@@ -60,8 +60,10 @@ class MenuPage extends GetView<OrderMenuController> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final showSidePanel = presetMenu != null;
-                    final sideWidth = (constraints.maxWidth * 0.28)
-                        .clamp(110.0, 190.0);
+                    final sideWidth = (constraints.maxWidth * 0.28).clamp(
+                      110.0,
+                      190.0,
+                    );
 
                     return Row(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -85,15 +87,14 @@ class MenuPage extends GetView<OrderMenuController> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  JtrResponsive.getResponsiveSpacing(context, 24),
+                                  JtrResponsive.getResponsiveSpacing(
+                                    context,
+                                    24,
+                                  ),
                                   for (final category
                                       in controller.visibleCategories) ...[
-                                    _CourseSectionHeader(
-                                      category: category,
-                                    ),
-                                    _CourseSectionBody(
-                                      category: category,
-                                    ),
+                                    _CourseSectionHeader(category: category),
+                                    _CourseSectionBody(category: category),
                                     JtrResponsive.getResponsiveSpacing(
                                       context,
                                       32,
@@ -132,10 +133,7 @@ class _MenuHeader extends GetView<OrderMenuController> {
       height: JtrResponsive.adaptiveHeight(context, 64, compact: 48),
       child: Padding(
         // Figma: left container at x=16; confirm button at x=334 → right pad=16
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          horizontal: 16,
-        ),
+        padding: JtrResponsive.getResponsivePadding(context, horizontal: 16),
         child: Row(
           children: [
             const _MenuIconButton(),
@@ -238,15 +236,17 @@ class _OrderDisplay extends GetView<OrderMenuController> {
         ),
         JtrResponsive.getResponsiveSpacing(context, 2),
         // Access .value inside build — tracked by GetView's implicit Obx
-        Obx(() => Text(
-              'Table ${controller.currentTable.value}',
-              style: TextStyle(
-                fontSize: _menuPageFontSize(context, 16),
-                fontWeight: FontWeight.bold,
-                color: AppTheme.darkText,
-                height: 1.2,
-              ),
-            )),
+        Obx(
+          () => Text(
+            'Table ${controller.currentTable.value}',
+            style: TextStyle(
+              fontSize: _menuPageFontSize(context, 16),
+              fontWeight: FontWeight.bold,
+              color: AppTheme.darkText,
+              height: 1.2,
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -262,9 +262,11 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
       if (menu == null) return const SizedBox.shrink();
 
       // Group current selections by course.
-      final selectedByCourse = <int, MenuItem>{};
+      final selectedByCourse = <int, List<MenuItem>>{};
       for (final item in controller.selectedItems) {
-        selectedByCourse[item.courseNumber] = item;
+        selectedByCourse
+            .putIfAbsent(item.courseNumber, () => <MenuItem>[])
+            .add(item);
       }
 
       return Container(
@@ -276,9 +278,7 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
           bottom: 12,
         ),
         decoration: BoxDecoration(
-          border: Border(
-            right: BorderSide(color: AppTheme.cardBorder),
-          ),
+          border: Border(right: BorderSide(color: AppTheme.cardBorder)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -337,7 +337,10 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
               ),
             ),
             JtrResponsive.getResponsiveSpacing(context, 12),
-            Divider(height: 1, color: AppTheme.cardBorder.withValues(alpha: 0.8)),
+            Divider(
+              height: 1,
+              color: AppTheme.cardBorder.withValues(alpha: 0.8),
+            ),
             JtrResponsive.getResponsiveSpacing(context, 10),
             Text(
               'SÉLECTION',
@@ -365,22 +368,28 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
                           Text(
                             'CHOIX ${category.number}',
                             style: TextStyle(
-                              fontSize:
-                                  JtrResponsive.getResponsiveFontSize(context, 10),
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                10,
+                              ),
                               fontWeight: FontWeight.w700,
                               color: AppTheme.textSecondary,
                               letterSpacing: 0.3,
                             ),
                           ),
                           JtrResponsive.getResponsiveSpacing(context, 4),
-                          if (selectedByCourse[category.number] != null)
+                          if (selectedByCourse[category.number]?.isNotEmpty ??
+                              false)
                             Text(
-                              '1x ${selectedByCourse[category.number]!.name}',
+                              '${selectedByCourse[category.number]!.length}x ${selectedByCourse[category.number]!.first.name}'
+                              '${selectedByCourse[category.number]!.length > 1 ? ' +${selectedByCourse[category.number]!.length - 1}' : ''}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize:
-                                    JtrResponsive.getResponsiveFontSize(context, 12),
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  12,
+                                ),
                                 fontWeight: FontWeight.w800,
                                 color: AppTheme.darkText,
                               ),
@@ -389,10 +398,14 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
                             Text(
                               '—',
                               style: TextStyle(
-                                fontSize:
-                                    JtrResponsive.getResponsiveFontSize(context, 12),
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  12,
+                                ),
                                 fontWeight: FontWeight.w700,
-                                color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                                color: AppTheme.textSecondary.withValues(
+                                  alpha: 0.6,
+                                ),
                               ),
                             ),
                         ],
@@ -587,11 +600,7 @@ class _CourseItemsGrid extends StatelessWidget {
           runSpacing: runSpacing,
           children: [
             for (final item in category.items)
-              _MenuItemButton(
-                item: item,
-                category: category,
-                width: cellWidth,
-              ),
+              _MenuItemButton(item: item, category: category, width: cellWidth),
           ],
         );
       },
@@ -736,10 +745,7 @@ class _MenuBottomNav extends GetView<OrderMenuController> {
         border: Border(top: BorderSide(color: AppTheme.cardBorder)),
       ),
       child: Padding(
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          horizontal: 32,
-        ),
+        padding: JtrResponsive.getResponsivePadding(context, horizontal: 32),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [

@@ -887,7 +887,12 @@ class TableDetailsController extends GetxController {
             currentOrder.displayEntries,
             sectionIndex,
           );
-    if (courseNumber == null || courseNumber <= 0) {
+    // À SUIVRE divider stores the "course above" number used to route new
+    // items into the next course. When user taps Demande for that divider,
+    // we must request the follow-up service (= courseNumber + 1).
+    final demandeCourseNumber = courseNumber != null ? courseNumber + 1 : null;
+
+    if (demandeCourseNumber == null || demandeCourseNumber <= 0) {
       Get.snackbar(
         'Erreur',
         'Impossible d\'identifier le service à demander.',
@@ -901,14 +906,14 @@ class TableDetailsController extends GetxController {
       context: context,
       title: 'Demande',
       message:
-          'Envoyer en cuisine le service sélectionné (course $courseNumber) ?',
+          'Envoyer en cuisine le service sélectionné (course $demandeCourseNumber) ?',
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
           final orderSnapshot = order;
           final updated = await _orderRepository.requestCourseForSuivreSection(
             id,
-            courseNumber: courseNumber,
+            courseNumber: demandeCourseNumber,
             previousDisplayEntries: orderSnapshot?.displayEntries,
           );
           _syncOrderInSession(updated, orderNumber);

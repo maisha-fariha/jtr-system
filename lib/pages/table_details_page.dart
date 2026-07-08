@@ -854,6 +854,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
   static const _icons = [
     Icons.keyboard_return_outlined,
     Icons.grid_view,
+    Icons.menu_book,
     Icons.restaurant,
     Icons.restaurant_menu,
     Icons.receipt_long_outlined,

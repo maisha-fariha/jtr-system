@@ -83,6 +83,7 @@ class AppTheme {
       Icons.home_outlined || Icons.home => toolbarHome,
       Icons.keyboard_return_outlined || Icons.arrow_back => toolbarBack,
       Icons.grid_view => toolbarQuantity,
+      Icons.menu_book => toolbarMenu,
       Icons.restaurant => toolbarSuivre,
       Icons.restaurant_menu => toolbarMenu,
       Icons.receipt_long_outlined => toolbarTicket,

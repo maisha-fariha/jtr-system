@@ -14,6 +14,7 @@ import '../data/repositories/order_repository.dart';
 import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
+import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
@@ -374,6 +375,21 @@ class TableDetailsController extends GetxController {
   }
 
   /// Category hierarchy first; only leaves the table when already at root.
+  Future<void> openMenuSelection() async {
+    showPaymentOptions.value = false;
+    final id = await _ensureResolvedOrderId();
+
+    await Get.toNamed(
+      AppRoutes.menuSelection,
+      arguments: {
+        'orderNumber': orderNumber,
+        if (id != null && id > 0) 'orderId': id,
+      },
+    );
+
+    await _refreshOrder();
+  }
+
   Future<void> navigateBackOrExitTable() async {
     if (canNavigateCategoryBack) {
       navigateCategoryBack();
@@ -517,6 +533,12 @@ class TableDetailsController extends GetxController {
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = Icons.grid_view;
       showQuantityDialog(context: context);
+      return;
+    }
+
+    if (icon == Icons.menu_book) {
+      activeToolbarIcon.value = Icons.menu_book;
+      unawaited(openMenuSelection());
       return;
     }
 

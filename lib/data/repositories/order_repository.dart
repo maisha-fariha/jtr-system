@@ -50,6 +50,9 @@ class OrderRepository {
   /// Last ticket/receipt print debug trace.
   String? lastPrintLog;
 
+  /// Last kitchen send (requestCourses) debug trace.
+  String? lastKitchenSendLog;
+
   List<Map<String, dynamic>> _cachedPaymentModes = [];
 
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
@@ -1548,18 +1551,64 @@ class OrderRepository {
       );
     }
 
-    final detail = await _remote.fetchOrderDetail(orderId);
-    final courseIds = OrderMapper.extractKitchenSendCourseIds(detail);
-    if (courseIds.isEmpty) {
-      throw ApiException(
-        message: 'Aucun article à envoyer en cuisine pour cette table.',
-      );
-    }
+    final apiLog = StringBuffer();
+    lastKitchenSendLog = null;
 
-    await _remote.requestCourses(orderId, courseIds);
-    final updated = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, updated);
-    return OrderMapper.fromOrderDetail(updated);
+    apiLog.writeln('── Envoyer en cuisine ──');
+    apiLog.writeln('order_id=$orderId');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId (current) ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      final courseIds = OrderMapper.extractKitchenSendCourseIds(detail);
+      apiLog.writeln('course_ids=${courseIds.join(',')}');
+      if (courseIds.isEmpty) {
+        throw ApiException(
+          message: 'Aucun article à envoyer en cuisine pour cette table.',
+        );
+      }
+
+      apiLog.writeln('── POST /api/orders/$orderId/courses ──');
+      await _remote.requestCourses(orderId, courseIds);
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      apiLog.writeln('── GET /api/orders/$orderId (updated) ──');
+      final updated = await _remote.fetchOrderDetail(orderId);
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      await _local.saveOrderDetail(orderId, updated);
+      lastKitchenSendLog = apiLog.toString();
+      print(lastKitchenSendLog);
+      debugPrint(lastKitchenSendLog!);
+
+      return OrderMapper.fromOrderDetail(updated);
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastKitchenSendLog = apiLog.toString();
+      print(lastKitchenSendLog);
+      debugPrint(lastKitchenSendLog!);
+      rethrow;
+    } catch (e) {
+      apiLog.writeln('ERREUR: $e');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastKitchenSendLog = apiLog.toString();
+      print(lastKitchenSendLog);
+      debugPrint(lastKitchenSendLog!);
+      rethrow;
+    }
   }
 
   Future<List<Map<String, dynamic>>> getPaymentModes({

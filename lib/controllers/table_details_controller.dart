@@ -490,6 +490,15 @@ class TableDetailsController extends GetxController {
       !paymentModesLoading.value &&
       !isAddingProduct.value;
 
+  bool get canSendToKitchen {
+    final currentOrder = order;
+    if (currentOrder == null) return false;
+    if (currentOrder.products.isEmpty) return false;
+    if (resolvedOrderId == null || resolvedOrderId! <= 0) return false;
+    if (isAddingProduct.value) return false;
+    return true;
+  }
+
   OrderProduct? get selectedOrderLine {
     final currentOrder = order;
     final lineIndex = selectedOrderLineIndex.value;
@@ -545,6 +554,19 @@ class TableDetailsController extends GetxController {
   }
 
   void onToolbarIconTap(IconData icon, {required BuildContext context}) {
+    if (!isToolbarIconEnabled(icon)) {
+      if (icon == Icons.send_outlined) {
+        Get.snackbar(
+          'Envoi indisponible',
+          'Ajoutez des articles à une commande active avant l\'envoi.',
+          snackPosition: SnackPosition.BOTTOM,
+          duration: const Duration(seconds: 2),
+          margin: const EdgeInsets.all(16),
+        );
+      }
+      return;
+    }
+
     if (icon == Icons.keyboard_return_outlined) {
       unawaited(navigateBackOrExitTable());
       return;
@@ -596,7 +618,12 @@ class TableDetailsController extends GetxController {
 
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
-  bool isToolbarIconEnabled(IconData icon) => true;
+  bool isToolbarIconEnabled(IconData icon) {
+    if (icon == Icons.send_outlined) {
+      return canSendToKitchen;
+    }
+    return true;
+  }
 
   Future<void> printTicket({required BuildContext context}) async {
     final id = await _ensureResolvedOrderId();
@@ -648,7 +675,7 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> sendToKitchen({required BuildContext context}) async {
-    final id = resolvedOrderId;
+    final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
       return;
@@ -666,6 +693,11 @@ class TableDetailsController extends GetxController {
         try {
           final updated = await _orderRepository.requestAllCourses(id);
           _syncOrderInSession(updated, orderNumber);
+          // requestAllCourses already prints the raw request/response log,
+          // but we mirror it here so it is visible even if logs are filtered.
+          if (_orderRepository.lastKitchenSendLog != null) {
+            debugPrint(_orderRepository.lastKitchenSendLog);
+          }
           Get.snackbar(
             'Envoyé',
             'La commande a été envoyée en cuisine.',
@@ -674,6 +706,9 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } on ApiException catch (e) {
+          if (_orderRepository.lastKitchenSendLog != null) {
+            debugPrint(_orderRepository.lastKitchenSendLog);
+          }
           ApiDebugDialog.show(title: 'Erreur envoi', body: e.message);
         } catch (_) {
           Get.snackbar(

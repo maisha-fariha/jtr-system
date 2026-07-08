@@ -257,81 +257,154 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
 
   @override
   Widget build(BuildContext context) {
-    final menu = controller.presetMenu;
-    if (menu == null) return const SizedBox.shrink();
+    return Obx(() {
+      final menu = controller.presetMenu;
+      if (menu == null) return const SizedBox.shrink();
 
-    return Container(
-      padding: JtrResponsive.getResponsivePadding(
-        context,
-        left: 12,
-        right: 10,
-        top: 18,
-        bottom: 12,
-      ),
-      decoration: BoxDecoration(
-        border: Border(
-          right: BorderSide(color: AppTheme.cardBorder),
+      // Group current selections by course.
+      final selectedByCourse = <int, MenuItem>{};
+      for (final item in controller.selectedItems) {
+        selectedByCourse[item.courseNumber] = item;
+      }
+
+      return Container(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 12,
+          right: 10,
+          top: 18,
+          bottom: 12,
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: JtrResponsive.getResponsiveSize(context, 46),
-            height: JtrResponsive.getResponsiveSize(context, 46),
-            decoration: BoxDecoration(
-              color: AppTheme.lightButton,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppTheme.primary.withValues(alpha: 0.25),
+        decoration: BoxDecoration(
+          border: Border(
+            right: BorderSide(color: AppTheme.cardBorder),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: JtrResponsive.getResponsiveSize(context, 46),
+              height: JtrResponsive.getResponsiveSize(context, 46),
+              decoration: BoxDecoration(
+                color: AppTheme.lightButton,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppTheme.primary.withValues(alpha: 0.25),
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                menu.badgeLabel,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.primary,
+                ),
               ),
             ),
-            alignment: Alignment.center,
-            child: Text(
-              menu.badgeLabel,
-              textAlign: TextAlign.center,
+            JtrResponsive.getResponsiveSpacing(context, 10),
+            Text(
+              'CHOIX ${controller.choiceNumber}',
               style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                fontWeight: FontWeight.w800,
-                color: AppTheme.primary,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textSecondary,
+                letterSpacing: 0.4,
               ),
             ),
-          ),
-          JtrResponsive.getResponsiveSpacing(context, 10),
-          Text(
-            'CHOIX ${controller.choiceNumber}',
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-              fontWeight: FontWeight.w700,
-              color: AppTheme.textSecondary,
-              letterSpacing: 0.4,
+            JtrResponsive.getResponsiveSpacing(context, 6),
+            Text(
+              menu.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: _menuPageFontSize(context, 13),
+                fontWeight: FontWeight.w800,
+                color: AppTheme.darkText,
+                height: 1.2,
+              ),
             ),
-          ),
-          JtrResponsive.getResponsiveSpacing(context, 6),
-          Text(
-            menu.label,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: _menuPageFontSize(context, 13),
-              fontWeight: FontWeight.w800,
-              color: AppTheme.darkText,
-              height: 1.2,
+            JtrResponsive.getResponsiveSpacing(context, 6),
+            Text(
+              menu.formattedPrice,
+              style: TextStyle(
+                fontSize: _menuPageFontSize(context, 12),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.primary,
+                height: 1.2,
+              ),
             ),
-          ),
-          JtrResponsive.getResponsiveSpacing(context, 6),
-          Text(
-            menu.formattedPrice,
-            style: TextStyle(
-              fontSize: _menuPageFontSize(context, 12),
-              fontWeight: FontWeight.w700,
-              color: AppTheme.primary,
-              height: 1.2,
+            JtrResponsive.getResponsiveSpacing(context, 12),
+            Divider(height: 1, color: AppTheme.cardBorder.withValues(alpha: 0.8)),
+            JtrResponsive.getResponsiveSpacing(context, 10),
+            Text(
+              'SÉLECTION',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textSecondary,
+                letterSpacing: 0.5,
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+            JtrResponsive.getResponsiveSpacing(context, 8),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final category in controller.visibleCategories)
+                    Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        bottom: 10,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'CHOIX ${category.number}',
+                            style: TextStyle(
+                              fontSize:
+                                  JtrResponsive.getResponsiveFontSize(context, 10),
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 4),
+                          if (selectedByCourse[category.number] != null)
+                            Text(
+                              '1x ${selectedByCourse[category.number]!.name}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize:
+                                    JtrResponsive.getResponsiveFontSize(context, 12),
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.darkText,
+                              ),
+                            )
+                          else
+                            Text(
+                              '—',
+                              style: TextStyle(
+                                fontSize:
+                                    JtrResponsive.getResponsiveFontSize(context, 12),
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 

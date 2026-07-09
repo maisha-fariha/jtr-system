@@ -44,6 +44,7 @@ class TableDetailsController extends GetxController {
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
   final isCatalogLoading = false.obs;
   final isAddingProduct = false.obs;
+  final isPaying = false.obs;
   final paymentModesLoading = false.obs;
   final paymentModesReady = false.obs;
   final paymentModesError = RxnString();
@@ -520,9 +521,9 @@ class TableDetailsController extends GetxController {
 
   bool get canPay =>
       resolvedOrderId != null &&
-      paymentModesReady.value &&
-      !paymentModesLoading.value &&
-      !isAddingProduct.value;
+      (order?.products.isNotEmpty ?? false) &&
+      !isPaying.value &&
+      !paymentModesLoading.value;
 
   bool get canSendToKitchen {
     final currentOrder = order;
@@ -758,10 +759,36 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  Future<bool> _orderNeedsKitchenSendBeforePayment(int orderId) async {
+    try {
+      final cached = _orderRepository.cachedOrderDetail(orderId);
+      if (cached != null) {
+        return OrderMapper.requiresKitchenSendBeforePayment(cached);
+      }
+      await _orderRepository.getOrderDetail(orderId);
+      final detail = _orderRepository.cachedOrderDetail(orderId);
+      return detail != null &&
+          OrderMapper.requiresKitchenSendBeforePayment(detail);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> payOrder({required BuildContext context, required bool isCash}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      return;
+    }
+
+    final currentOrder = order;
+    if (currentOrder == null || currentOrder.products.isEmpty) {
+      Get.snackbar(
+        'Paiement indisponible',
+        'Aucun article à encaisser sur cette commande.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
       return;
     }
 
@@ -783,17 +810,22 @@ class TableDetailsController extends GetxController {
 
     final label = isCash ? 'espèces' : 'carte de crédit';
     final amountLabel = payableTotalLabel;
+    final needsKitchenSend = await _orderNeedsKitchenSendBeforePayment(id);
+    final sendNotice = needsKitchenSend
+        ? '\n\nLes articles non envoyés seront transmis en cuisine avant l\'encaissement.'
+        : '';
     AppConfirmDialog.show(
       context: context,
       title: 'Paiement',
       message:
-          'Encaisser $amountLabel pour la table $orderNumber en $label ?',
+          'Encaisser $amountLabel pour la table $orderNumber en $label ?$sendNotice',
       onConfirm: () async {
-        isAddingProduct.value = true;
+        isPaying.value = true;
         try {
           final updated = await _orderRepository.payOrder(
             orderId: id,
             isCash: isCash,
+            previousDisplayEntries: currentOrder.displayEntries,
           );
           _syncOrderInSession(updated, orderNumber);
           showPaymentOptions.value = false;
@@ -819,7 +851,7 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } finally {
-          isAddingProduct.value = false;
+          isPaying.value = false;
         }
       },
     );

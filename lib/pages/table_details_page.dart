@@ -1007,7 +1007,7 @@ class _PaymentButtons extends GetView<TableDetailsController> {
     return Obx(() {
       final loading = controller.paymentModesLoading.value;
       final error = controller.paymentModesError.value;
-      final busy = controller.isAddingProduct.value;
+      final busy = controller.isPaying.value;
       final canPay = controller.canPay;
 
       return Padding(

@@ -1652,6 +1652,7 @@ class OrderRepository {
   Future<SessionOrder> payOrder({
     required int orderId,
     required bool isCash,
+    List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final apiLog = StringBuffer();
     lastPaymentLog = null;
@@ -1666,8 +1667,13 @@ class OrderRepository {
     apiLog.writeln('order_id=$orderId isCash=$isCash');
 
     try {
-      apiLog.writeln('── GET /api/orders/$orderId ──');
-      final detail = await _remote.fetchOrderDetail(orderId);
+      var detail = await _fetchOrderDetailForPayment(orderId, apiLog);
+      detail = await _ensureKitchenSentBeforePayment(
+        orderId,
+        detail,
+        apiLog,
+      );
+
       final amount = OrderMapper.formatPaymentAmount(
         OrderMapper.parseOrderPayableAmount(detail),
       );
@@ -1688,16 +1694,119 @@ class OrderRepository {
         );
       }
 
-      apiLog.writeln('payment_mode_id=$paymentModeId');
-      apiLog.writeln('── POST /api/orders/$orderId/pay ──');
-      apiLog.writeln(
-        formatApiPayload({
-          'amount': amount,
-          'payment_mode_id': paymentModeId,
-        }),
+      detail = await _postOrderPayment(
+        orderId: orderId,
+        amount: amount,
+        paymentModeId: paymentModeId,
+        apiLog: apiLog,
+        detail: detail,
       );
 
-      _remote.lastApiLog = null;
+      apiLog.writeln('── GET /api/orders/$orderId (after pay) ──');
+      final updated = await _remote.fetchOrderDetail(orderId);
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+
+      await _local.saveOrderDetail(orderId, updated);
+      lastPaymentLog = apiLog.toString();
+      print(lastPaymentLog);
+      debugPrint(lastPaymentLog!);
+
+      final splitHint = previousDisplayEntries == null
+          ? _local.readSuivreSplitHint(orderId)
+          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
+      final countHint = previousDisplayEntries == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+      return OrderMapper.fromOrderDetail(
+        updated,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastPaymentLog = apiLog.toString();
+      print(lastPaymentLog);
+      debugPrint(lastPaymentLog!);
+      rethrow;
+    } catch (e) {
+      apiLog.writeln('ERREUR: $e');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastPaymentLog = apiLog.toString();
+      print(lastPaymentLog);
+      debugPrint(lastPaymentLog!);
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>> _fetchOrderDetailForPayment(
+    int orderId,
+    StringBuffer apiLog,
+  ) async {
+    apiLog.writeln('── GET /api/orders/$orderId ──');
+    final detail = await _remote.fetchOrderDetail(orderId);
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+    return detail;
+  }
+
+  Future<Map<String, dynamic>> _ensureKitchenSentBeforePayment(
+    int orderId,
+    Map<String, dynamic> detail,
+    StringBuffer apiLog,
+  ) async {
+    final courseIds =
+        OrderMapper.extractCourseIdsPendingKitchenSendBeforePayment(detail);
+    if (courseIds.isEmpty) return detail;
+
+    apiLog.writeln('── Envoi cuisine avant paiement ──');
+    apiLog.writeln('course_ids=${courseIds.join(',')}');
+    apiLog.writeln('── POST ${ApiEndpoints.requestCourses(orderId)} ──');
+    apiLog.writeln(
+      formatApiPayload({'course_ids': courseIds}),
+    );
+
+    _remote.lastApiLog = null;
+    await _remote.requestCourses(orderId, courseIds);
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+
+    final updated = await _remote.fetchOrderDetail(orderId);
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+    await _local.saveOrderDetail(orderId, updated);
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> _postOrderPayment({
+    required int orderId,
+    required double amount,
+    required int paymentModeId,
+    required StringBuffer apiLog,
+    required Map<String, dynamic> detail,
+  }) async {
+    final requestBody = {
+      'amount': amount,
+      'payment_mode_id': paymentModeId,
+    };
+
+    apiLog.writeln('payment_mode_id=$paymentModeId');
+    apiLog.writeln('── POST /api/orders/$orderId/pay ──');
+    apiLog.writeln(formatApiPayload(requestBody));
+
+    _remote.lastApiLog = null;
+    try {
       await _remote.payOrder(
         orderId: orderId,
         amount: amount,
@@ -1706,18 +1815,43 @@ class OrderRepository {
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
+      return detail;
+    } on ApiException catch (error) {
+      if (!OrderMapper.isSendBeforePaymentError(error)) rethrow;
 
-      final updated = await _remote.fetchOrderDetail(orderId);
-      await _local.saveOrderDetail(orderId, updated);
-      lastPaymentLog = apiLog.toString();
-      return OrderMapper.fromOrderDetail(updated);
-    } on ApiException catch (e) {
-      apiLog.writeln('ERREUR: ${e.message}');
+      apiLog.writeln(
+        'Paiement refusé — nouvel envoi cuisine puis nouvel essai.',
+      );
+      final refreshed = await _ensureKitchenSentBeforePayment(
+        orderId,
+        await _fetchOrderDetailForPayment(orderId, apiLog),
+        apiLog,
+      );
+
+      final retryAmount = OrderMapper.formatPaymentAmount(
+        OrderMapper.parseOrderPayableAmount(refreshed),
+      );
+      if (retryAmount <= 0) {
+        throw ApiException(message: 'Montant à encaisser invalide.');
+      }
+
+      final retryBody = {
+        'amount': retryAmount,
+        'payment_mode_id': paymentModeId,
+      };
+      apiLog.writeln('── POST /api/orders/$orderId/pay (retry) ──');
+      apiLog.writeln(formatApiPayload(retryBody));
+
+      _remote.lastApiLog = null;
+      await _remote.payOrder(
+        orderId: orderId,
+        amount: retryAmount,
+        paymentModeId: paymentModeId,
+      );
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
-      lastPaymentLog = apiLog.toString();
-      rethrow;
+      return refreshed;
     }
   }
 

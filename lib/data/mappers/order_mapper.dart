@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/network/api_exception.dart';
 import '../../models/order_display_entry.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
@@ -1741,6 +1742,46 @@ class OrderMapper {
     return extractRequestableCourseIds(data);
   }
 
+  /// Courses that must be sent to the kitchen before POST /api/orders/:id/pay.
+  static List<int> extractCourseIdsPendingKitchenSendBeforePayment(
+    Map<String, dynamic> data,
+  ) {
+    final ids = <int>{...extractKitchenSendCourseIds(data)};
+
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          if (_visibleItemCountInCourse(course) <= 0) continue;
+          if (_courseWasRequestedToKitchen(course)) continue;
+
+          final courseId = course['id'];
+          final courseIdInt = courseId is int
+              ? courseId
+              : (courseId is num ? courseId.toInt() : null);
+          if (courseIdInt != null) ids.add(courseIdInt);
+        }
+      }
+    }
+
+    return ids.toList();
+  }
+
+  static bool requiresKitchenSendBeforePayment(Map<String, dynamic> data) {
+    return extractCourseIdsPendingKitchenSendBeforePayment(data).isNotEmpty;
+  }
+
+  static bool isSendBeforePaymentError(ApiException error) {
+    final message = error.message.toLowerCase();
+    return message.contains('envoyer') &&
+        (message.contains('payer') || message.contains('paiement'));
+  }
+
   static int? resolveTableId(
     List<Map<String, dynamic>> tables,
     String tableNumber,
@@ -2711,16 +2752,32 @@ class OrderMapper {
 
       final matchesCash = label.contains('esp') ||
           label.contains('espece') ||
+          label.contains('espèce') ||
+          label.contains('especes') ||
           label.contains('cash') ||
           label.contains('liquide');
       final matchesCard = label.contains('carte') ||
           label.contains('card') ||
           label.contains('credit') ||
+          label.contains('crédit') ||
           label.contains('cb') ||
           label.contains('tpe');
 
-      if (isCash && matchesCash) return id;
-      if (!isCash && matchesCard) return id;
+      final type = mode['type']?.toString().toLowerCase() ?? '';
+      final code = mode['code']?.toString().toLowerCase() ?? '';
+
+      if (isCash &&
+          (matchesCash || type == 'cash' || code == 'cash' || code == 'espece')) {
+        return id;
+      }
+      if (!isCash &&
+          (matchesCard ||
+              type == 'card' ||
+              type == 'credit' ||
+              code == 'card' ||
+              code == 'credit')) {
+        return id;
+      }
     }
 
     if (candidates.length == 1) {

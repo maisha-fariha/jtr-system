@@ -467,6 +467,13 @@ class OrderRemoteDataSource {
         response: response.data,
         statusCode: response.statusCode,
       );
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
 
       final envelope = ApiEnvelope<dynamic>.fromJson(
         response.data!,
@@ -480,7 +487,29 @@ class OrderRemoteDataSource {
         );
       }
     } on ApiException catch (error) {
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+      );
       _appendApiError(error);
+      rethrow;
+    } catch (error) {
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        error: error.toString(),
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
       rethrow;
     }
   }

@@ -404,26 +404,7 @@ class OrderMapper {
           final status = item['status'] as String?;
           if (status == 'cancelled') continue;
 
-          final product = item['product'];
-          final name = product is Map<String, dynamic>
-              ? (product['name'] as String? ?? 'Article')
-              : 'Article';
-          final qty = item['qty'] ?? 1;
-          final subTotal = item['sub_total']?.toString() ?? '0';
-          final isOffer = item['is_offer'] == true;
-          final comment = item['comment'];
-          final message = comment is String && comment.trim().isNotEmpty
-              ? comment.trim()
-              : null;
-
-          products.add(
-            OrderProduct(
-              quantity: '$qty',
-              name: name,
-              price: isOffer ? '0,00 €' : formatPrice(subTotal),
-              message: message,
-            ),
-          );
+          products.add(orderProductFromItem(item));
         }
       }
     }
@@ -735,26 +716,9 @@ class OrderMapper {
             sawNonSuivreItemsInCourse = true;
           }
 
-          final product = item['product'];
-          final name = product is Map<String, dynamic>
-              ? (product['name'] as String? ?? 'Article')
-              : 'Article';
-          final qty = item['qty'] ?? 1;
-          final subTotal = item['sub_total']?.toString() ?? '0';
-          final isOffer = item['is_offer'] == true;
-          final comment = item['comment'];
-          final message = comment is String && comment.trim().isNotEmpty
-              ? comment.trim()
-              : null;
-
           entries.add(
             OrderDisplayEntry.product(
-              product: OrderProduct(
-                quantity: '$qty',
-                name: name,
-                price: isOffer ? '0,00 €' : formatPrice(subTotal),
-                message: message,
-              ),
+              product: orderProductFromItem(item),
               lineIndex: lineIndex++,
               sectionIndex: activeSection,
               courseNumber: courseNumber,
@@ -3126,6 +3090,97 @@ class OrderMapper {
     ];
   }
 
+  static List<Map<String, dynamic>> _menuSelectionsWithDisplayNames(
+    List<Map<String, dynamic>> selections,
+  ) {
+    final sanitized = sanitizeMenuSelectionsForWrite(selections);
+    return [
+      for (var i = 0; i < sanitized.length; i++)
+        {
+          ...sanitized[i],
+          if (i < selections.length)
+            ..._menuSelectionDisplayFields(selections[i]),
+        },
+    ];
+  }
+
+  static Map<String, dynamic> _menuSelectionDisplayFields(
+    Map<String, dynamic> selection,
+  ) {
+    final fields = <String, dynamic>{};
+    final productName = selection['selected_product_name'];
+    if (productName is String && productName.trim().isNotEmpty) {
+      fields['selected_product_name'] = productName.trim();
+    }
+    final categoryName = selection['menu_category_name'];
+    if (categoryName is String && categoryName.trim().isNotEmpty) {
+      fields['menu_category_name'] = categoryName.trim();
+    }
+    return fields;
+  }
+
+  static List<String> menuSelectionLabelsFromMaps(
+    List<Map<String, dynamic>> selections,
+  ) {
+    final labels = <String>[];
+    for (final selection in selections) {
+      final name = _menuSelectionLabel(selection);
+      if (name != null) labels.add(name);
+    }
+    return labels;
+  }
+
+  static List<String> menuSelectionLabelsFromItem(Map<String, dynamic> item) {
+    final menus = item['menu_selections'];
+    if (menus is! List || menus.isEmpty) return const [];
+    return menuSelectionLabelsFromMaps(
+      menus.whereType<Map<String, dynamic>>().toList(),
+    );
+  }
+
+  static String? _menuSelectionLabel(Map<String, dynamic> selection) {
+    for (final key in ['selected_product_name', 'name', 'label']) {
+      final raw = selection[key];
+      if (raw is String && raw.trim().isNotEmpty) {
+        return raw.trim().toUpperCase();
+      }
+    }
+
+    for (final nestedKey in ['selected_product', 'product']) {
+      final nested = selection[nestedKey];
+      if (nested is Map<String, dynamic>) {
+        final name = nested['name'];
+        if (name is String && name.trim().isNotEmpty) {
+          return name.trim().toUpperCase();
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static OrderProduct orderProductFromItem(Map<String, dynamic> item) {
+    final product = item['product'];
+    final name = product is Map<String, dynamic>
+        ? (product['name'] as String? ?? 'Article')
+        : 'Article';
+    final qty = item['qty'] ?? 1;
+    final subTotal = item['sub_total']?.toString() ?? '0';
+    final isOffer = item['is_offer'] == true;
+    final comment = item['comment'];
+    final message = comment is String && comment.trim().isNotEmpty
+        ? comment.trim()
+        : null;
+
+    return OrderProduct(
+      quantity: '$qty',
+      name: name,
+      price: isOffer ? '0,00 €' : formatPrice(subTotal),
+      message: message,
+      menuItems: menuSelectionLabelsFromItem(item),
+    );
+  }
+
   static Map<String, dynamic> _sanitizeSeatOrderForUpdate(
     Map<String, dynamic> seat,
   ) {
@@ -3196,7 +3251,7 @@ class OrderMapper {
     bool forCreate = false,
     String? uid,
   }) {
-    final sanitizedMenus = sanitizeMenuSelectionsForWrite(menuSelections);
+    final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
     final hasMenus = sanitizedMenus.isNotEmpty;
 
     return {
@@ -3342,6 +3397,7 @@ class OrderMapper {
       productName: productName,
       unitPrice: subTotal,
       qty: 1,
+      menuItems: menuSelectionLabelsFromMaps(menuSelections),
     );
   }
 
@@ -3561,12 +3617,14 @@ class OrderMapper {
     required String productName,
     required double unitPrice,
     int qty = 1,
+    List<String> menuItems = const [],
   }) {
     final products = List<OrderProduct>.from(current.products);
     final newProduct = OrderProduct(
       quantity: '$qty',
       name: productName,
       price: formatPrice((unitPrice * qty).toStringAsFixed(2)),
+      menuItems: menuItems,
     );
     products.add(newProduct);
     final lineIndex = products.length - 1;

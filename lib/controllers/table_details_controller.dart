@@ -59,12 +59,26 @@ class TableDetailsController extends GetxController {
   int? orderId;
 
   final collapsedSuivreSections = <int>{}.obs;
+  final expandedMenuLineIndices = <int>{}.obs;
   final selectedSuivreSection = RxnInt();
   final suivreUiRevision = 0.obs;
   final orderUiRevision = 0.obs;
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
+
+  bool isMenuLineExpanded(int lineIndex) =>
+      expandedMenuLineIndices.contains(lineIndex);
+
+  void toggleMenuLineExpansion(int lineIndex) {
+    if (expandedMenuLineIndices.contains(lineIndex)) {
+      expandedMenuLineIndices.remove(lineIndex);
+    } else {
+      expandedMenuLineIndices.add(lineIndex);
+    }
+    expandedMenuLineIndices.refresh();
+    orderUiRevision.value++;
+  }
 
   bool isSuivreSectionSelected(int sectionIndex) =>
       selectedSuivreSection.value == sectionIndex;
@@ -1159,6 +1173,12 @@ class TableDetailsController extends GetxController {
       layoutHints: hints,
     );
     _syncOrderInSession(predicted, orderNumber);
+    if (predicted.products.isNotEmpty) {
+      final newLineIndex = predicted.products.length - 1;
+      expandedMenuLineIndices.add(newLineIndex);
+      expandedMenuLineIndices.refresh();
+      orderUiRevision.value++;
+    }
   }
 
   Future<void> _syncAddComposedProductInBackground({

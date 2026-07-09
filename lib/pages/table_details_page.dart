@@ -642,6 +642,10 @@ class _ProductLine extends GetView<TableDetailsController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final isSelected = controller.isOrderLineSelected(productIndex);
+      controller.orderUiRevision.value;
+      final hasMenuItems = product.hasMenuItems;
+      final isMenuExpanded = hasMenuItems &&
+          controller.isMenuLineExpanded(productIndex);
 
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
@@ -708,20 +712,77 @@ class _ProductLine extends GetView<TableDetailsController> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          product.name,
-                          style: TextStyle(
-                            fontSize:
-                                JtrResponsive.getResponsiveFontSize(context, 13),
-                            fontWeight: FontWeight.w600,
-                            color: isSelected
-                                ? AppTheme.primary
-                                : AppTheme.darkText,
-                            letterSpacing: 0.2,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                product.name,
+                                style: TextStyle(
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    13,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: isSelected
+                                      ? AppTheme.primary
+                                      : AppTheme.darkText,
+                                  letterSpacing: 0.2,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (hasMenuItems)
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => controller.toggleMenuLineExpansion(
+                                  productIndex,
+                                ),
+                                child: Padding(
+                                  padding: JtrResponsive.getResponsivePadding(
+                                    context,
+                                    left: 4,
+                                  ),
+                                  child: Icon(
+                                    isMenuExpanded
+                                        ? Icons.keyboard_arrow_up
+                                        : Icons.keyboard_arrow_down,
+                                    size: JtrResponsive.getResponsiveSize(
+                                      context,
+                                      16,
+                                    ),
+                                    color: AppTheme.primary,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
+                        if (hasMenuItems && isMenuExpanded)
+                          for (final menuItem in product.menuItems) ...[
+                            JtrResponsive.getResponsiveSpacing(context, 2),
+                            Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                left: 12,
+                              ),
+                              child: Text(
+                                menuItem,
+                                style: TextStyle(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    11,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.primary,
+                                  letterSpacing: 0.3,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         if (product.message != null &&
                             product.message!.isNotEmpty) ...[
                           JtrResponsive.getResponsiveSpacing(context, 2),

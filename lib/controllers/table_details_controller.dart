@@ -144,13 +144,16 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  Future<void> _refreshOrder() async {
+  Future<void> _refreshOrder({
+    List<OrderDisplayEntry>? layoutBeforeNav,
+  }) async {
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,
       forceRefresh: true,
+      previousDisplayEntries: layoutBeforeNav ?? order?.displayEntries,
     );
   }
 
@@ -391,9 +394,10 @@ class TableDetailsController extends GetxController {
   /// Category hierarchy first; only leaves the table when already at root.
   Future<void> openMenuSelection() async {
     showPaymentOptions.value = false;
+    final layoutBeforeNav = order?.displayEntries;
     final id = await _ensureResolvedOrderId();
 
-    await Get.toNamed(
+    final menuAdded = await Get.toNamed(
       AppRoutes.menuSelection,
       arguments: {
         'orderNumber': orderNumber,
@@ -401,7 +405,12 @@ class TableDetailsController extends GetxController {
       },
     );
 
-    await _refreshOrder();
+    if (menuAdded == true) {
+      orderUiRevision.value++;
+      return;
+    }
+
+    await _refreshOrder(layoutBeforeNav: layoutBeforeNav);
   }
 
   Future<void> navigateBackOrExitTable() async {
@@ -998,29 +1007,21 @@ class TableDetailsController extends GetxController {
       );
       if (menuSelections.isEmpty) return;
 
-      var id = await _ensureResolvedOrderId();
-      logOrderFlow('onProductTap composed resolvedOrderId=${id ?? 'none'}');
+      final rollbackSnapshot =
+          order != null ? OrderOptimisticSync.deepSnapshot(order!) : null;
 
-      if (id == null || id <= 0) {
-        final created =
-            await _orderRepository.createOrderWithFirstComposedProduct(
-          tableNumber: orderNumber,
-          waiterId: _currentWaiterId,
-          productId: detail.id,
-          basePrice: detail.unitPrice,
-          menuSelections: menuSelections,
-        );
-        orderId = created.id;
-        _syncOrderInSession(created, orderNumber);
-        return;
-      }
-
-      await _addComposedProduct(
-        orderId: id,
+      _applyAddComposedProductToUi(
         product: detail,
         menuSelections: menuSelections,
-        displayNumber: orderNumber,
         layoutHints: layoutHints,
+      );
+      unawaited(
+        _syncAddComposedProductInBackground(
+          product: detail,
+          menuSelections: menuSelections,
+          rollbackSnapshot: rollbackSnapshot,
+          layoutHints: layoutHints,
+        ),
       );
     } on ApiException catch (e) {
       ApiDebugDialog.show(
@@ -1058,6 +1059,97 @@ class TableDetailsController extends GetxController {
       suivreSplitHints: suivreSplits,
     );
     _syncOrderInSession(predicted, orderNumber);
+  }
+
+  void _applyAddComposedProductToUi({
+    required CatalogProductModel product,
+    required List<Map<String, dynamic>> menuSelections,
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    var current = order;
+    if (current == null) {
+      current = OrderMapper.buildSessionPlaceholderOrder(
+        tableNumber: _parsedTableNumber,
+        numberOfGuests: 1,
+      );
+    }
+
+    final hints = layoutHints ?? current.displayEntries;
+    final suivreCount = OrderMapper.suivreSeparatorCount(hints);
+    final suivreSplits = OrderMapper.suivreSplitPositions(hints);
+    final fastId = _fastResolvedOrderId;
+    final cached =
+        fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
+
+    final predicted = OrderMapper.predictAfterAppendComposedProduct(
+      current: current,
+      cachedDetail: cached,
+      productId: product.id,
+      productName: product.name,
+      basePrice: product.unitPrice,
+      menuSelections: menuSelections,
+      suivreSectionCount: suivreCount,
+      suivreSplitHints: suivreSplits,
+      layoutHints: hints,
+    );
+    _syncOrderInSession(predicted, orderNumber);
+  }
+
+  Future<void> _syncAddComposedProductInBackground({
+    required CatalogProductModel product,
+    required List<Map<String, dynamic>> menuSelections,
+    SessionOrder? rollbackSnapshot,
+    List<OrderDisplayEntry>? layoutHints,
+  }) async {
+    final snapshot = rollbackSnapshot ??
+        order ??
+        OrderMapper.buildSessionPlaceholderOrder(
+          tableNumber: _parsedTableNumber,
+          numberOfGuests: 1,
+        );
+    final effectiveLayoutHints = layoutHints ?? snapshot.displayEntries;
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      sync: () async {
+        final id = await _resolveOrderIdForBackgroundSync();
+        if (id == null || id <= 0) {
+          final created =
+              await _orderRepository.createOrderWithFirstComposedProduct(
+            tableNumber: orderNumber,
+            waiterId: _currentWaiterId,
+            productId: product.id,
+            basePrice: product.unitPrice,
+            menuSelections: menuSelections,
+          );
+          orderId = created.id;
+          return created;
+        }
+
+        orderId = id;
+        return _orderRepository.addComposedProductToOrder(
+          orderId: id,
+          productId: product.id,
+          basePrice: product.unitPrice,
+          menuSelections: menuSelections,
+          layoutHints: effectiveLayoutHints,
+        );
+      },
+      recover: (snap) async {
+        final id = _fastResolvedOrderId;
+        if (id != null && id > 0) {
+          return _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        }
+        return snap;
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('ajouter le menu', error),
+    );
   }
 
   Future<void> _syncAddSimpleProductInBackground({
@@ -1142,33 +1234,6 @@ class TableDetailsController extends GetxController {
       lineIndex: lineIndex,
       qty: qty,
     );
-  }
-
-  Future<void> _addComposedProduct({
-    required int orderId,
-    required CatalogProductModel product,
-    required List<Map<String, dynamic>> menuSelections,
-    required String displayNumber,
-    List<OrderDisplayEntry>? layoutHints,
-  }) async {
-    isAddingProduct.value = true;
-    try {
-      final updated = await _orderRepository.addComposedProductToOrder(
-        orderId: orderId,
-        productId: product.id,
-        basePrice: product.unitPrice,
-        menuSelections: menuSelections,
-        layoutHints: layoutHints ?? order?.displayEntries,
-      );
-      _syncOrderInSession(updated, displayNumber);
-    } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur ajout menu',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
-    } finally {
-      isAddingProduct.value = false;
-    }
   }
 
   void _syncOrderInSession(

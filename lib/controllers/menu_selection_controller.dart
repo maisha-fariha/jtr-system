@@ -10,6 +10,7 @@ import '../data/repositories/order_repository.dart';
 import '../models/menu_active_selection.dart';
 import '../models/menu_item.dart';
 import '../models/menu_message_target.dart';
+import '../models/order_display_entry.dart';
 import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
 import '../widgets/api_debug_dialog.dart';
@@ -73,6 +74,18 @@ class MenuSelectionController extends GetxController {
     if (sessionOrder != null && sessionOrder.id > 0) {
       orderId = sessionOrder.id;
     }
+  }
+
+  List<OrderDisplayEntry>? _layoutHintsFromSession() {
+    if (!Get.isRegistered<SessionController>()) return null;
+
+    final sessionOrder = Get.find<SessionController>().findOrder(
+      orderNumber: orderNumber,
+      orderId: orderId,
+    );
+    final entries = sessionOrder?.displayEntries;
+    if (entries == null || entries.isEmpty) return null;
+    return entries;
   }
 
   Future<void> _loadMenus() async {
@@ -448,6 +461,8 @@ class MenuSelectionController extends GetxController {
         .where((message) => message.trim().isNotEmpty)
         .join(' | ');
 
+    final layoutHints = _layoutHintsFromSession();
+
     isSaving.value = true;
     try {
       final updated = await _orderRepository.addComposedProductToOrder(
@@ -456,13 +471,14 @@ class MenuSelectionController extends GetxController {
         basePrice: selection.menu.priceValue,
         menuSelections: menuSelections,
         comment: comment,
+        layoutHints: layoutHints,
       );
 
       if (Get.isRegistered<SessionController>()) {
         Get.find<SessionController>().updateOrderRow(updated);
       }
 
-      Get.back();
+      Get.back(result: true);
     } on ApiException catch (error) {
       final logBody =
           '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}';

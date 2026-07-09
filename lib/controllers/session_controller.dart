@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../data/repositories/auth_repository.dart';
@@ -381,6 +382,7 @@ class SessionController extends GetxController {
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
     if (existing == null) return;
@@ -398,10 +400,11 @@ class SessionController extends GetxController {
 
     try {
       final previous = orders[idx];
+      final layoutHints =
+          previousDisplayEntries ?? previous.displayEntries;
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
-        previousDisplayEntries:
-            forceRefresh ? null : previous.displayEntries,
+        previousDisplayEntries: layoutHints,
       );
       orders[idx] = detail;
       orders.refresh();

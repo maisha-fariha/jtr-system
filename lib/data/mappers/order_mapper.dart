@@ -951,7 +951,10 @@ class OrderMapper {
     bool keepTrailingEmptySuivre = false,
   }) {
     var result = _dedupeConsecutiveSuivreSeparators(entries);
-    result = _stripEmptySuivreSections(result);
+    result = _stripEmptySuivreSections(
+      result,
+      keepTrailingEmpty: keepTrailingEmptySuivre,
+    );
     if (!keepTrailingEmptySuivre) {
       result = _stripTrailingEmptySuivreSeparators(result);
     }
@@ -975,8 +978,9 @@ class OrderMapper {
 
   /// Drops À SUIVRE headers that are not followed by any product line.
   static List<OrderDisplayEntry> _stripEmptySuivreSections(
-    List<OrderDisplayEntry> entries,
-  ) {
+    List<OrderDisplayEntry> entries, {
+    bool keepTrailingEmpty = false,
+  }) {
     final result = <OrderDisplayEntry>[];
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
@@ -1000,6 +1004,20 @@ class OrderMapper {
 
       if (hasProducts) {
         result.add(entry);
+        continue;
+      }
+
+      if (keepTrailingEmpty) {
+        var hasLaterDivider = false;
+        for (var j = i + 1; j < entries.length; j++) {
+          if (_isSectionDivider(entries[j])) {
+            hasLaterDivider = true;
+            break;
+          }
+        }
+        if (!hasLaterDivider) {
+          result.add(entry);
+        }
       }
     }
     return result;
@@ -3196,6 +3214,67 @@ class OrderMapper {
     );
   }
 
+  static double _menuSelectionsSupplement(
+    List<Map<String, dynamic>> menuSelections,
+  ) {
+    return menuSelections.fold<double>(
+      0,
+      (sum, selection) {
+        final price = selection['price'];
+        if (price is num) return sum + price.toDouble();
+        return sum +
+            (double.tryParse(price?.toString().replaceAll(',', '.') ?? '') ??
+                0);
+      },
+    );
+  }
+
+  static SessionOrder predictAfterAppendComposedProduct({
+    required SessionOrder current,
+    Map<String, dynamic>? cachedDetail,
+    required int productId,
+    required String productName,
+    required double basePrice,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final effectiveLayout = layoutHints ?? current.displayEntries;
+    final workingCurrent = layoutHints != null
+        ? current.copyWith(displayEntries: layoutHints)
+        : current;
+    final subTotal = basePrice + _menuSelectionsSupplement(menuSelections);
+    final detail = _cachedDetailAlignedWithSession(cachedDetail, workingCurrent);
+    if (detail != null) {
+      final simulated = simulateDetailAfterAppendComposedItem(
+        orderDetail: detail,
+        productId: productId,
+        productName: productName,
+        subTotal: subTotal,
+        menuSelections: menuSelections,
+        comment: comment,
+        suivreSectionCount: suivreSectionCount,
+        suivreSplitHints: suivreSplitHints,
+        layoutHints: effectiveLayout,
+      );
+      return fromOrderDetail(
+        simulated,
+        previousDisplayEntries: effectiveLayout,
+        suivreSplitHints: suivreSplitHints,
+        suivreCountHint: suivreSectionCount,
+      );
+    }
+
+    return _predictAppendOnSessionOrder(
+      current: workingCurrent,
+      productName: productName,
+      unitPrice: subTotal,
+      qty: 1,
+    );
+  }
+
   static SessionOrder predictAfterCancelLineAtIndex(
     SessionOrder current,
     int lineIndex,
@@ -3272,6 +3351,58 @@ class OrderMapper {
       subTotal: unitPrice * qty,
       status: itemStatus,
       comment: comment,
+      forCreate: false,
+    );
+    if (productName.isNotEmpty) {
+      newItem['product'] = {'id': productId, 'name': productName};
+    }
+
+    _appendItemToSeatOrders(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+      newItem: newItem,
+    );
+    _recomputeDetailTotals(working);
+    return working;
+  }
+
+  static Map<String, dynamic> simulateDetailAfterAppendComposedItem({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required String productName,
+    required double subTotal,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatNumber = resolveDefaultSeatNumber(working);
+    final course = resolveAppendCourse(
+      working,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
+    );
+    final itemStatus = _resolveAppendItemStatus(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+    );
+
+    final newItem = _buildNewItemPayload(
+      seatNumber: seatNumber,
+      courseId: course.id,
+      productId: productId,
+      qty: 1,
+      subTotal: subTotal,
+      status: itemStatus,
+      comment: comment,
+      menuSelections: menuSelections,
+      isStillMenuMissing: false,
       forCreate: false,
     );
     if (productName.isNotEmpty) {

@@ -7,6 +7,7 @@ import '../controllers/session_controller.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -93,8 +94,10 @@ class SessionPage extends GetView<SessionController> {
               ),
             ),
             const _ActionButtons(),
-            Divider(height: 1, color: AppTheme.cardBorder),
-            _BottomNavBar(),
+            if (kShowBottomNavigationBar) ...[
+              Divider(height: 1, color: AppTheme.cardBorder),
+              _BottomNavBar(),
+            ],
           ],
         ),
             Obx(() {
@@ -194,6 +197,15 @@ class _SessionHeader extends GetView<SessionController> {
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.5,
                 ),
+              ),
+            ),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+            IconButton(
+              onPressed: AppNavigation.logout,
+              icon: Icon(
+                Icons.logout,
+                color: AppTheme.toolbarIconColor(Icons.logout),
+                size: JtrResponsive.getResponsiveSize(context, 28),
               ),
             ),
           ],

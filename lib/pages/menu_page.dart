@@ -5,6 +5,7 @@ import '../controllers/order_menu_controller.dart';
 import '../models/menu_category.dart';
 import '../models/menu_item.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -113,10 +114,12 @@ class MenuPage extends GetView<OrderMenuController> {
             ],
           ),
         ),
-        bottomNavigationBar: const SafeArea(
-          top: false,
-          child: _MenuBottomNav(),
-        ),
+        bottomNavigationBar: kShowBottomNavigationBar
+            ? const SafeArea(
+                top: false,
+                child: _MenuBottomNav(),
+              )
+            : null,
       ),
     );
   }

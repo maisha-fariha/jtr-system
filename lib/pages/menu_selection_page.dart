@@ -7,6 +7,7 @@ import '../models/menu_category.dart';
 import '../models/menu_item.dart';
 import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -74,11 +75,13 @@ class MenuSelectionPage extends GetView<MenuSelectionController> {
                     ],
                   ),
                 ),
-                Divider(
-                  height: JtrResponsive.getResponsiveHeight(context, 1),
-                  color: AppTheme.cardBorder,
-                ),
-                const _SelectionBottomNav(),
+                if (kShowBottomNavigationBar) ...[
+                  Divider(
+                    height: JtrResponsive.getResponsiveHeight(context, 1),
+                    color: AppTheme.cardBorder,
+                  ),
+                  const _SelectionBottomNav(),
+                ],
               ],
             ),
           ),

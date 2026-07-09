@@ -71,12 +71,16 @@ class OrderRepository {
       final detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
 
+      final splitHint = previousDisplayEntries == null
+          ? _local.readSuivreSplitHint(orderId)
+          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
       final countHint = previousDisplayEntries == null
           ? _local.readSuivreCountHint(orderId)
           : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
 
       final order = OrderMapper.fromOrderDetail(
         detail,
+        suivreSplitHints: splitHint,
         suivreCountHint: countHint,
       );
 

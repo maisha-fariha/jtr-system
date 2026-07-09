@@ -974,6 +974,7 @@ class TableDetailsController extends GetxController {
 
   Future<void> _handleComposedProductTap(CatalogProductModel product) async {
     try {
+      final layoutHints = order?.displayEntries;
       final detail = await _catalogRepository.getProductDetail(product.id);
       final presetMenu = MenuMapper.presetFromProduct(
         detail,
@@ -1019,6 +1020,7 @@ class TableDetailsController extends GetxController {
         product: detail,
         menuSelections: menuSelections,
         displayNumber: orderNumber,
+        layoutHints: layoutHints,
       );
     } on ApiException catch (e) {
       ApiDebugDialog.show(
@@ -1147,6 +1149,7 @@ class TableDetailsController extends GetxController {
     required CatalogProductModel product,
     required List<Map<String, dynamic>> menuSelections,
     required String displayNumber,
+    List<OrderDisplayEntry>? layoutHints,
   }) async {
     isAddingProduct.value = true;
     try {
@@ -1155,7 +1158,7 @@ class TableDetailsController extends GetxController {
         productId: product.id,
         basePrice: product.unitPrice,
         menuSelections: menuSelections,
-        layoutHints: order?.displayEntries,
+        layoutHints: layoutHints ?? order?.displayEntries,
       );
       _syncOrderInSession(updated, displayNumber);
     } on ApiException catch (e) {

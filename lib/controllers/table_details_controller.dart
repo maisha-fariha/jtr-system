@@ -224,7 +224,10 @@ class TableDetailsController extends GetxController {
 
   Future<bool> _verifyOrderExists(int id) async {
     try {
-      await _orderRepository.getOrderDetail(id);
+      await _orderRepository.getOrderDetail(
+        id,
+        previousDisplayEntries: order?.displayEntries,
+      );
       return true;
     } catch (_) {
       return false;
@@ -394,7 +397,9 @@ class TableDetailsController extends GetxController {
   /// Category hierarchy first; only leaves the table when already at root.
   Future<void> openMenuSelection() async {
     showPaymentOptions.value = false;
-    final layoutBeforeNav = order?.displayEntries;
+    final layoutBeforeNav = order?.displayEntries == null
+        ? null
+        : List<OrderDisplayEntry>.from(order!.displayEntries);
     final id = await _ensureResolvedOrderId();
 
     final menuAdded = await Get.toNamed(
@@ -410,7 +415,26 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    await _refreshOrder(layoutBeforeNav: layoutBeforeNav);
+    _restoreDisplayLayoutIfNeeded(layoutBeforeNav);
+    orderUiRevision.value++;
+  }
+
+  void _restoreDisplayLayoutIfNeeded(List<OrderDisplayEntry>? layout) {
+    if (layout == null || layout.isEmpty) return;
+
+    final current = order;
+    if (current == null) return;
+
+    final currentSuivreCount =
+        OrderMapper.suivreSeparatorCount(current.displayEntries);
+    final savedSuivreCount = OrderMapper.suivreSeparatorCount(layout);
+    if (savedSuivreCount <= currentSuivreCount) return;
+
+    _syncOrderInSession(
+      current.copyWith(displayEntries: layout),
+      orderNumber,
+      displayEntriesOverride: layout,
+    );
   }
 
   Future<void> navigateBackOrExitTable() async {

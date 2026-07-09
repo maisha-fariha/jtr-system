@@ -929,10 +929,16 @@ class OrderMapper {
     var entries = extractOrderDisplayEntries(data);
     entries = applyDemandeSeparatorsFromApi(data, entries);
     final apiSuivreCount = suivreSeparatorCount(entries);
+    final previousSuivreCount = previousDisplayEntries == null
+        ? 0
+        : suivreSeparatorCount(previousDisplayEntries);
+    final effectiveSuivreCount = suivreCountHint > previousSuivreCount
+        ? suivreCountHint
+        : previousSuivreCount;
 
     // Only overlay local À SUIVRE rows that are not yet reflected by API courses.
-    if (suivreCountHint > apiSuivreCount) {
-      var pending = suivreCountHint - apiSuivreCount;
+    if (effectiveSuivreCount > apiSuivreCount) {
+      var pending = effectiveSuivreCount - apiSuivreCount;
       while (pending > 0) {
         final force = entries.isNotEmpty && _isSectionDivider(entries.last);
         entries = appendSuivreSeparatorAfterRequest(entries, force: force);
@@ -940,9 +946,16 @@ class OrderMapper {
       }
     }
 
+    if (previousDisplayEntries != null && previousDisplayEntries.isNotEmpty) {
+      entries = reconcileSuivreDisplay(
+        previous: previousDisplayEntries,
+        next: entries,
+      );
+    }
+
     return _normalizeSuivreLayout(
       entries,
-      keepTrailingEmptySuivre: suivreCountHint > apiSuivreCount,
+      keepTrailingEmptySuivre: effectiveSuivreCount > apiSuivreCount,
     );
   }
 

@@ -80,6 +80,7 @@ class OrderRepository {
 
       final order = OrderMapper.fromOrderDetail(
         detail,
+        previousDisplayEntries: previousDisplayEntries,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
       );

@@ -4,6 +4,7 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
+import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
@@ -511,7 +512,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                     ),
                   )
-                else if (order.products.isEmpty)
+                else if (order.displayEntries.isEmpty)
                   Padding(
                     padding: JtrResponsive.getResponsivePadding(
                       context,
@@ -527,15 +528,7 @@ class _OrderRow extends GetView<SessionController> {
                     ),
                   )
                 else
-                  for (var i = 0; i < order.products.length; i++) ...[
-                    _ProductRow(
-                      orderNumber: order.number,
-                      productIndex: i,
-                      product: order.products[i],
-                    ),
-                    if (i < order.products.length - 1)
-                      Divider(height: 1, color: AppTheme.subtleDivider),
-                  ],
+                  ..._buildExpandedDetailRows(context, order),
                 JtrResponsive.getResponsiveSpacing(context, 4),
               ],
             ],
@@ -546,6 +539,33 @@ class _OrderRow extends GetView<SessionController> {
       );
     });
   }
+}
+
+List<Widget> _buildExpandedDetailRows(BuildContext context, SessionOrder order) {
+  final rows = <Widget>[];
+  final entries = order.displayEntries;
+
+  for (var i = 0; i < entries.length; i++) {
+    final entry = entries[i];
+
+    if (entry.type == OrderDisplayEntryType.product && entry.product != null) {
+      rows.add(
+        _ProductRow(
+          orderNumber: order.number,
+          productIndex: entry.lineIndex ?? 0,
+          product: entry.product!,
+        ),
+      );
+    } else {
+      rows.add(_SessionCourseDivider(entry: entry));
+    }
+
+    if (i < entries.length - 1) {
+      rows.add(Divider(height: 1, color: AppTheme.subtleDivider));
+    }
+  }
+
+  return rows;
 }
 
 class _OrderTableCell extends GetView<SessionController> {
@@ -574,6 +594,63 @@ class _OrderTableCell extends GetView<SessionController> {
         ),
         behavior: HitTestBehavior.opaque,
         child: Align(alignment: alignment, child: child),
+      ),
+    );
+  }
+}
+
+class _SessionCourseDivider extends StatelessWidget {
+  const _SessionCourseDivider({required this.entry});
+
+  final OrderDisplayEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDemande = entry.type == OrderDisplayEntryType.demandeSeparator;
+    final accent = isDemande ? const Color(0xFF27AE60) : AppTheme.primary;
+    final label = isDemande
+        ? 'DEMANDÉE ${entry.demandeTimeLabel ?? ''}'.trim()
+        : 'À SUIVRE';
+
+    return Padding(
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 12,
+        vertical: 6,
+      ),
+      child: Container(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 10,
+          vertical: 8,
+        ),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 10),
+          ),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isDemande ? Icons.done_all_rounded : Icons.restaurant_menu,
+              size: JtrResponsive.getResponsiveSize(context, 14),
+              color: accent,
+            ),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                fontWeight: FontWeight.w700,
+                color: accent,
+                letterSpacing: 0.35,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

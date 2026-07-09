@@ -44,7 +44,8 @@ class TableDetailsController extends GetxController {
   final activeToolbarIcon = Rx<IconData?>(Icons.grid_view);
   final isCatalogLoading = false.obs;
   final isAddingProduct = false.obs;
-  final isPaying = false.obs;
+  /// `true` = cash payment in progress, `false` = card, `null` = idle.
+  final payingIsCash = Rxn<bool>();
   final paymentModesLoading = false.obs;
   final paymentModesReady = false.obs;
   final paymentModesError = RxnString();
@@ -519,10 +520,16 @@ class TableDetailsController extends GetxController {
 
   String get payableTotalLabel => order?.total ?? '—';
 
+  bool get isPaying => payingIsCash.value != null;
+
+  bool get isPayingCash => payingIsCash.value == true;
+
+  bool get isPayingCard => payingIsCash.value == false;
+
   bool get canPay =>
       resolvedOrderId != null &&
       (order?.products.isNotEmpty ?? false) &&
-      !isPaying.value &&
+      !isPaying &&
       !paymentModesLoading.value;
 
   bool get canSendToKitchen {
@@ -820,7 +827,7 @@ class TableDetailsController extends GetxController {
       message:
           'Encaisser $amountLabel pour la table $orderNumber en $label ?$sendNotice',
       onConfirm: () async {
-        isPaying.value = true;
+        payingIsCash.value = isCash;
         try {
           final updated = await _orderRepository.payOrder(
             orderId: id,
@@ -839,9 +846,12 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } on ApiException catch (e) {
-          ApiDebugDialog.show(
-            title: 'Erreur paiement',
-            body: '${_orderRepository.lastPaymentLog ?? ''}\n\n${e.message}',
+          Get.snackbar(
+            'Erreur paiement',
+            e.message,
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 3),
+            margin: const EdgeInsets.all(16),
           );
         } catch (_) {
           Get.snackbar(
@@ -851,7 +861,7 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } finally {
-          isPaying.value = false;
+          payingIsCash.value = null;
         }
       },
     );

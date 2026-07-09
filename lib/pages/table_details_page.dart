@@ -1007,7 +1007,10 @@ class _PaymentButtons extends GetView<TableDetailsController> {
     return Obx(() {
       final loading = controller.paymentModesLoading.value;
       final error = controller.paymentModesError.value;
-      final busy = controller.isPaying.value;
+      controller.payingIsCash.value;
+      final paying = controller.isPaying;
+      final cashBusy = controller.isPayingCash;
+      final cardBusy = controller.isPayingCard;
       final canPay = controller.canPay;
 
       return Padding(
@@ -1054,11 +1057,11 @@ class _PaymentButtons extends GetView<TableDetailsController> {
               ),
               JtrResponsive.getResponsiveSpacing(context, 8),
               TextButton(
-                onPressed: busy ? null : () => controller.reloadPaymentModes(),
+                onPressed: paying ? null : () => controller.reloadPaymentModes(),
                 child: const Text('Réessayer'),
               ),
               TextButton(
-                onPressed: busy
+                onPressed: paying
                     ? null
                     : () {
                         final log = controller.lastPaymentModesLoadLog;
@@ -1078,8 +1081,8 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                     child: _PaymentButton(
                       label: 'ESPECE',
                       backgroundColor: _cashGrey,
-                      enabled: canPay,
-                      busy: busy,
+                      enabled: canPay && !paying,
+                      busy: cashBusy,
                       onTap: () =>
                           controller.payOrder(context: context, isCash: true),
                     ),
@@ -1089,8 +1092,8 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                     child: _PaymentButton(
                       label: 'CARTE DE CREDIT',
                       backgroundColor: AppTheme.primary,
-                      enabled: canPay,
-                      busy: busy,
+                      enabled: canPay && !paying,
+                      busy: cardBusy,
                       onTap: () =>
                           controller.payOrder(context: context, isCash: false),
                     ),

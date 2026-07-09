@@ -1419,6 +1419,10 @@ class _MenuGrid extends GetView<TableDetailsController> {
                       isInOrder: isInOrder,
                       isSelected: isSelected,
                     ),
+                    gradient: _menuGridItemGradient(
+                      isInOrder: isInOrder,
+                      isSelected: isSelected,
+                    ),
                     borderRadius: BorderRadius.circular(itemRadius),
                     border: _menuGridItemBorder(
                       isInOrder: isInOrder,
@@ -1436,9 +1440,9 @@ class _MenuGrid extends GetView<TableDetailsController> {
                           height: JtrResponsive.getResponsiveHeight(context, 4),
                           decoration: BoxDecoration(
                             color: isSelected
-                                ? AppTheme.primary
+                                ? AppTheme.primary.withValues(alpha: 0.95)
                                 : (isInOrder
-                                    ? AppTheme.primary.withValues(alpha: 0.45)
+                                    ? AppTheme.primary.withValues(alpha: 0.65)
                                     : Colors.transparent),
                             borderRadius: BorderRadius.vertical(
                               top: Radius.circular(itemRadius),
@@ -1632,6 +1636,10 @@ class _CategoryGrid extends StatelessWidget {
                     isInOrder: false,
                     isSelected: false,
                   ),
+                  gradient: _menuGridItemGradient(
+                    isInOrder: false,
+                    isSelected: false,
+                  ),
                   borderRadius: BorderRadius.circular(itemRadius),
                   border: _menuGridItemBorder(
                     isInOrder: false,
@@ -1686,12 +1694,81 @@ Color _menuGridItemBackground({
   required bool isSelected,
 }) {
   if (Get.isDarkMode) {
-    if (isSelected) return AppTheme.primary.withValues(alpha: 0.18);
-    return AppTheme.inactiveSurface;
+    if (isSelected) return AppTheme.primary.withValues(alpha: 0.16);
+    if (isInOrder) return const Color(0xFF342823);
+    return const Color(0xFF222222);
   }
 
-  if (isSelected) return AppTheme.lightButton;
-  return isInOrder ? AppTheme.lightButton.withValues(alpha: 0.55) : AppTheme.background;
+  if (isSelected) return const Color(0xFFF8D9D3);
+  if (isInOrder) return const Color(0xFFFEF1EE);
+  return const Color(0xFFFFFCFB);
+}
+
+Gradient? _menuGridItemGradient({
+  required bool isInOrder,
+  required bool isSelected,
+}) {
+  if (Get.isDarkMode) {
+    if (isSelected) {
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          AppTheme.primary.withValues(alpha: 0.22),
+          const Color(0xFF2B211E),
+        ],
+      );
+    }
+    if (isInOrder) {
+      return const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color(0xFF362924),
+          Color(0xFF262626),
+        ],
+      );
+    }
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFF2B2B2B),
+        Color(0xFF202020),
+      ],
+    );
+  }
+
+  if (isSelected) {
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFFFDEAE6),
+        Color(0xFFF8D1C8),
+      ],
+    );
+  }
+
+  if (isInOrder) {
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFFFFF7F5),
+        Color(0xFFFDE5E0),
+      ],
+    );
+  }
+
+  return const LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFFFFFFF),
+      Color(0xFFFBF3F1),
+    ],
+  );
 }
 
 Border? _menuGridItemBorder({
@@ -1699,31 +1776,52 @@ Border? _menuGridItemBorder({
   required bool isSelected,
 }) {
   if (isSelected) {
-    return Border.all(color: AppTheme.primary, width: 2.5);
+    return Border.all(
+      color: AppTheme.primary.withValues(alpha: 0.95),
+      width: 2,
+    );
   }
 
   if (Get.isDarkMode) {
     return isInOrder
-        ? Border.all(color: AppTheme.primary.withValues(alpha: 0.5), width: 1.5)
-        : null;
+        ? Border.all(
+            color: AppTheme.primary.withValues(alpha: 0.45),
+            width: 1.2,
+          )
+        : Border.all(color: AppTheme.cardBorder.withValues(alpha: 0.85));
   }
 
   return Border.all(
-    color: isInOrder ? AppTheme.primary.withValues(alpha: 0.45) : AppTheme.cardBorder,
-    width: isInOrder ? 1.5 : 1,
+    color: isInOrder
+        ? AppTheme.primary.withValues(alpha: 0.30)
+        : const Color(0xFFF1E2DE),
+    width: isInOrder ? 1.2 : 1,
   );
 }
 
 List<BoxShadow>? _menuGridItemShadow(bool isSelected) {
-  if (Get.isDarkMode) return null;
+  if (Get.isDarkMode) {
+    return [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: isSelected ? 0.28 : 0.18),
+        blurRadius: isSelected ? 14 : 8,
+        offset: const Offset(0, 5),
+      ),
+    ];
+  }
 
   return [
     BoxShadow(
       color: isSelected
-          ? AppTheme.primary.withValues(alpha: 0.10)
-          : Colors.black.withValues(alpha: 0.05),
-      blurRadius: isSelected ? 12 : 8,
-      offset: const Offset(0, 4),
+          ? AppTheme.primary.withValues(alpha: 0.16)
+          : Colors.black.withValues(alpha: 0.06),
+      blurRadius: isSelected ? 16 : 10,
+      offset: const Offset(0, 6),
+    ),
+    BoxShadow(
+      color: Colors.white.withValues(alpha: 0.55),
+      blurRadius: 2,
+      offset: const Offset(0, -1),
     ),
   ];
 }

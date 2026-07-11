@@ -710,6 +710,7 @@ class SessionController extends GetxController {
       title: 'NOMBRE DE COUVERTS',
       integerOnly: true,
       maxDigits: 3,
+      minValue: 1,
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
           context: context,
@@ -726,7 +727,15 @@ class SessionController extends GetxController {
     required String couverts,
   }) async {
     logOrderFlow('_createTableAndOpenDetails START table=$tableNumber couverts=$couverts');
-    final guests = int.tryParse(couverts.trim()) ?? 1;
+    final guests = int.tryParse(couverts.trim()) ?? 0;
+    if (guests < 1) {
+      logOrderFlow('_createTableAndOpenDetails ABORT guests must be > 0');
+      _showSnack(
+        'Couverts',
+        'Le nombre de couverts doit être supérieur à 0.',
+      );
+      return;
+    }
     final waiterId = _currentWaiterId;
     if (waiterId <= 0) {
       logOrderFlow('_createTableAndOpenDetails ABORT not logged in');

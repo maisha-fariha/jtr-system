@@ -167,6 +167,8 @@ class SessionController extends GetxController {
     Iterable<SessionOrder>? retainOrders,
     bool showLoading = true,
     bool enrichDetails = false,
+    /// When false, page-1 updates merge in place (no reshuffle).
+    bool replaceExistingList = true,
   }) async {
     if (showLoading && orders.isEmpty) {
       isLoadingOrders.value = true;
@@ -186,7 +188,7 @@ class SessionController extends GetxController {
             cached,
             retainOrders: retainOrders,
             enrichDetails: enrichDetails,
-            replaceList: true,
+            replaceList: orders.isEmpty,
           );
           if (showLoading) {
             isLoadingOrders.value = false;
@@ -225,12 +227,12 @@ class SessionController extends GetxController {
               onMorePagesLoaded: onMorePages,
             );
 
-      // Page 1 paints immediately (~Postman latency).
+      // Page 1: replace only when allowed (pull-to-refresh / first paint).
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
         enrichDetails: enrichDetails,
-        replaceList: true,
+        replaceList: replaceExistingList || orders.isEmpty,
         clearSuppressedMatches: forceRefresh,
       );
     } on ApiException catch (e) {
@@ -428,11 +430,15 @@ class SessionController extends GetxController {
   }
 
   /// Reloads open orders for the session screen after create/edit on a table.
+  ///
+  /// When the list is already visible, merges in place so row order does not
+  /// jump (e.g. after returning from table details).
   Future<void> refreshOrderList({
     SessionOrder? pinOrder,
     String? ensureOrderNumber,
     int? ensureOrderId,
     bool background = false,
+    bool preserveSortOrder = true,
   }) async {
     SessionOrder? pinned = pinOrder;
 
@@ -447,11 +453,14 @@ class SessionController extends GetxController {
       }
     }
 
+    final hadRows = orders.isNotEmpty;
     await loadSessionOrders(
       forceRefresh: true,
       retainOrders: pinned != null ? [pinned] : null,
       showLoading: !background,
       enrichDetails: false,
+      // Keep current visual order when returning to an already-loaded list.
+      replaceExistingList: !(preserveSortOrder && hadRows),
     );
   }
 

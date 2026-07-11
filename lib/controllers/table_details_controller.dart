@@ -1217,10 +1217,8 @@ class TableDetailsController extends GetxController {
         ),
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur ajout article',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur ajout article', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
     }
@@ -1535,10 +1533,8 @@ class TableDetailsController extends GetxController {
         duration: const Duration(seconds: 2),
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur offre',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'offrir l\'article.');
     } finally {
@@ -1631,10 +1627,8 @@ class TableDetailsController extends GetxController {
         displayEntriesOverride: refreshed.displayEntries,
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur annulation',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur annulation', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'annuler cette suite.');
     } finally {
@@ -1795,11 +1789,8 @@ class TableDetailsController extends GetxController {
 
   void _showOptimisticMutationError(String action, Object error) {
     if (error is ApiException) {
-      ApiDebugDialog.show(
-        title: 'Erreur',
-        body:
-            '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur', body: error.message);
       return;
     }
     Get.snackbar('Erreur', 'Impossible de $action.');

@@ -361,7 +361,13 @@ class MenuSelectionController extends GetxController {
             );
           }
         } on ApiException catch (error) {
-          ApiDebugDialog.show(title: 'Erreur suite', body: error.message);
+          if (context.mounted) {
+            _showSnack(
+              context,
+              title: 'Erreur suite',
+              message: error.message,
+            );
+          }
         } catch (_) {
           if (context.mounted) {
             _showSnack(
@@ -418,10 +424,6 @@ class MenuSelectionController extends GetxController {
         ..writeln()
         ..writeln('Aucune commande active trouvée pour cette table.');
       debugPrint(diagnostic.toString());
-      ApiDebugDialog.show(
-        title: 'Commande introuvable',
-        body: diagnostic.toString(),
-      );
       Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
@@ -487,15 +489,10 @@ class MenuSelectionController extends GetxController {
 
       Get.back(result: true);
     } on ApiException catch (error) {
-      final logBody =
-          '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}';
-      debugPrint(logBody);
-      ApiDebugDialog.show(title: 'Erreur ajout menu', body: logBody);
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur ajout menu', body: error.message);
     } catch (error) {
-      final logBody =
-          _orderRepository.lastAddItemLog ?? 'Erreur inconnue: $error';
-      debugPrint(logBody);
-      ApiDebugDialog.show(title: 'Erreur ajout menu', body: logBody);
+      debugPrint(_orderRepository.lastAddItemLog ?? '$error');
       Get.snackbar('Erreur', 'Impossible d\'ajouter le menu à la commande.');
     } finally {
       isSaving.value = false;

@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../utils/app_theme.dart';
-
+/// User-facing error helper. Logs stay in the console only — no debug popup.
 class ApiDebugDialog {
   ApiDebugDialog._();
 
@@ -10,68 +9,39 @@ class ApiDebugDialog {
     required String title,
     required String body,
   }) {
-    Get.dialog(
-      Dialog(
-        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: Get.height * 0.75,
-            maxWidth: 560,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.darkText,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: Get.back,
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
-              Expanded(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: SelectableText(
-                    body,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 11,
-                      height: 1.35,
-                    ),
-                  ),
-                ),
-              ),
-              const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: Get.back,
-                    child: const Text('Fermer'),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      barrierDismissible: true,
+    debugPrint('[$title]\n$body');
+    final message = _userFacingMessage(body);
+    Get.snackbar(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 3),
     );
+  }
+
+  static String _userFacingMessage(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) {
+      return 'Une erreur est survenue. Réessayez.';
+    }
+
+    const marker = 'MESSAGE:';
+    final idx = trimmed.lastIndexOf(marker);
+    if (idx >= 0) {
+      final message = trimmed.substring(idx + marker.length).trim();
+      if (message.isNotEmpty) return message;
+    }
+
+    // Full API logs must never be shown to waiters.
+    if (trimmed.contains('──') ||
+        trimmed.contains('POST /') ||
+        trimmed.contains('PUT /') ||
+        trimmed.contains('GET /') ||
+        trimmed.length > 180) {
+      return 'Une erreur est survenue. Réessayez.';
+    }
+
+    return trimmed;
   }
 }

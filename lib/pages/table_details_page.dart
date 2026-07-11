@@ -11,7 +11,6 @@ import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
-import '../widgets/api_debug_dialog.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
@@ -1102,19 +1101,6 @@ class _PaymentButtons extends GetView<TableDetailsController> {
               TextButton(
                 onPressed: paying ? null : () => controller.reloadPaymentModes(),
                 child: const Text('Réessayer'),
-              ),
-              TextButton(
-                onPressed: paying
-                    ? null
-                    : () {
-                        final log = controller.lastPaymentModesLoadLog;
-                        if (log == null || log.isEmpty) return;
-                        ApiDebugDialog.show(
-                          title: 'Chargement modes de paiement',
-                          body: log,
-                        );
-                      },
-                child: const Text('Détails'),
               ),
             ] else ...[
               JtrResponsive.getResponsiveSpacing(context, 12),

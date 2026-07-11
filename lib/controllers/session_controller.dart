@@ -97,9 +97,30 @@ class SessionController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    loadActiveDay();
-    loadSessionOrders();
-    _prefetchTables();
+    // Paint cached rows immediately so the session screen is not blank.
+    _hydrateOrdersFromCache();
+    unawaited(loadActiveDay());
+    // Cache-first: if Hive had rows, soft-refresh in background.
+    // Cold start (empty cache) still awaits the fast first-page network fetch.
+    unawaited(
+      loadSessionOrders(
+        forceRefresh: orders.isEmpty,
+        showLoading: orders.isEmpty,
+        enrichDetails: false,
+      ),
+    );
+    unawaited(_prefetchTables());
+  }
+
+  void _hydrateOrdersFromCache() {
+    try {
+      final cached = _sessionRepository.getCachedSessionOrders(
+        waiterId: _currentWaiterId,
+      );
+      if (cached.isNotEmpty) {
+        orders.assignAll(cached);
+      }
+    } catch (_) {}
   }
 
   Future<void> loadActiveDay({bool forceRefresh = false}) async {
@@ -143,48 +164,56 @@ class SessionController extends GetxController {
     bool forceRefresh = false,
     Iterable<SessionOrder>? retainOrders,
     bool showLoading = true,
-    bool enrichDetails = true,
+    bool enrichDetails = false,
   }) async {
-    if (showLoading) {
+    if (showLoading && orders.isEmpty) {
       isLoadingOrders.value = true;
     }
     ordersError.value = null;
 
     try {
-      if (forceRefresh && showLoading) {
-        await loadActiveDay(forceRefresh: true);
+      if (forceRefresh) {
+        unawaited(loadActiveDay(forceRefresh: true));
       }
-      final summaries = await _sessionRepository.getSessionOrders(
-        forceRefresh: forceRefresh,
-        waiterId: _currentWaiterId,
-      );
-      final loaded = enrichDetails
-          ? await _mergeThinOrderRows(summaries)
-          : summaries;
 
-      // Hide "recently deleted" orders until the backend stops returning them.
-      final filtered = loaded.where((o) {
-        for (final suppressed in _suppressedTableNumbers) {
-          if (_tableKeysMatch(o.number, suppressed)) return false;
-        }
-        return true;
-      }).toList();
-
-      orders.assignAll(filtered);
-
-      if (forceRefresh && _suppressedTableNumbers.isNotEmpty) {
-        // Remove suppression entries once the server no longer includes them.
-        _suppressedTableNumbers.removeWhere(
-          (suppressed) =>
-              !loaded.any((o) => _tableKeysMatch(o.number, suppressed)),
+      // Stale-while-revalidate: paint cache instantly, then refresh UI when
+      // the first network page returns (no spinner if rows already visible).
+      if (!forceRefresh) {
+        final cached = _sessionRepository.getCachedSessionOrders(
+          waiterId: _currentWaiterId,
         );
-      }
-      if (retainOrders != null) {
-        for (final order in retainOrders) {
-          _upsertOrderInList(order);
+        if (cached.isNotEmpty) {
+          _applySessionOrderSummaries(
+            cached,
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+          );
+          if (showLoading) {
+            isLoadingOrders.value = false;
+          }
+          unawaited(_softRefreshSessionOrders(
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+          ));
+          return;
         }
       }
-      orders.refresh();
+
+      final summaries = forceRefresh
+          ? await _sessionRepository.refreshSessionOrdersFromNetwork(
+              waiterId: _currentWaiterId,
+            )
+          : await _sessionRepository.getSessionOrders(
+              forceRefresh: true,
+              waiterId: _currentWaiterId,
+            );
+
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: enrichDetails,
+        clearSuppressedMatches: forceRefresh,
+      );
     } on ApiException catch (e) {
       ordersError.value = e.message;
       if (orders.isEmpty && showLoading) {
@@ -199,6 +228,59 @@ class SessionController extends GetxController {
       if (showLoading) {
         isLoadingOrders.value = false;
       }
+    }
+  }
+
+  Future<void> _softRefreshSessionOrders({
+    Iterable<SessionOrder>? retainOrders,
+    bool enrichDetails = false,
+  }) async {
+    try {
+      final summaries =
+          await _sessionRepository.refreshSessionOrdersFromNetwork(
+        waiterId: _currentWaiterId,
+      );
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: enrichDetails,
+        clearSuppressedMatches: true,
+      );
+    } catch (_) {
+      // Keep the cached list already on screen.
+    }
+  }
+
+  void _applySessionOrderSummaries(
+    List<SessionOrder> summaries, {
+    Iterable<SessionOrder>? retainOrders,
+    bool enrichDetails = false,
+    bool clearSuppressedMatches = false,
+  }) {
+    final filtered = summaries.where((o) {
+      for (final suppressed in _suppressedTableNumbers) {
+        if (_tableKeysMatch(o.number, suppressed)) return false;
+      }
+      return true;
+    }).toList();
+
+    orders.assignAll(filtered);
+    if (retainOrders != null) {
+      for (final order in retainOrders) {
+        _upsertOrderInList(order);
+      }
+    }
+    orders.refresh();
+
+    if (clearSuppressedMatches && _suppressedTableNumbers.isNotEmpty) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) =>
+            !filtered.any((o) => _tableKeysMatch(o.number, suppressed)),
+      );
+    }
+
+    if (enrichDetails) {
+      unawaited(_enrichOrdersInBackground(filtered));
     }
   }
 
@@ -226,31 +308,45 @@ class SessionController extends GetxController {
       forceRefresh: true,
       retainOrders: pinned != null ? [pinned] : null,
       showLoading: !background,
-      enrichDetails: !background,
+      enrichDetails: false,
     );
   }
 
-  Future<List<SessionOrder>> _mergeThinOrderRows(
-    List<SessionOrder> summaries,
-  ) async {
-    final merged = <SessionOrder>[];
+  /// Fills product lines from cache / network without blocking the list UI.
+  Future<void> _enrichOrdersInBackground(List<SessionOrder> summaries) async {
+    final tasks = <Future<void>>[];
 
     for (final summary in summaries) {
-      if (summary.id <= 0) {
-        merged.add(summary);
-        continue;
-      }
+      if (summary.id <= 0) continue;
 
-      try {
-        final detail = await _orderRepository.getOrderDetail(summary.id);
-        merged.add(detail);
-      } catch (_) {
-        merged.add(summary);
-      }
+      tasks.add(() async {
+        try {
+          final cached = _orderRepository.cachedOrderDetail(summary.id);
+          if (cached != null) {
+            final detail = OrderMapper.fromOrderDetail(cached).copyWith(
+              id: summary.id,
+            );
+            if (_stillInList(summary.id)) {
+              _upsertOrderInList(detail);
+            }
+            return;
+          }
+
+          final detail = await _orderRepository.getOrderDetail(summary.id);
+          if (_stillInList(summary.id)) {
+            _upsertOrderInList(detail);
+          }
+        } catch (_) {}
+      }());
     }
 
-    return merged;
+    if (tasks.isNotEmpty) {
+      await Future.wait(tasks);
+    }
   }
+
+  bool _stillInList(int orderId) =>
+      orders.any((order) => order.id == orderId);
 
   bool _isOrderSuppressed(String orderNumber) {
     for (final suppressed in _suppressedTableNumbers) {

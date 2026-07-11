@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../core/network/api_exception.dart';
 import '../../models/session_order.dart';
 import '../../services/connectivity_service.dart';
@@ -22,6 +24,16 @@ class SessionRepository {
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
   List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
+
+  /// Instant session-list paint from Hive (no network).
+  List<SessionOrder> getCachedSessionOrders({int? waiterId}) {
+    final cached = _local.readOpenOrdersList();
+    if (cached.isEmpty) return const [];
+    return OrderMapper.sessionOrdersFromOrdersList(
+      cached,
+      waiterId: waiterId,
+    );
+  }
 
   Future<ActiveDayInfo> getActiveDay({bool forceRefresh = false}) async {
     if (!forceRefresh) {
@@ -126,68 +138,103 @@ class SessionRepository {
   }
 
   /// Open orders for the session screen — primary [GET /api/orders], not tables.
+  ///
+  /// Cache-first when [forceRefresh] is false. Network path uses the first
+  /// page only so list paint / pull-to-refresh stay snappy; extra pages and
+  /// the unscoped list warm the cache in the background.
   Future<List<SessionOrder>> getSessionOrders({
     bool forceRefresh = false,
     int? waiterId,
   }) async {
-    if (!forceRefresh && _local.readOpenOrdersList().isNotEmpty) {
-      _refreshSessionOrdersInBackground(waiterId: waiterId);
-      return _sessionOrdersFromCache(waiterId: waiterId);
-    }
-
-    if (!await _connectivity.isOnline) {
-      final cachedOrders = _local.readOpenOrdersList();
-      if (cachedOrders.isEmpty) {
-        throw ApiException(
-          message: 'Liste des commandes indisponible hors ligne.',
-        );
+    if (!forceRefresh) {
+      final cached = getCachedSessionOrders(waiterId: waiterId);
+      if (cached.isNotEmpty) {
+        return cached;
       }
-      return _sessionOrdersFromCache(waiterId: waiterId);
     }
 
-    return _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+    try {
+      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+    } catch (_) {
+      final cached = getCachedSessionOrders(waiterId: waiterId);
+      if (cached.isNotEmpty) return cached;
+      rethrow;
+    }
   }
 
-  List<SessionOrder> _sessionOrdersFromCache({int? waiterId}) {
-    return OrderMapper.sessionOrdersFromOrdersList(
-      _local.readOpenOrdersList(),
-      waiterId: waiterId,
-    );
+  /// Network refresh used after cache paint / pull-to-refresh.
+  Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
+    int? waiterId,
+  }) async {
+    try {
+      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+    } catch (_) {
+      final cached = getCachedSessionOrders(waiterId: waiterId);
+      if (cached.isNotEmpty) return cached;
+      rethrow;
+    }
   }
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
   }) async {
-    final orderMaps = await _loadOrderMaps(waiterId: waiterId);
+    final orderMaps = await _loadOrderMapsFast(waiterId: waiterId);
 
-    await _local.saveOpenOrdersList(orderMaps);
+    // Persist off the critical path — UI already has mapped rows.
+    unawaited(_local.saveOpenOrdersList(orderMaps));
+
     return OrderMapper.sessionOrdersFromOrdersList(
       orderMaps,
       waiterId: waiterId,
     );
   }
 
-  Future<List<Map<String, dynamic>>> _loadOrderMaps({int? waiterId}) async {
-    var scoped = <Map<String, dynamic>>[];
-
+  /// Single round-trip (page 1) for the session list; more pages in background.
+  Future<List<Map<String, dynamic>>> _loadOrderMapsFast({
+    int? waiterId,
+  }) async {
     if (waiterId != null && waiterId > 0) {
       try {
-        scoped = await _remote.fetchOrdersList(waiterId: waiterId);
+        final scoped = await _remote.fetchOrdersList(
+          waiterId: waiterId,
+          firstPageOnly: true,
+        );
+        if (scoped.isNotEmpty) {
+          unawaited(_completeOrdersCacheInBackground(waiterId: waiterId));
+          return scoped;
+        }
       } catch (_) {}
     }
 
     try {
-      final all = await _remote.fetchOrdersList();
-      return OrderMapper.mergeOrderMapLists(scoped, all);
+      final all = await _remote.fetchOrdersList(firstPageOnly: true);
+      unawaited(_completeOrdersCacheInBackground());
+      return all;
     } catch (_) {
-      return scoped;
+      // Last resort: compact open-orders endpoint (single request).
+      try {
+        return await _remote.fetchOpenOrdersList();
+      } catch (_) {
+        return const [];
+      }
     }
   }
 
-  Future<void> _refreshSessionOrdersInBackground({int? waiterId}) async {
+  Future<void> _completeOrdersCacheInBackground({int? waiterId}) async {
     try {
-      if (!await _connectivity.isOnline) return;
-      await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+      final pages = await _remote.fetchOrdersList(waiterId: waiterId);
+      final current = _local.readOpenOrdersList();
+      var merged = OrderMapper.mergeOrderMapLists(current, pages);
+
+      // Also merge unscoped list when we started waiter-scoped.
+      if (waiterId != null && waiterId > 0) {
+        try {
+          final all = await _remote.fetchOrdersList();
+          merged = OrderMapper.mergeOrderMapLists(merged, all);
+        } catch (_) {}
+      }
+
+      await _local.saveOpenOrdersList(merged);
     } catch (_) {}
   }
 }

@@ -28,21 +28,25 @@ class TableDetailsPage extends GetView<TableDetailsController> {
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Obx(() {
-          if (!Get.isRegistered<SessionController>()) {
-            return const SizedBox.shrink();
+          final sessionRegistered = Get.isRegistered<SessionController>();
+          final session =
+              sessionRegistered ? Get.find<SessionController>() : null;
+          if (session != null) {
+            session.orders.length;
           }
 
-          final session = Get.find<SessionController>();
-          final order = session.findOrder(
-            orderNumber: controller.orderNumber,
-            orderId: controller.orderId,
-          );
+          final order = session?.findOrder(
+                orderNumber: controller.orderNumber,
+                orderId: controller.orderId,
+              ) ??
+              controller.seedOrder ??
+              controller.order;
 
           if (order == null) {
-            return Center(
-              child: Text(
-                'Table introuvable',
-                style: TextStyle(color: AppTheme.textSecondary),
+            return const ColoredBox(
+              color: Colors.white,
+              child: Center(
+                child: CircularProgressIndicator(color: AppTheme.primary),
               ),
             );
           }
@@ -55,7 +59,7 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
-                  SessionOrder? currentOrder = session.findOrder(
+                  SessionOrder? currentOrder = session?.findOrder(
                     orderNumber: controller.orderNumber,
                     orderId: controller.orderId,
                   );

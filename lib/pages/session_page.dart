@@ -78,8 +78,11 @@ class SessionPage extends GetView<SessionController> {
                     ),
                     child: Obx(() {
                       final loadingMore = controller.isLoadingMoreOrders.value;
-                      final count = controller.orders.length +
-                          (loadingMore ? 1 : 0);
+                      // toList() so in-place total/product updates rebuild rows
+                      // (length alone does not always notify Obx).
+                      final visibleOrders = controller.orders.toList();
+                      final count =
+                          visibleOrders.length + (loadingMore ? 1 : 0);
                       return ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: JtrResponsive.getResponsivePadding(
@@ -92,7 +95,7 @@ class SessionPage extends GetView<SessionController> {
                             JtrResponsive.getResponsiveSpacing(context, 8),
                         itemBuilder: (context, index) {
                           if (loadingMore &&
-                              index == controller.orders.length) {
+                              index == visibleOrders.length) {
                             return Padding(
                               padding: JtrResponsive.getResponsivePadding(
                                 context,
@@ -111,7 +114,7 @@ class SessionPage extends GetView<SessionController> {
                             );
                           }
                           return _OrderRow(
-                            order: controller.orders[index],
+                            order: visibleOrders[index],
                           );
                         },
                       );
@@ -392,6 +395,7 @@ class _OrderRow extends GetView<SessionController> {
             onDoubleTap: () => controller.openTableDetails(
               order.number,
               orderId: order.id > 0 ? order.id : null,
+              seedOrder: order,
             ),
             child: Container(
             decoration: BoxDecoration(

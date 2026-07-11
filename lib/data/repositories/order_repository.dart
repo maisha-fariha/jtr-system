@@ -40,6 +40,10 @@ class OrderRepository {
   /// Last empty-create seed product id (stripped on first real add if leftover).
   int? lastEmptyOrderSeedProductId;
 
+  /// In-flight seed strips after create — first add must wait so PUT strip
+  /// does not race with PUT revive/add and wipe the waiter's item.
+  final Map<int, Future<void>> _pendingCreateSeedStrips = <int, Future<void>>{};
+
   /// Last create-order debug trace (for on-screen error/success dialog).
   String? lastCreateOrderLog;
 
@@ -371,22 +375,36 @@ class OrderRepository {
     // Open fast: use POST response as an empty shell and strip the required
     // seed item in the background (API often requires a seed line on create).
     var detail = OrderMapper.unwrapOrderDetail(createdPayload!);
-    if (OrderMapper.orderIdFromDetail(detail) != orderId) {
-      detail = <String, dynamic>{...detail, 'id': orderId};
-    }
+    detail = <String, dynamic>{
+      ...detail,
+      'id': orderId,
+      'table_id': table.id,
+      'table_number': table.tableNumber,
+    };
 
     final shell = OrderMapper.asOpenEmptyOrderShell(detail);
     await _local.saveOrderDetail(orderId, shell);
     await _sessionLocal.upsertOpenOrderInList(shell);
 
+    final displayNumber = OrderMapper.displayKey(
+      orderId: orderId,
+      tableNumber: table.tableNumber,
+    );
     final order = OrderMapper.fromOrderDetail(shell).copyWith(
       id: orderId,
+      number: displayNumber,
       products: const [],
       displayEntries: const [],
       total: OrderMapper.formatPrice('0'),
     );
 
-    unawaited(_stripCreateSeedInBackground(orderId, detail, apiLog));
+    final stripFuture = _stripCreateSeedInBackground(orderId, detail, apiLog);
+    _pendingCreateSeedStrips[orderId] = stripFuture;
+    unawaited(
+      stripFuture.whenComplete(() {
+        _pendingCreateSeedStrips.remove(orderId);
+      }),
+    );
 
     apiLog
       ..writeln()
@@ -1020,6 +1038,12 @@ class OrderRepository {
     apiLog.writeln('order_id=$orderId product_id=$productId qty=$qty');
 
     try {
+      final pendingStrip = _pendingCreateSeedStrips[orderId];
+      if (pendingStrip != null) {
+        apiLog.writeln('── Attente fin strip seed create ──');
+        await pendingStrip;
+      }
+
       apiLog.writeln('── GET /api/orders/$orderId ──');
       var detail = await _remote.fetchOrderDetail(orderId);
 
@@ -1514,6 +1538,12 @@ class OrderRepository {
     apiLog.writeln('order_id=$orderId product_id=$productId');
 
     try {
+      final pendingStrip = _pendingCreateSeedStrips[orderId];
+      if (pendingStrip != null) {
+        apiLog.writeln('── Attente fin strip seed create ──');
+        await pendingStrip;
+      }
+
       apiLog.writeln('── GET /api/orders/$orderId ──');
       var detail = await _remote.fetchOrderDetail(orderId);
 

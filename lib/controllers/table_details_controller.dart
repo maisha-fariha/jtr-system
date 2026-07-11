@@ -62,6 +62,9 @@ class TableDetailsController extends GetxController {
   /// When true (fresh empty create), skip blocking GET detail on open.
   bool _deferDetailFetch = false;
 
+  /// Snapshot from navigation — avoids empty flashes and keeps latest total.
+  SessionOrder? seedOrder;
+
   final collapsedSuivreSections = <int>{}.obs;
   final expandedMenuLineIndices = <int>{}.obs;
   final selectedSuivreSection = RxnInt();
@@ -242,9 +245,20 @@ class TableDetailsController extends GetxController {
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
     _deferDetailFetch = args is Map && args['deferDetailFetch'] == true;
+    final rawSeed = args is Map ? args['seedOrder'] : null;
+    if (rawSeed is SessionOrder) {
+      seedOrder = rawSeed;
+      if ((orderId == null || orderId! <= 0) && rawSeed.id > 0) {
+        orderId = rawSeed.id;
+      }
+      if (orderNumber.isEmpty) {
+        orderNumber = rawSeed.number;
+      }
+    }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
-      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch',
+      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch '
+      'hasSeed=${seedOrder != null}',
     );
 
     _loadCatalog();
@@ -307,11 +321,12 @@ class TableDetailsController extends GetxController {
   }
 
   SessionOrder? get order {
-    if (!Get.isRegistered<SessionController>()) return null;
+    if (!Get.isRegistered<SessionController>()) return seedOrder;
     return Get.find<SessionController>().findOrder(
-      orderNumber: orderNumber,
-      orderId: orderId,
-    );
+          orderNumber: orderNumber,
+          orderId: orderId,
+        ) ??
+        seedOrder;
   }
 
   int? get resolvedOrderId {
@@ -1452,8 +1467,16 @@ class TableDetailsController extends GetxController {
         await _orderRepository.resolveOrderIdForTableNumber(orderNumber);
     if (resolved != null && resolved > 0) {
       orderId = resolved;
+      return resolved;
     }
-    return resolved;
+
+    // Prefer the id we already opened with (create / seedOrder) when tables
+    // list has not yet published the new active order.
+    if (orderId != null && orderId! > 0) return orderId;
+    if (current != null && current.id > 0 && !current.isLocalOnly) {
+      return current.id;
+    }
+    return null;
   }
 
   Future<void> _setOrderLineQuantity(int lineIndex, int qty) async {
@@ -1479,15 +1502,22 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
-
-    Get.find<SessionController>().updateOrderRow(
-      updated.copyWith(
-        displayEntries: displayEntries,
-      ),
+    final synced = updated.copyWith(
+      displayEntries: displayEntries,
     );
+
+    // Keep seed in sync so back-navigation always has the latest total.
+    if (seedOrder != null &&
+        (seedOrder!.id == synced.id ||
+            seedOrder!.number == synced.number ||
+            seedOrder!.number == displayNumber)) {
+      seedOrder = synced;
+    }
+
+    Get.find<SessionController>().updateOrderRow(synced);
     orderUiRevision.value++;
 
-    final id = updated.id;
+    final id = synced.id;
     if (id > 0 && Get.isRegistered<OrderRepository>()) {
       unawaited(
         Get.find<OrderRepository>().persistSuivreLayoutHints(

@@ -414,18 +414,26 @@ class SessionController extends GetxController {
     }
   }
 
-  /// Session list summaries omit products; never wipe lines already loaded.
+  /// Session list summaries omit products; never wipe lines / totals already loaded.
   SessionOrder _preferDetailedOrder(
     SessionOrder incoming,
     SessionOrder? previous,
   ) {
     if (previous == null) return incoming;
+
+    // Lightweight list rows have no lines — keep local products AND total.
+    // (API summaries often still report 0,00 € right after the first add.)
     if (incoming.products.isEmpty && previous.products.isNotEmpty) {
-      return incoming.copyWith(
-        products: previous.products,
-        displayEntries: previous.displayEntries,
+      return previous.copyWith(
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty ? incoming.couverts : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
       );
     }
+
     return incoming;
   }
 
@@ -505,6 +513,14 @@ class SessionController extends GetxController {
       if (_tableKeysMatch(orderNumber, suppressed)) return true;
     }
     return false;
+  }
+
+  /// After delete we suppress that table briefly; recreating must clear it
+  /// or the new order never appears in the list (and row sync is dropped).
+  void _clearSuppressedTable(String tableNumber) {
+    _suppressedTableNumbers.removeWhere(
+      (suppressed) => _tableKeysMatch(suppressed, tableNumber),
+    );
   }
 
   void _upsertOrderInList(SessionOrder order) {
@@ -694,18 +710,22 @@ class SessionController extends GetxController {
     String orderNumber, {
     int? orderId,
     bool deferDetailFetch = false,
+    SessionOrder? seedOrder,
   }) {
     logOrderFlow(
       'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
-      'deferDetailFetch=$deferDetailFetch',
+      'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',
     );
-    final resolvedId = orderId != null && orderId > 0 ? orderId : null;
+    final resolvedId = orderId != null && orderId > 0
+        ? orderId
+        : (seedOrder != null && seedOrder.id > 0 ? seedOrder.id : null);
     Get.toNamed(
       AppRoutes.tableDetails,
       arguments: {
         'orderNumber': orderNumber,
         if (resolvedId != null) 'orderId': resolvedId,
         'deferDetailFetch': deferDetailFetch,
+        if (seedOrder != null) 'seedOrder': seedOrder,
       },
     );
   }
@@ -765,9 +785,9 @@ class SessionController extends GetxController {
     var blockRecovery = false;
 
     try {
-      // Prefer cached tables so create isn't blocked on a full tables GET.
-      // Occupancy is still checked; list refreshes in the background when cached.
-      final tables = await _sessionRepository.getTablesList();
+      // Fresh tables list — stale cache can block create (false "already active")
+      // or skip the occupied dialog incorrectly after a recent delete/close.
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
@@ -906,6 +926,9 @@ class SessionController extends GetxController {
             (usable.waiterId == null ||
                 usable.waiterId == 0 ||
                 usable.waiterId == waiterId)) {
+          // Delete suppress is keyed by table number — clear so recreate shows.
+          _clearSuppressedTable(tableNumber);
+          _clearSuppressedTable(usable.number);
           _upsertOrderInList(usable);
           logOrderFlow(
             '_createTableAndOpenDetails OPEN table=${usable.number} orderId=${usable.id}',
@@ -914,7 +937,9 @@ class SessionController extends GetxController {
             usable.number,
             orderId: usable.id,
             deferDetailFetch: true,
+            seedOrder: usable,
           );
+          // Keep empty shell pinned if list soft-refresh races ahead of API.
           unawaited(
             refreshOrderList(
               pinOrder: usable,
@@ -1004,6 +1029,7 @@ class SessionController extends GetxController {
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      seedOrder: target,
     );
   }
 

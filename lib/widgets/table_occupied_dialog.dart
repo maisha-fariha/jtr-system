@@ -147,7 +147,7 @@ class TableOccupiedDialog extends StatelessWidget {
                         letterSpacing: 0.5,
                       ),
                     ),
-                    child: const Text('OK'),
+                    child: const Text('Skip'),
                   ),
                 ),
               ],

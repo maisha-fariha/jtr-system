@@ -662,6 +662,7 @@ class SessionController extends GetxController {
     isCreatingOrder.value = true;
     SessionOrder? created;
     var attemptedCreate = false;
+    var blockRecovery = false;
 
     try {
       final tables = await _sessionRepository.getTablesList(forceRefresh: true);
@@ -682,11 +683,22 @@ class SessionController extends GetxController {
         tableNumber,
         waiterId: waiterId,
       );
-      if (OrderMapper.isTableInUse(tables, tableNumber) && !reclaimOwnOrphan) {
-        // Table in use by another waiter / session — not in our list.
-        logOrderFlow('_createTableAndOpenDetails ABORT table occupied (other)');
+
+      // Other waiter's table → Skip dialog (do not create / release).
+      if (OrderMapper.shouldShowSkipDialogForCreate(
+        tables,
+        tableNumber,
+        waiterId: waiterId,
+      )) {
+        logOrderFlow(
+          '_createTableAndOpenDetails ABORT skip dialog '
+          'table=$tableNumber '
+          'owner=${OrderMapper.activeOrderOwnerId(tables, tableNumber)} '
+          'status=${OrderMapper.activeOrderStatus(tables, tableNumber)}',
+        );
+        blockRecovery = true;
         if (context.mounted) {
-          TableOccupiedDialog.show(
+          await TableOccupiedDialog.show(
             context: context,
             userName: _currentUserDisplayName,
             tableNumber: tableNumber,
@@ -717,18 +729,62 @@ class SessionController extends GetxController {
           salesZoneId: salesZoneId,
         );
         created = result.order;
-      } on ApiException {
+        final createdWaiter = created.waiterId;
+        if (createdWaiter != null &&
+            createdWaiter > 0 &&
+            createdWaiter != waiterId) {
+          created = null;
+          blockRecovery = true;
+          if (context.mounted) {
+            await TableOccupiedDialog.show(
+              context: context,
+              userName: _currentUserDisplayName,
+              tableNumber: tableNumber,
+            );
+          }
+          return;
+        }
+      } on ApiException catch (e) {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: tableNumber,
         );
         created = recovered?.order;
+        if (created != null) {
+          final recoveredWaiter = created.waiterId;
+          if (recoveredWaiter != null &&
+              recoveredWaiter > 0 &&
+              recoveredWaiter != waiterId) {
+            created = null;
+            blockRecovery = true;
+            if (context.mounted) {
+              await TableOccupiedDialog.show(
+                context: context,
+                userName: _currentUserDisplayName,
+                tableNumber: tableNumber,
+              );
+            }
+            return;
+          }
+        } else {
+          if (OrderMapper.isTableOwnershipDeniedMessage(e.message)) {
+            blockRecovery = true;
+            if (context.mounted) {
+              await TableOccupiedDialog.show(
+                context: context,
+                userName: _currentUserDisplayName,
+                tableNumber: tableNumber,
+              );
+            }
+          } else {
+            _showSnack('Erreur', e.message);
+          }
+        }
       }
     } catch (_) {
       // Background refresh may still surface the order if the backend created it.
     } finally {
       isCreatingOrder.value = false;
-      if (attemptedCreate) {
-        // If POST succeeded but mapping failed, recover the remote empty order.
+      if (attemptedCreate && !blockRecovery) {
         if (created == null) {
           final resolved = await _orderRepository.resolveOrderIdForTableNumber(
             tableNumber,
@@ -736,26 +792,43 @@ class SessionController extends GetxController {
           if (resolved != null && resolved > 0) {
             try {
               created = await _orderRepository.openAsEmptyTableOrder(resolved);
-            } catch (_) {}
+            } catch (_) {
+              created = null;
+            }
           }
         }
 
-        if (created != null) {
-          _upsertOrderInList(created);
+        final usable = created;
+        if (usable != null &&
+            usable.id > 0 &&
+            (usable.waiterId == null ||
+                usable.waiterId == 0 ||
+                usable.waiterId == waiterId)) {
+          _upsertOrderInList(usable);
           logOrderFlow(
-            '_createTableAndOpenDetails OPEN table=${created.number} orderId=${created.id}',
+            '_createTableAndOpenDetails OPEN table=${usable.number} orderId=${usable.id}',
           );
           openTableDetails(
-            created.number,
-            orderId: created.id > 0 ? created.id : null,
+            usable.number,
+            orderId: usable.id,
           );
+          unawaited(
+            refreshOrderList(
+              pinOrder: usable,
+              background: true,
+            ),
+          );
+        } else if (usable != null &&
+            usable.waiterId != null &&
+            usable.waiterId != waiterId) {
+          if (context.mounted) {
+            await TableOccupiedDialog.show(
+              context: context,
+              userName: _currentUserDisplayName,
+              tableNumber: tableNumber,
+            );
+          }
         }
-        unawaited(
-          refreshOrderList(
-            pinOrder: created,
-            background: true,
-          ),
-        );
       }
     }
   }

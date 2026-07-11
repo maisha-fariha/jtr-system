@@ -166,17 +166,16 @@ class TableDetailsController extends GetxController {
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
 
-    // Fresh / emptied commande is stored empty in session — don't overwrite
-    // with a backend auto-injected default product (or fail on local-only).
     final current = order;
-    if (current != null && current.products.isEmpty) {
-      if (current.isLocalOnly) return;
-      if (orderId == null || orderId == current.id) {
-        orderId = current.id;
-        return;
-      }
+    // Local-only shell has no remote detail yet.
+    if (current != null && current.isLocalOnly) return;
+
+    if (current != null && current.id > 0) {
+      orderId = current.id;
     }
 
+    // Session list rows are lightweight (total only, no lines). Always fetch
+    // GET /api/orders/:id so table details can show seat_orders items.
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,

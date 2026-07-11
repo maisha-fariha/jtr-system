@@ -263,6 +263,144 @@ class OrderMapper {
     return waiterIdFromOrderMap(table);
   }
 
+  /// Waiter assigned to the table's active order (if any).
+  static int? activeOrderOwnerId(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final active = table['active_order'];
+      if (active is Map<String, dynamic>) {
+        final fromOrder = waiterIdFromOrderMap(active);
+        if (fromOrder != null && fromOrder > 0) return fromOrder;
+      }
+      if (_activeOrderId(table) != null) {
+        final fromTable = waiterIdFromOrderMap(table);
+        if (fromTable != null && fromTable > 0) return fromTable;
+      }
+    }
+    return null;
+  }
+
+  /// Status of the table's active order (`pending`, `open`, …), if any.
+  static String? activeOrderStatus(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final active = table['active_order'];
+      if (active is Map<String, dynamic>) {
+        final status = active['status']?.toString().trim();
+        if (status != null && status.isNotEmpty) return status.toLowerCase();
+      }
+    }
+    return null;
+  }
+
+  /// True when another waiter owns this table's order/session.
+  static bool isAssignedToOtherWaiter(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+
+    final orderOwner = activeOrderOwnerId(tables, tableNumber);
+    if (orderOwner != null && orderOwner > 0 && orderOwner != waiterId) {
+      return true;
+    }
+
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final sessionOwner = tableSessionOwnerId(table);
+      if (sessionOwner != null &&
+          sessionOwner > 0 &&
+          sessionOwner != waiterId) {
+        // Other waiter holds lock/session or is listed on the table row.
+        if (_activeOrderId(table) != null ||
+            hasOrphanSessionWithoutOrder(table) ||
+            table['is_locked'] == true ||
+            table['status'] == 'open') {
+          return true;
+        }
+      }
+
+      // active_order present without our waiter id → treat as foreign.
+      if (_activeOrderId(table) != null) {
+        final active = table['active_order'];
+        if (active is Map<String, dynamic>) {
+          final activeWaiter = waiterIdFromOrderMap(active);
+          if (activeWaiter != null &&
+              activeWaiter > 0 &&
+              activeWaiter != waiterId) {
+            return true;
+          }
+          // Has active order but waiter unknown and not reclaimable by us.
+          if (activeWaiter == null || activeWaiter <= 0) {
+            final lockedBy = table['locked_by'];
+            if (lockedBy is num &&
+                lockedBy.toInt() > 0 &&
+                lockedBy.toInt() != waiterId) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Skip dialog whenever another waiter owns the table (order or session lock).
+  /// Own reclaimable orphan sessions never skip.
+  static bool shouldShowSkipDialogForCreate(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+    if (canReclaimOrphanTableSession(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      return false;
+    }
+
+    if (isAssignedToOtherWaiter(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      return true;
+    }
+
+    // Table already in use (order/session) and not reclaimable by this waiter.
+    return isTableInUse(tables, tableNumber);
+  }
+
+  /// API messages that mean this waiter cannot take over the table.
+  static bool isTableOwnershipDeniedMessage(String message) {
+    final msg = message.toLowerCase();
+    return msg.contains('not allowed to release') ||
+        msg.contains('not allowed') ||
+        msg.contains('release this table') ||
+        msg.contains('n\'est pas autoris') ||
+        msg.contains('pas autoris') ||
+        msg.contains('occup') ||
+        msg.contains('already') ||
+        msg.contains('lock') ||
+        (msg.contains('waiter') && msg.contains('table')) ||
+        msg.contains('session');
+  }
+
   /// Open/locked session with no [active_order] (orphan after session-only create).
   static bool hasOrphanSessionWithoutOrder(Map<String, dynamic> table) {
     if (_activeOrderId(table) != null) return false;
@@ -1398,7 +1536,10 @@ class OrderMapper {
     );
   }
 
-  /// Valid POST /api/orders body per Orders API spec (requires ≥1 item).
+  /// Valid POST /api/orders body per Orders API spec.
+  ///
+  /// All nested ids are `0`; new items carry a client [uid]. Matches:
+  /// waiter_id, number_of_guests, sales_zone_id, seat_orders → courses/items.
   static Map<String, dynamic> buildCreateOrderWithItemPayload({
     required int waiterId,
     required int numberOfGuests,
@@ -1425,13 +1566,6 @@ class OrderMapper {
       isStillMenuMissing: isStillMenuMissing,
       forCreate: true,
     );
-    if (status == 'cancelled') {
-      final now = DateTime.now().toUtc().toIso8601String();
-      item['cancel_reason'] = comment.isNotEmpty
-          ? comment
-          : emptyCreateSeedCancelReason;
-      item['canceled_datetime'] = now;
-    }
 
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
@@ -1451,8 +1585,9 @@ class OrderMapper {
       ],
     };
 
-    if (tableId != null) payload['table_id'] = tableId;
     if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    // Optional: some backends also accept table_id; session start usually binds it.
+    if (tableId != null) payload['table_id'] = tableId;
 
     return payload;
   }
@@ -2496,6 +2631,149 @@ class OrderMapper {
   static const emptyCreateSeedCancelReason =
       'Commande vide — article automatique annulé';
 
+  /// True when the ticket still has ONLY the empty-create seed line(s).
+  static bool hasOnlyEmptyCreateSeed(
+    Map<String, dynamic> orderDetail, {
+    int? seedProductId,
+  }) {
+    if (orderDetailHasNoVisibleItems(orderDetail)) return false;
+
+    if (seedProductId != null && seedProductId > 0) {
+      final seatOrders = orderDetail['seat_orders'];
+      if (seatOrders is! List) return false;
+      var sawSeed = false;
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          final items = course['items'];
+          if (items is! List) continue;
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            if (item['status'] == 'cancelled') continue;
+            if (_itemProductId(item) != seedProductId) return false;
+            sawSeed = true;
+          }
+        }
+      }
+      return sawSeed;
+    }
+
+    // Fallback: single free simple line left from create seed.
+    if (countVisibleLineItems(orderDetail) != 1) return false;
+    final item = firstVisibleItem(orderDetail);
+    if (item == null) return false;
+    if (!_isSimpleLineItem(item)) return false;
+    return _parseMoney(item['sub_total']) <= 0.0001;
+  }
+
+  /// True when a leftover create-seed line is still present (possibly with others).
+  static bool hasLeftoverEmptyCreateSeed(
+    Map<String, dynamic> orderDetail, {
+    int? seedProductId,
+  }) {
+    if (seedProductId != null && seedProductId > 0) {
+      return containsVisibleProductId(orderDetail, seedProductId);
+    }
+    return hasOnlyEmptyCreateSeed(orderDetail);
+  }
+
+  static bool containsVisibleProductId(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          if (_itemProductId(item) == productId) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static Map<String, dynamic>? firstVisibleItem(Map<String, dynamic> orderDetail) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          return item;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Deep copy with every course `items` cleared (keeps course/seat ids for PUT).
+  static Map<String, dynamic> withAllCourseItemsCleared(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) return working;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        course['items'] = <dynamic>[];
+      }
+    }
+    return working;
+  }
+
+  /// Removes visible lines for [productId] (create-seed cleanup).
+  static Map<String, dynamic> withoutVisibleProduct(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) return working;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        course['items'] = items.where((item) {
+          if (item is! Map<String, dynamic>) return true;
+          if (item['status'] == 'cancelled') return true;
+          return _itemProductId(item) != productId;
+        }).toList();
+      }
+    }
+    return working;
+  }
+
   static Map<String, dynamic> cancelAllVisibleItems(
     Map<String, dynamic> orderDetail, {
     String cancelReason = emptyCreateSeedCancelReason,
@@ -2528,30 +2806,23 @@ class OrderMapper {
       }
     }
 
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
+    return payload;
   }
 
   /// Removes all line items from seat courses (stronger empty-order clear).
   static Map<String, dynamic> stripAllVisibleItems(
     Map<String, dynamic> orderDetail,
   ) {
-    final working = _deepCopyOrderMap(orderDetail);
-    final seatOrders = working['seat_orders'];
-    if (seatOrders is! List) {
-      return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
-    }
-
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
-        course['items'] = <dynamic>[];
-      }
-    }
-
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    final working = withAllCourseItemsCleared(orderDetail);
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
+    return payload;
   }
 
   static Map<String, dynamic> _deepCopyOrderMap(Map<String, dynamic> source) {
@@ -3428,6 +3699,11 @@ class OrderMapper {
     Map<String, dynamic> course,
   ) {
     final copy = Map<String, dynamic>.from(course);
+    final courseId = (course['id'] as num?)?.toInt();
+    // New courses use id: 0 (PUT full state).
+    if (courseId == null || courseId <= 0) {
+      copy['id'] = 0;
+    }
     final items = course['items'];
     copy['items'] = items is List
         ? items
@@ -3481,7 +3757,6 @@ class OrderMapper {
     String? uid,
   }) {
     final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
-    final hasMenus = sanitizedMenus.isNotEmpty;
 
     return {
       'id': 0,
@@ -3491,11 +3766,11 @@ class OrderMapper {
       'product': {'id': productId},
       'sub_total': subTotal,
       'qty': qty,
-      'status': status,
       'comment': comment,
+      'status': status,
       'is_loss': false,
+      'menu_selections': sanitizedMenus,
       'is_still_menu_missing': isStillMenuMissing,
-      if (hasMenus) 'menu_selections': sanitizedMenus,
     };
   }
 

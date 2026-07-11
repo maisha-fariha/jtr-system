@@ -162,15 +162,15 @@ class OrderRepository {
       await _sessionLocal.removeOpenOrderFromList(orderId);
     }
 
+    // Session release is best-effort: the order is already closed. Backend may
+    // return "not allowed to release this table" even when delete succeeded.
     if (tableId != null && tableId > 0) {
       try {
         await _remote.endTableSession(tableId);
-      } on ApiException catch (error) {
+      } on ApiException {
         if (orderId <= 0) rethrow;
-        final message = error.message.toLowerCase();
-        if (!message.contains('session') && !message.contains('404')) {
-          rethrow;
-        }
+      } catch (_) {
+        if (orderId <= 0) rethrow;
       }
     }
   }

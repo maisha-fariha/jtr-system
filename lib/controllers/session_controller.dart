@@ -903,7 +903,11 @@ class SessionController extends GetxController {
       if (order.isLocalOnly) {
         final tableId = -order.id;
         if (tableId > 0) {
-          await _orderRepository.endTableSession(tableId);
+          try {
+            await _orderRepository.endTableSession(tableId);
+          } on ApiException {
+            // Order is local-only; still remove from the list even if release fails.
+          }
         }
       } else {
         await _orderRepository.closeOrder(

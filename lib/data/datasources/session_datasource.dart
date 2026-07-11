@@ -78,24 +78,49 @@ class SessionRemoteDataSource {
     int? waiterId,
     bool firstPageOnly = false,
   }) async {
-    final first = await _fetchOrdersPage(page: 1, waiterId: waiterId);
-    if (firstPageOnly || first.lastPage <= 1 || first.orders.isEmpty) {
+    final first = await fetchOrdersFirstPage(waiterId: waiterId);
+    if (firstPageOnly || first.lastPage <= 1) {
       return first.orders;
     }
 
-    final remainingPages = <int>[
-      for (var p = 2; p <= first.lastPage && p <= 25; p++) p,
-    ];
-    final rest = await Future.wait(
-      remainingPages.map(
-        (page) => _fetchOrdersPage(page: page, waiterId: waiterId),
-      ),
+    final rest = await fetchOrdersRemainingPages(
+      lastPage: first.lastPage,
+      waiterId: waiterId,
     );
+    return [...first.orders, ...rest];
+  }
 
-    return [
-      ...first.orders,
-      for (final page in rest) ...page.orders,
+  /// Page 1 only — same cost as a single Postman request.
+  Future<({List<Map<String, dynamic>> orders, int lastPage})>
+      fetchOrdersFirstPage({int? waiterId}) {
+    return _fetchOrdersPage(page: 1, waiterId: waiterId);
+  }
+
+  /// Pages 2..[lastPage] in parallel (capped).
+  Future<List<Map<String, dynamic>>> fetchOrdersRemainingPages({
+    required int lastPage,
+    int? waiterId,
+  }) async {
+    if (lastPage <= 1) return const [];
+
+    final remainingPages = <int>[
+      for (var p = 2; p <= lastPage && p <= 50; p++) p,
     ];
+    if (remainingPages.isEmpty) return const [];
+
+    // Small batches avoid slamming the API (13+ concurrent often >3s).
+    const batchSize = 4;
+    final orders = <Map<String, dynamic>>[];
+    for (var i = 0; i < remainingPages.length; i += batchSize) {
+      final batch = remainingPages.skip(i).take(batchSize).toList();
+      final pages = await Future.wait(
+        batch.map((page) => _fetchOrdersPage(page: page, waiterId: waiterId)),
+      );
+      for (final page in pages) {
+        orders.addAll(page.orders);
+      }
+    }
+    return orders;
   }
 
   Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
@@ -104,7 +129,7 @@ class SessionRemoteDataSource {
   }) async {
     final queryParameters = <String, dynamic>{
       'active_day': true,
-      'per_page': 100,
+      'per_page': 10,
       'page': page,
     };
     if (waiterId != null && waiterId > 0) {
@@ -275,17 +300,33 @@ class SessionRemoteDataSource {
     return list.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Reads Laravel-style pagination from:
+  /// `data: { data: [...], meta: { last_page, per_page, total, ... } }`
   int _readLastPage(dynamic data) {
     if (data is! Map<String, dynamic>) return 1;
 
     final meta = data['meta'];
     if (meta is Map<String, dynamic>) {
       final last = meta['last_page'];
-      if (last is num) return last.toInt();
+      if (last is num && last.toInt() > 0) return last.toInt();
+
+      final total = meta['total'];
+      final perPage = meta['per_page'];
+      if (total is num && perPage is num && perPage > 0) {
+        final computed = (total.toInt() + perPage.toInt() - 1) ~/ perPage.toInt();
+        if (computed > 0) return computed;
+      }
     }
 
     final directMeta = data['last_page'];
-    if (directMeta is num) return directMeta.toInt();
+    if (directMeta is num && directMeta.toInt() > 0) return directMeta.toInt();
+
+    final total = data['total'];
+    final perPage = data['per_page'];
+    if (total is num && perPage is num && perPage > 0) {
+      final computed = (total.toInt() + perPage.toInt() - 1) ~/ perPage.toInt();
+      if (computed > 0) return computed;
+    }
 
     return 1;
   }

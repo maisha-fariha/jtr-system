@@ -32,6 +32,7 @@ class SessionRepository {
     return OrderMapper.sessionOrdersFromOrdersList(
       cached,
       waiterId: waiterId,
+      lightweight: true,
     );
   }
 
@@ -139,12 +140,12 @@ class SessionRepository {
 
   /// Open orders for the session screen — primary [GET /api/orders], not tables.
   ///
-  /// Cache-first when [forceRefresh] is false. Network path uses the first
-  /// page only so list paint / pull-to-refresh stay snappy; extra pages and
-  /// the unscoped list warm the cache in the background.
+  /// Returns page 1 as soon as it arrives (~Postman latency). Remaining pages
+  /// load in the background and are delivered via [onAllPagesLoaded].
   Future<List<SessionOrder>> getSessionOrders({
     bool forceRefresh = false,
     int? waiterId,
+    void Function(List<SessionOrder> orders)? onAllPagesLoaded,
   }) async {
     if (!forceRefresh) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
@@ -154,7 +155,10 @@ class SessionRepository {
     }
 
     try {
-      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+      return await _fetchSessionOrdersFromNetwork(
+        waiterId: waiterId,
+        onAllPagesLoaded: onAllPagesLoaded,
+      );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) return cached;
@@ -162,12 +166,16 @@ class SessionRepository {
     }
   }
 
-  /// Network refresh used after cache paint / pull-to-refresh.
+  /// Network refresh: page 1 first, then remaining pages in background.
   Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
     int? waiterId,
+    void Function(List<SessionOrder> orders)? onAllPagesLoaded,
   }) async {
     try {
-      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+      return await _fetchSessionOrdersFromNetwork(
+        waiterId: waiterId,
+        onAllPagesLoaded: onAllPagesLoaded,
+      );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) return cached;
@@ -177,64 +185,86 @@ class SessionRepository {
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
+    void Function(List<SessionOrder> orders)? onAllPagesLoaded,
   }) async {
-    final orderMaps = await _loadOrderMapsFast(waiterId: waiterId);
+    final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
 
-    // Persist off the critical path — UI already has mapped rows.
-    unawaited(_local.saveOpenOrdersList(orderMaps));
+    final first = await _remote.fetchOrdersFirstPage(waiterId: scopedId);
+    var pageMaps = first.orders;
 
-    return OrderMapper.sessionOrdersFromOrdersList(
-      orderMaps,
-      waiterId: waiterId,
-    );
-  }
-
-  /// Single round-trip (page 1) for the session list; more pages in background.
-  Future<List<Map<String, dynamic>>> _loadOrderMapsFast({
-    int? waiterId,
-  }) async {
-    if (waiterId != null && waiterId > 0) {
-      try {
-        final scoped = await _remote.fetchOrdersList(
-          waiterId: waiterId,
-          firstPageOnly: true,
+    // Prefer waiter-scoped page 1; only fall back once (page 1), never full 14 pages twice.
+    if (pageMaps.isEmpty && scopedId != null) {
+      final unscoped = await _remote.fetchOrdersFirstPage();
+      pageMaps = unscoped.orders;
+      unawaited(_local.saveOpenOrdersList(pageMaps));
+      final firstOrders = OrderMapper.sessionOrdersFromOrdersList(
+        pageMaps,
+        waiterId: scopedId,
+        lightweight: true,
+      );
+      if (unscoped.lastPage > 1) {
+        unawaited(
+          _finishRemainingPages(
+            page1: pageMaps,
+            lastPage: unscoped.lastPage,
+            waiterId: null,
+            filterWaiterId: scopedId,
+            onAllPagesLoaded: onAllPagesLoaded,
+          ),
         );
-        if (scoped.isNotEmpty) {
-          unawaited(_completeOrdersCacheInBackground(waiterId: waiterId));
-          return scoped;
-        }
-      } catch (_) {}
+      } else {
+        onAllPagesLoaded?.call(firstOrders);
+      }
+      return firstOrders;
     }
 
-    try {
-      final all = await _remote.fetchOrdersList(firstPageOnly: true);
-      unawaited(_completeOrdersCacheInBackground());
-      return all;
-    } catch (_) {
-      // Last resort: compact open-orders endpoint (single request).
-      try {
-        return await _remote.fetchOpenOrdersList();
-      } catch (_) {
-        return const [];
-      }
+    unawaited(_local.saveOpenOrdersList(pageMaps));
+    final firstOrders = OrderMapper.sessionOrdersFromOrdersList(
+      pageMaps,
+      waiterId: scopedId,
+      lightweight: true,
+    );
+
+    if (first.lastPage > 1) {
+      unawaited(
+        _finishRemainingPages(
+          page1: pageMaps,
+          lastPage: first.lastPage,
+          waiterId: scopedId,
+          filterWaiterId: scopedId,
+          onAllPagesLoaded: onAllPagesLoaded,
+        ),
+      );
+    } else {
+      onAllPagesLoaded?.call(firstOrders);
     }
+
+    return firstOrders;
   }
 
-  Future<void> _completeOrdersCacheInBackground({int? waiterId}) async {
+  Future<void> _finishRemainingPages({
+    required List<Map<String, dynamic>> page1,
+    required int lastPage,
+    required int? waiterId,
+    required int? filterWaiterId,
+    void Function(List<SessionOrder> orders)? onAllPagesLoaded,
+  }) async {
     try {
-      final pages = await _remote.fetchOrdersList(waiterId: waiterId);
-      final current = _local.readOpenOrdersList();
-      var merged = OrderMapper.mergeOrderMapLists(current, pages);
-
-      // Also merge unscoped list when we started waiter-scoped.
-      if (waiterId != null && waiterId > 0) {
-        try {
-          final all = await _remote.fetchOrdersList();
-          merged = OrderMapper.mergeOrderMapLists(merged, all);
-        } catch (_) {}
-      }
-
-      await _local.saveOpenOrdersList(merged);
-    } catch (_) {}
+      final rest = await _remote.fetchOrdersRemainingPages(
+        lastPage: lastPage,
+        waiterId: waiterId,
+      );
+      final all = [...page1, ...rest];
+      await _local.saveOpenOrdersList(all);
+      onAllPagesLoaded?.call(
+        OrderMapper.sessionOrdersFromOrdersList(
+          all,
+          waiterId: filterWaiterId,
+          lightweight: true,
+        ),
+      );
+    } catch (_) {
+      // Keep page-1 list already on screen.
+    }
   }
 }

@@ -79,9 +79,12 @@ class OrderMapper {
   }
 
   /// Builds session rows from [GET /api/orders] (active-day open orders).
+  ///
+  /// [lightweight] skips product/seat parsing — use for the session list.
   static List<SessionOrder> sessionOrdersFromOrdersList(
     List<Map<String, dynamic>> orders, {
     int? waiterId,
+    bool lightweight = false,
   }) {
     final sortMillisById = <int, int>{};
     final rows = <SessionOrder>[];
@@ -99,7 +102,11 @@ class OrderMapper {
       if (orderId <= 0 || seenOrderIds.contains(orderId)) continue;
       seenOrderIds.add(orderId);
 
-      rows.add(fromOrderDetail(order));
+      rows.add(
+        lightweight
+            ? sessionOrderSummaryFromListMap(order)
+            : fromOrderDetail(order),
+      );
       sortMillisById[orderId] = _orderSortMillis(order);
     }
 
@@ -108,6 +115,43 @@ class OrderMapper {
           (sortMillisById[b.id] ?? 0).compareTo(sortMillisById[a.id] ?? 0),
     );
     return rows;
+  }
+
+  /// Fast list-row mapping — header fields only (no seat/product tree).
+  static SessionOrder sessionOrderSummaryFromListMap(
+    Map<String, dynamic> data,
+  ) {
+    final tableNumber = tableNumberFromDetail(data);
+    final orderId = orderIdFromDetail(data);
+    final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
+
+    final salesZone = data['sales_zone'];
+    final zoneName = salesZone is Map<String, dynamic>
+        ? (salesZone['name'] as String? ?? 'SUR PLACE')
+        : (data['sales_zone_name'] as String? ?? 'SUR PLACE');
+
+    final waiter = data['waiter'];
+    final waiterName = waiter is Map<String, dynamic>
+        ? (waiter['name'] as String? ?? '—')
+        : (data['waiter_name'] as String? ?? '—');
+
+    return SessionOrder(
+      id: orderId,
+      number: displayKey(orderId: orderId, tableNumber: tableNumber),
+      numberColor: AppTheme.primary,
+      group: '1',
+      poste: _shortPoste(waiterName),
+      profitCenter: zoneName.toUpperCase(),
+      couverts: '${data['number_of_guests'] ?? data['guests'] ?? 0}',
+      impressionCount: printCount,
+      impressionColor: impressionColorFor(printCount),
+      total: formatPrice(
+        '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
+      ),
+      products: const [],
+      displayEntries: const [],
+      waiterId: waiterIdFromOrderMap(data),
+    );
   }
 
   /// Keeps only open orders for the active business day list.

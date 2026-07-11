@@ -172,10 +172,7 @@ class SessionController extends GetxController {
     ordersError.value = null;
 
     try {
-      if (forceRefresh) {
-        unawaited(loadActiveDay(forceRefresh: true));
-      }
-
+      // Don't re-fetch active day here — onInit already loads it.
       // Stale-while-revalidate: paint cache instantly, then refresh UI when
       // the first network page returns (no spinner if rows already visible).
       if (!forceRefresh) {
@@ -199,15 +196,27 @@ class SessionController extends GetxController {
         }
       }
 
+      void onAllPages(List<SessionOrder> all) {
+        _applySessionOrderSummaries(
+          all,
+          retainOrders: retainOrders,
+          enrichDetails: enrichDetails,
+          clearSuppressedMatches: true,
+        );
+      }
+
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
               waiterId: _currentWaiterId,
+              onAllPagesLoaded: onAllPages,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
               waiterId: _currentWaiterId,
+              onAllPagesLoaded: onAllPages,
             );
 
+      // Page 1 is enough to dismiss the spinner (~Postman latency).
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
@@ -239,6 +248,14 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
+        onAllPagesLoaded: (all) {
+          _applySessionOrderSummaries(
+            all,
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+            clearSuppressedMatches: true,
+          );
+        },
       );
       _applySessionOrderSummaries(
         summaries,
@@ -248,6 +265,38 @@ class SessionController extends GetxController {
       );
     } catch (_) {
       // Keep the cached list already on screen.
+    }
+  }
+
+  /// Pull-to-refresh / post-CRUD: keep list visible, soft-swap from light API.
+  Future<void> refreshSessionOrders({
+    Iterable<SessionOrder>? retainOrders,
+  }) async {
+    ordersError.value = null;
+    unawaited(loadActiveDay(forceRefresh: true));
+    try {
+      final summaries =
+          await _sessionRepository.refreshSessionOrdersFromNetwork(
+        waiterId: _currentWaiterId,
+        onAllPagesLoaded: (all) {
+          _applySessionOrderSummaries(
+            all,
+            retainOrders: retainOrders,
+            enrichDetails: false,
+            clearSuppressedMatches: true,
+          );
+        },
+      );
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: false,
+        clearSuppressedMatches: true,
+      );
+    } catch (_) {
+      if (orders.isEmpty) {
+        ordersError.value = 'Impossible de charger les commandes.';
+      }
     }
   }
 

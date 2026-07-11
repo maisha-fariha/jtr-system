@@ -1149,17 +1149,13 @@ class SessionController extends GetxController {
         );
       }
 
+      // Remove in place — do not reload / reshuffle the whole session list.
       orders.removeWhere((o) => _tableKeysMatch(o.number, order.number));
+      orders.refresh();
       _clearUiStateForOrder(order.number);
 
+      // Occupancy cache only; keep session row order stable.
       unawaited(_sessionRepository.getTablesList(forceRefresh: true));
-      // Reload without showing loading indicator; the suppression filter
-      // prevents the deleted order from reappearing during eventual
-      // consistency window.
-      unawaited(loadSessionOrders(
-        forceRefresh: true,
-        showLoading: false,
-      ));
     } on ApiException catch (e) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),

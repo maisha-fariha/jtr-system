@@ -666,8 +666,17 @@ class _ProductLine extends GetView<TableDetailsController> {
         ),
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
-          extentRatio: 0.39,
+          extentRatio: 0.52,
           children: [
+            _ProductSlidableAction(
+              icon: Icons.edit_outlined,
+              backgroundColor: AppTheme.lightButton,
+              iconColor: AppTheme.primary,
+              onPressed: () => controller.editOrderLineComment(
+                productIndex,
+                context: context,
+              ),
+            ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
               backgroundColor: AppTheme.lightButton,
@@ -689,7 +698,7 @@ class _ProductLine extends GetView<TableDetailsController> {
               ? AppTheme.primary.withValues(alpha: 0.08)
               : Colors.transparent,
           child: InkWell(
-            onTap: () => controller.selectOrderLine(productIndex, product),
+            onTap: () => controller.onOrderLineRowTap(productIndex, product),
             child: Padding(
               padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
               child: Row(
@@ -734,27 +743,15 @@ class _ProductLine extends GetView<TableDetailsController> {
                               ),
                             ),
                             if (hasMenuItems)
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () => controller.toggleMenuLineExpansion(
-                                  productIndex,
+                              Icon(
+                                isMenuExpanded
+                                    ? Icons.keyboard_arrow_up
+                                    : Icons.keyboard_arrow_down,
+                                size: JtrResponsive.getResponsiveSize(
+                                  context,
+                                  16,
                                 ),
-                                child: Padding(
-                                  padding: JtrResponsive.getResponsivePadding(
-                                    context,
-                                    left: 4,
-                                  ),
-                                  child: Icon(
-                                    isMenuExpanded
-                                        ? Icons.keyboard_arrow_up
-                                        : Icons.keyboard_arrow_down,
-                                    size: JtrResponsive.getResponsiveSize(
-                                      context,
-                                      16,
-                                    ),
-                                    color: AppTheme.primary,
-                                  ),
-                                ),
+                                color: AppTheme.primary,
                               ),
                           ],
                         ),
@@ -784,36 +781,21 @@ class _ProductLine extends GetView<TableDetailsController> {
                             ),
                           ],
                         if (product.message != null &&
-                            product.message!.isNotEmpty) ...[
+                            product.message!.trim().isNotEmpty) ...[
                           JtrResponsive.getResponsiveSpacing(context, 2),
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  product.message!,
-                                  style: TextStyle(
-                                    fontSize:
-                                        JtrResponsive.getResponsiveFontSize(
-                                      context,
-                                      11,
-                                    ),
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.primary,
-                                    letterSpacing: 0.3,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                          Text(
+                            product.message!,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                11,
                               ),
-                              Icon(
-                                Icons.keyboard_arrow_down,
-                                size: JtrResponsive.getResponsiveSize(
-                                  context,
-                                  14,
-                                ),
-                                color: AppTheme.primary,
-                              ),
-                            ],
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.primary,
+                              letterSpacing: 0.3,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ],

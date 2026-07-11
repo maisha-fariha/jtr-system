@@ -2942,6 +2942,20 @@ class OrderMapper {
     return buildOrderUpdatePayload(working);
   }
 
+  /// Sets the API `comment` field on a visible line (message / pencil).
+  static Map<String, dynamic> updateLineCommentAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required String comment,
+  }) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final trimmed = comment.trim();
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      item['comment'] = trimmed;
+    });
+    return buildOrderUpdatePayload(working);
+  }
+
   static bool _mutateVisibleLineAtIndex(
     Map<String, dynamic> orderDetail,
     int lineIndex,

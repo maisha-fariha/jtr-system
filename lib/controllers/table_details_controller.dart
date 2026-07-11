@@ -20,6 +20,7 @@ import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
+import '../widgets/menu_message_typing_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
@@ -78,6 +79,109 @@ class TableDetailsController extends GetxController {
     }
     expandedMenuLineIndices.refresh();
     orderUiRevision.value++;
+  }
+
+  /// Tap on a product row: select it, and toggle menu choices expand/collapse.
+  void onOrderLineRowTap(int lineIndex, OrderProduct product) {
+    selectOrderLine(lineIndex, product);
+    if (product.hasMenuItems) {
+      toggleMenuLineExpansion(lineIndex);
+    }
+  }
+
+  Future<void> editOrderLineComment(
+    int lineIndex, {
+    BuildContext? context,
+  }) async {
+    final current = order;
+    if (current == null ||
+        lineIndex < 0 ||
+        lineIndex >= current.products.length) {
+      return;
+    }
+
+    final product = current.products[lineIndex];
+    await MenuMessageTypingDialog.show(
+      context: context,
+      itemLabel: product.name,
+      initialMessage: product.message ?? '',
+      onSave: (message) => unawaited(
+        _saveOrderLineComment(lineIndex: lineIndex, comment: message),
+      ),
+    );
+  }
+
+  Future<void> _saveOrderLineComment({
+    required int lineIndex,
+    required String comment,
+  }) async {
+    final id = resolvedOrderId;
+    final current = order;
+    if (id == null || id <= 0 || current == null) return;
+    if (lineIndex < 0 || lineIndex >= current.products.length) return;
+
+    final trimmed = comment.trim();
+    final snapshot = OrderOptimisticSync.deepSnapshot(current);
+    final updatedProducts = [...current.products];
+    updatedProducts[lineIndex] = current.products[lineIndex].copyWith(
+      message: trimmed.isEmpty ? null : trimmed,
+      clearMessage: trimmed.isEmpty,
+    );
+    final updatedEntries = [
+      for (final entry in current.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == lineIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(
+              message: trimmed.isEmpty ? null : trimmed,
+              clearMessage: trimmed.isEmpty,
+            ),
+            lineIndex: lineIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+          )
+        else
+          entry,
+    ];
+    _syncOrderInSession(
+      current.copyWith(
+        products: updatedProducts,
+        displayEntries: updatedEntries,
+      ),
+      orderNumber,
+      displayEntriesOverride: updatedEntries,
+    );
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) {
+        if (updated.id > 0) orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.updateOrderLineCommentAtIndex(
+          orderId: id,
+          lineIndex: lineIndex,
+          comment: trimmed,
+        );
+        if (updated.id > 0) orderId = updated.id;
+        return updated;
+      },
+      recover: (snap) async {
+        try {
+          return await _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        } catch (_) {
+          return snap;
+        }
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('enregistrer le message', error),
+    );
   }
 
   bool isSuivreSectionSelected(int sectionIndex) =>

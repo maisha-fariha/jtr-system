@@ -2487,6 +2487,22 @@ class OrderRepository {
     );
   }
 
+  Future<SessionOrder> updateOrderLineCommentAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required String comment,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Message article',
+      mutate: (detail) => OrderMapper.updateLineCommentAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        comment: comment,
+      ),
+    );
+  }
+
   Future<SessionOrder> requestAllCourses(int orderId) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(

@@ -615,7 +615,7 @@ class SessionController extends GetxController {
     var attemptedCreate = false;
 
     try {
-      final tables = await _sessionRepository.getTablesList();
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
@@ -628,7 +628,12 @@ class SessionController extends GetxController {
         _showSnack('Erreur', 'Table $tableNumber introuvable.');
         return;
       }
-      if (OrderMapper.isTableInUse(tables, tableNumber)) {
+      final reclaimOwnOrphan = OrderMapper.canReclaimOrphanTableSession(
+        tables,
+        tableNumber,
+        waiterId: waiterId,
+      );
+      if (OrderMapper.isTableInUse(tables, tableNumber) && !reclaimOwnOrphan) {
         // Table in use by another waiter / session — not in our list.
         logOrderFlow('_createTableAndOpenDetails ABORT table occupied (other)');
         if (context.mounted) {
@@ -639,6 +644,12 @@ class SessionController extends GetxController {
           );
         }
         return;
+      }
+      if (reclaimOwnOrphan) {
+        logOrderFlow(
+          '_createTableAndOpenDetails reclaim orphan session '
+          'table=$tableNumber tableId=${target.id}',
+        );
       }
 
       final salesZoneId = OrderMapper.inferSalesZoneId(
@@ -771,14 +782,12 @@ class SessionController extends GetxController {
     // Own list order is reopened via nouvelle commande — not "occupied" for this waiter.
     if (_findOwnOpenOrderForTable(normalized) != null) return false;
 
-    if (OrderMapper.isTableInUse(
+    // Own orphan session (locked, no active_order) is reclaimable — not blocked.
+    return OrderMapper.isTableOccupied(
       _sessionRepository.cachedTables,
       normalized,
-    )) {
-      return true;
-    }
-
-    return false;
+      forWaiterId: _currentWaiterId,
+    );
   }
 
   String get _currentUserDisplayName {

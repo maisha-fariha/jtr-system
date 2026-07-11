@@ -210,10 +210,52 @@ class OrderMapper {
     return false;
   }
 
+  /// Waiter that owns the table lock / session (no active order required).
+  static int? tableSessionOwnerId(Map<String, dynamic> table) {
+    final lockedBy = table['locked_by'];
+    if (lockedBy is num && lockedBy.toInt() > 0) return lockedBy.toInt();
+    return waiterIdFromOrderMap(table);
+  }
+
+  /// Open/locked session with no [active_order] (orphan after session-only create).
+  static bool hasOrphanSessionWithoutOrder(Map<String, dynamic> table) {
+    if (_activeOrderId(table) != null) return false;
+    return _hasOpenSession(table);
+  }
+
+  /// Same waiter left a session with no order — safe to end and reopen.
+  static bool canReclaimOrphanTableSession(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+    if (hasExistingActiveOrder(tables, tableNumber)) return false;
+
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      if (!hasOrphanSessionWithoutOrder(table)) continue;
+      final owner = tableSessionOwnerId(table);
+      if (owner != null && owner == waiterId) return true;
+    }
+    return false;
+  }
+
   static bool isTableOccupied(
     List<Map<String, dynamic>> tables,
-    String tableNumber,
-  ) {
+    String tableNumber, {
+    int? forWaiterId,
+  }) {
+    if (forWaiterId != null &&
+        canReclaimOrphanTableSession(
+          tables,
+          tableNumber,
+          waiterId: forWaiterId,
+        )) {
+      return false;
+    }
     return isTableInUse(tables, tableNumber);
   }
 

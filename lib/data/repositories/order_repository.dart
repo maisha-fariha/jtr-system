@@ -181,6 +181,28 @@ class OrderRepository {
     await _remote.endTableSession(tableId);
   }
 
+  /// Ends a leftover table lock/session with no active order (best-effort).
+  Future<void> _clearOrphanTableSession(
+    int tableId, {
+    required StringBuffer apiLog,
+  }) async {
+    logOrderFlow('CLEAR orphan session tableId=$tableId');
+    apiLog.writeln('── CLEAR orphan session /api/tables/$tableId/session ──');
+    try {
+      await _remote.endTableSession(tableId);
+      apiLog.writeln('── Orphan session cleared ──');
+    } on ApiException catch (error) {
+      apiLog.writeln('── Clear orphan session: ${error.message} ──');
+      final message = error.message.toLowerCase();
+      if (!message.contains('session') &&
+          !message.contains('404') &&
+          !message.contains('not found') &&
+          !message.contains('disponible')) {
+        rethrow;
+      }
+    }
+  }
+
   Future<int?> _resolveTableIdForClose({
     required int orderId,
     String? tableNumber,
@@ -287,6 +309,16 @@ class OrderRepository {
       'activeOrder=${table.existingOrderId ?? '—'}, '
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
+
+    // Session-only create can leave a lock with no active_order. Clear our
+    // own orphan session before starting a fresh one.
+    if (OrderMapper.canReclaimOrphanTableSession(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      await _clearOrphanTableSession(table.id, apiLog: apiLog);
+    }
 
     // Backend requires seat_orders.courses.items to be non-empty on
     // POST /api/orders. We never invent an unselected product, so nouvelle

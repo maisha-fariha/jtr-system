@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
@@ -1362,6 +1364,7 @@ class OrderMapper {
     int? salesZoneId,
     int qty = 1,
     String comment = '',
+    String status = 'to_be_continued',
     List<Map<String, dynamic>> menuSelections = const [],
     bool isStillMenuMissing = false,
   }) {
@@ -1372,12 +1375,19 @@ class OrderMapper {
       productId: productId,
       qty: qty,
       subTotal: unitPrice * qty,
-      status: 'to_be_continued',
+      status: status,
       comment: comment,
       menuSelections: menuSelections,
       isStillMenuMissing: isStillMenuMissing,
       forCreate: true,
     );
+    if (status == 'cancelled') {
+      final now = DateTime.now().toUtc().toIso8601String();
+      item['cancel_reason'] = comment.isNotEmpty
+          ? comment
+          : emptyCreateSeedCancelReason;
+      item['canceled_datetime'] = now;
+    }
 
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
@@ -2439,11 +2449,14 @@ class OrderMapper {
   }
 
   /// Cancels every visible line (used to clear auto-added create defaults).
+  static const emptyCreateSeedCancelReason =
+      'Commande vide — article automatique annulé';
+
   static Map<String, dynamic> cancelAllVisibleItems(
     Map<String, dynamic> orderDetail, {
-    String cancelReason = 'Commande vide — article automatique annulé',
+    String cancelReason = emptyCreateSeedCancelReason,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
+    final working = _deepCopyOrderMap(orderDetail);
     final seatOrders = working['seat_orders'];
     if (seatOrders is! List) {
       return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
@@ -2465,6 +2478,7 @@ class OrderMapper {
           if (item['status'] == 'cancelled') continue;
           item['status'] = 'cancelled';
           item['cancel_reason'] = cancelReason;
+          item['canceled_datetime'] = now;
           item['cancelled_at'] = now;
         }
       }
@@ -2477,7 +2491,7 @@ class OrderMapper {
   static Map<String, dynamic> stripAllVisibleItems(
     Map<String, dynamic> orderDetail,
   ) {
-    final working = Map<String, dynamic>.from(orderDetail);
+    final working = _deepCopyOrderMap(orderDetail);
     final seatOrders = working['seat_orders'];
     if (seatOrders is! List) {
       return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
@@ -2494,6 +2508,10 @@ class OrderMapper {
     }
 
     return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+  }
+
+  static Map<String, dynamic> _deepCopyOrderMap(Map<String, dynamic> source) {
+    return jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
   }
 
   static Map<String, dynamic> cancelOrderLinesAtIndices({

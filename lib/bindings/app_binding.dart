@@ -56,30 +56,12 @@ class AppBinding extends Bindings {
       () => OrderRemoteDataSource(Get.find<ApiClient>()),
       fenix: true,
     );
-    Get.lazyPut<OrderRepository>(
-      () => OrderRepository(
-        remote: Get.find<OrderRemoteDataSource>(),
-        local: Get.find<OrderLocalDataSource>(),
-        sessionRemote: Get.find<SessionRemoteDataSource>(),
-        sessionLocal: Get.find<SessionLocalDataSource>(),
-        connectivity: Get.find<ConnectivityService>(),
-      ),
-      fenix: true,
-    );
     Get.lazyPut<SessionRemoteDataSource>(
       () => SessionRemoteDataSource(Get.find<ApiClient>()),
       fenix: true,
     );
     Get.lazyPut<SessionLocalDataSource>(
       () => SessionLocalDataSource(Get.find<HiveStorage>()),
-      fenix: true,
-    );
-    Get.lazyPut<SessionRepository>(
-      () => SessionRepository(
-        remote: Get.find<SessionRemoteDataSource>(),
-        local: Get.find<SessionLocalDataSource>(),
-        connectivity: Get.find<ConnectivityService>(),
-      ),
       fenix: true,
     );
     Get.lazyPut<CatalogLocalDataSource>(
@@ -94,6 +76,25 @@ class AppBinding extends Bindings {
       () => CatalogRepository(
         remote: Get.find<CatalogRemoteDataSource>(),
         local: Get.find<CatalogLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<OrderRepository>(
+      () => OrderRepository(
+        remote: Get.find<OrderRemoteDataSource>(),
+        local: Get.find<OrderLocalDataSource>(),
+        sessionRemote: Get.find<SessionRemoteDataSource>(),
+        sessionLocal: Get.find<SessionLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+        catalog: Get.find<CatalogRepository>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<SessionRepository>(
+      () => SessionRepository(
+        remote: Get.find<SessionRemoteDataSource>(),
+        local: Get.find<SessionLocalDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

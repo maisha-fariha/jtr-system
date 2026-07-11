@@ -679,8 +679,7 @@ class SessionController extends GetxController {
     } finally {
       isCreatingOrder.value = false;
       if (attemptedCreate) {
-        // Session-only placeholders (id <= 0) are intentional: API requires a
-        // real item on POST /api/orders, so we create the order on first add.
+        // If POST succeeded but mapping failed, recover the remote empty order.
         if (created == null) {
           final resolved = await _orderRepository.resolveOrderIdForTableNumber(
             tableNumber,

@@ -1239,6 +1239,7 @@ class TableDetailsController extends GetxController {
           layoutHints: effectiveLayoutHints,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
+          expectEmptyShell: snapshot.products.isEmpty,
         );
         orderId = updated.id;
         return updated;
@@ -1307,6 +1308,7 @@ class TableDetailsController extends GetxController {
           layoutHints: layoutHints,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
+          expectEmptyShell: snapshot.products.isEmpty,
         );
         orderId = updated.id;
         return updated;

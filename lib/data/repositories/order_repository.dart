@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../core/network/api_exception.dart';
@@ -366,38 +368,11 @@ class OrderRepository {
       );
     }
 
+    // Open fast: use POST response as an empty shell and strip the required
+    // seed item in the background (API often requires a seed line on create).
     var detail = OrderMapper.unwrapOrderDetail(createdPayload!);
     if (OrderMapper.orderIdFromDetail(detail) != orderId) {
-      detail = await _remote.fetchOrderDetail(orderId);
-    }
-
-    // Strip seed via PUT full state (items: []) + force open — do NOT cancel
-    // items (cancelling the seed auto-cancels the whole order).
-    if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-      detail = await _clearVisibleItemsKeepOpen(orderId, detail, apiLog);
-    }
-
-    if (OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-      lastEmptyOrderSeedProductId = null;
-    }
-
-    if (OrderMapper.isOrderClosedOrCancelled(detail)) {
-      await _local.removeOrderDetail(orderId);
-      await _sessionLocal.removeOpenOrderFromList(orderId);
-      lastCreateOrderLog = apiLog.toString();
-      throw ApiException(
-        message:
-            'La commande a été annulée côté serveur et ne peut pas être ouverte.',
-      );
-    }
-
-    if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-      lastCreateOrderLog = apiLog.toString();
-      throw ApiException(
-        message:
-            'La commande a été créée mais un article automatique n\'a pas pu '
-            'être retiré. Réessayez ou contactez le support.',
-      );
+      detail = <String, dynamic>{...detail, 'id': orderId};
     }
 
     final shell = OrderMapper.asOpenEmptyOrderShell(detail);
@@ -411,18 +386,50 @@ class OrderRepository {
       total: OrderMapper.formatPrice('0'),
     );
 
+    unawaited(_stripCreateSeedInBackground(orderId, detail, apiLog));
+
     apiLog
       ..writeln()
-      ..writeln('── Résultat final ──')
+      ..writeln('── Résultat final (ouverture rapide) ──')
       ..writeln(
-        'POST /api/orders OK id=$orderId, affichage=${order.number}, items=0',
+        'POST /api/orders OK id=$orderId, affichage=${order.number}, '
+        'items=0 (seed strip en arrière-plan)',
       );
 
     lastCreateOrderLog = apiLog.toString();
     logOrderFlow(
-      'createTableOrder END remote empty orderId=$orderId table=$tableNumber',
+      'createTableOrder END remote empty orderId=$orderId table=$tableNumber '
+      '(fast open, seed strip background)',
     );
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
+  }
+
+  Future<void> _stripCreateSeedInBackground(
+    int orderId,
+    Map<String, dynamic> detail,
+    StringBuffer apiLog,
+  ) async {
+    try {
+      var working = detail;
+      if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
+        lastEmptyOrderSeedProductId = null;
+        return;
+      }
+      working = await _clearVisibleItemsKeepOpen(orderId, working, apiLog);
+      if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
+        lastEmptyOrderSeedProductId = null;
+      }
+      if (OrderMapper.isOrderClosedOrCancelled(working)) {
+        return;
+      }
+      final shell = OrderMapper.asOpenEmptyOrderShell(working);
+      await _local.saveOrderDetail(orderId, shell);
+      await _sessionLocal.upsertOpenOrderInList(shell);
+      lastCreateOrderLog = apiLog.toString();
+    } catch (e) {
+      apiLog.writeln('── Background seed strip failed: $e ──');
+      lastCreateOrderLog = apiLog.toString();
+    }
   }
 
   /// Creates a remote open order with no visible products.
@@ -2419,9 +2426,12 @@ class OrderRepository {
 
       try {
         working = await _remote.updateOrder(orderId, stripPayload);
-        try {
-          working = await _remote.fetchOrderDetail(orderId);
-        } catch (_) {}
+        // Skip extra GET when PUT already returned an empty open shell.
+        if (!OrderMapper.orderDetailHasNoVisibleItems(working)) {
+          try {
+            working = await _remote.fetchOrderDetail(orderId);
+          } catch (_) {}
+        }
       } catch (e) {
         apiLog.writeln('── strip attempt $attempt failed: $e ──');
         try {
@@ -2439,9 +2449,13 @@ class OrderRepository {
               keepOpenWhenEmpty: true,
             );
             working = await _remote.updateOrder(orderId, reopen);
-            try {
-              working = await _remote.fetchOrderDetail(orderId);
-            } catch (_) {}
+            if (!OrderMapper.orderDetailHasNoVisibleItems(working) ||
+                OrderMapper.isOrderClosedOrCancelled(working) ||
+                OrderMapper.isOrderFullyPaid(working)) {
+              try {
+                working = await _remote.fetchOrderDetail(orderId);
+              } catch (_) {}
+            }
           } catch (_) {}
         }
         return OrderMapper.asOpenEmptyOrderShell(working);

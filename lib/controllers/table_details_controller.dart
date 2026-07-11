@@ -59,6 +59,9 @@ class TableDetailsController extends GetxController {
   late final String orderNumber;
   int? orderId;
 
+  /// When true (fresh empty create), skip blocking GET detail on open.
+  bool _deferDetailFetch = false;
+
   final collapsedSuivreSections = <int>{}.obs;
   final expandedMenuLineIndices = <int>{}.obs;
   final selectedSuivreSection = RxnInt();
@@ -229,8 +232,10 @@ class TableDetailsController extends GetxController {
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    _deferDetailFetch = args is Map && args['deferDetailFetch'] == true;
     logOrderFlow(
-      'TableDetailsController.onInit table=$orderNumber orderId=${orderId ?? 'none'}',
+      'TableDetailsController.onInit table=$orderNumber '
+      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch',
     );
 
     _loadCatalog();
@@ -238,6 +243,10 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
+    // Fresh empty create already has a local shell — open immediately.
+    if (_deferDetailFetch && orderId != null && orderId! > 0) {
+      return;
+    }
     await _ensureResolvedOrderId();
     await _refreshOrder();
   }

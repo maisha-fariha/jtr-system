@@ -690,9 +690,14 @@ class SessionController extends GetxController {
     );
   }
 
-  void openTableDetails(String orderNumber, {int? orderId}) {
+  void openTableDetails(
+    String orderNumber, {
+    int? orderId,
+    bool deferDetailFetch = false,
+  }) {
     logOrderFlow(
-      'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'}',
+      'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
+      'deferDetailFetch=$deferDetailFetch',
     );
     final resolvedId = orderId != null && orderId > 0 ? orderId : null;
     Get.toNamed(
@@ -700,6 +705,7 @@ class SessionController extends GetxController {
       arguments: {
         'orderNumber': orderNumber,
         if (resolvedId != null) 'orderId': resolvedId,
+        'deferDetailFetch': deferDetailFetch,
       },
     );
   }
@@ -759,7 +765,9 @@ class SessionController extends GetxController {
     var blockRecovery = false;
 
     try {
-      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      // Prefer cached tables so create isn't blocked on a full tables GET.
+      // Occupancy is still checked; list refreshes in the background when cached.
+      final tables = await _sessionRepository.getTablesList();
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
@@ -905,6 +913,7 @@ class SessionController extends GetxController {
           openTableDetails(
             usable.number,
             orderId: usable.id,
+            deferDetailFetch: true,
           );
           unawaited(
             refreshOrderList(

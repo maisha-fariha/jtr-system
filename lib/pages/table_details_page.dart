@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -508,7 +509,72 @@ class _OrderSummaryState extends State<_OrderSummary> {
               ],
             ),
           ),
+          const _DeleteUndoBanner(),
         ],
+      );
+    });
+  }
+}
+
+class _DeleteUndoBanner extends GetView<TableDetailsController> {
+  const _DeleteUndoBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final label = controller.undoDeleteLabel.value;
+      if (label == null || label.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      // Rebuild when theme toggles.
+      if (Get.isRegistered<ThemeController>()) {
+        ThemeController.to.isDark.value;
+      }
+
+      return Material(
+        color: AppTheme.lightButton,
+        child: Padding(
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            left: 16,
+            right: 8,
+            top: 10,
+            bottom: 10,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: controller.undoPendingDelete,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                ),
+                child: Text(
+                  'Annuler',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     });
   }

@@ -68,6 +68,15 @@ class TableDetailsController extends GetxController {
   final suivreUiRevision = 0.obs;
   final orderUiRevision = 0.obs;
 
+  /// Undo banner after a line delete, e.g. `1 PIZZA TONNO supprimé(e)`.
+  final undoDeleteLabel = RxnString();
+  Timer? _pendingDeleteTimer;
+  SessionOrder? _pendingDeleteSnapshot;
+  int? _pendingDeleteLineIndex;
+  int _pendingDeleteGeneration = 0;
+
+  static const _undoDeleteDuration = Duration(seconds: 5);
+
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
 
@@ -1637,6 +1646,13 @@ class TableDetailsController extends GetxController {
   }
 
   void cancelOrderLine(int productIndex) {
+    unawaited(_cancelOrderLine(productIndex));
+  }
+
+  Future<void> _cancelOrderLine(int productIndex) async {
+    // Finish any previous deferred delete before starting a new one.
+    await _commitPendingDeleteIfAny();
+
     final currentOrder = order;
     if (currentOrder == null ||
         productIndex < 0 ||
@@ -1660,12 +1676,69 @@ class TableDetailsController extends GetxController {
     );
     _syncOrderInSession(predicted, orderNumber);
 
-    unawaited(
-      _syncCancelLineInBackground(
-        lineIndex: productIndex,
-        rollbackSnapshot: snapshot,
-      ),
+    final qtyLabel = line.quantity.trim().isEmpty ? '1' : line.quantity.trim();
+    undoDeleteLabel.value =
+        '$qtyLabel ${line.name.trim().toUpperCase()} supprimé(e)';
+
+    _pendingDeleteSnapshot = snapshot;
+    _pendingDeleteLineIndex = productIndex;
+    final generation = ++_pendingDeleteGeneration;
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = Timer(_undoDeleteDuration, () {
+      if (generation != _pendingDeleteGeneration) return;
+      unawaited(_commitPendingDeleteIfAny());
+    });
+  }
+
+  void undoPendingDelete() {
+    final snapshot = _pendingDeleteSnapshot;
+    if (snapshot == null) return;
+
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = null;
+    _pendingDeleteSnapshot = null;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteGeneration++;
+    undoDeleteLabel.value = null;
+
+    _syncOrderInSession(snapshot, orderNumber);
+  }
+
+  Future<void> _commitPendingDeleteIfAny() async {
+    final lineIndex = _pendingDeleteLineIndex;
+    final snapshot = _pendingDeleteSnapshot;
+    if (lineIndex == null || snapshot == null) return;
+
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = null;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteSnapshot = null;
+    undoDeleteLabel.value = null;
+
+    await _syncCancelLineInBackground(
+      lineIndex: lineIndex,
+      rollbackSnapshot: snapshot,
     );
+  }
+
+  @override
+  void onClose() {
+    _pendingDeleteTimer?.cancel();
+    // Persist the delete if the waiter leaves before the undo window ends.
+    final lineIndex = _pendingDeleteLineIndex;
+    final snapshot = _pendingDeleteSnapshot;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteSnapshot = null;
+    undoDeleteLabel.value = null;
+    if (lineIndex != null && snapshot != null) {
+      unawaited(
+        _syncCancelLineInBackground(
+          lineIndex: lineIndex,
+          rollbackSnapshot: snapshot,
+        ),
+      );
+    }
+    super.onClose();
   }
 
   Future<void> _syncCancelLineInBackground({

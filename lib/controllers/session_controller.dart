@@ -257,6 +257,13 @@ class SessionController extends GetxController {
     bool enrichDetails = false,
     bool clearSuppressedMatches = false,
   }) {
+    // Empty orders must stay until the delete icon closes them. List APIs often
+    // drop empty / auto-closed shells after the last item is cancelled.
+    final emptyShellsToKeep = <SessionOrder>[
+      for (final order in orders)
+        if (order.products.isEmpty && !_isOrderSuppressed(order.number)) order,
+    ];
+
     final filtered = summaries.where((o) {
       for (final suppressed in _suppressedTableNumbers) {
         if (_tableKeysMatch(o.number, suppressed)) return false;
@@ -270,12 +277,23 @@ class SessionController extends GetxController {
         _upsertOrderInList(order);
       }
     }
+    for (final empty in emptyShellsToKeep) {
+      final stillPresent = orders.any(
+        (o) =>
+            (empty.id > 0 && o.id == empty.id) ||
+            _tableKeysMatch(o.number, empty.number),
+      );
+      if (!stillPresent) {
+        _upsertOrderInList(empty);
+      }
+    }
     orders.refresh();
 
     if (clearSuppressedMatches && _suppressedTableNumbers.isNotEmpty) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) =>
-            !filtered.any((o) => _tableKeysMatch(o.number, suppressed)),
+            !filtered.any((o) => _tableKeysMatch(o.number, suppressed)) &&
+            !orders.any((o) => _tableKeysMatch(o.number, suppressed)),
       );
     }
 

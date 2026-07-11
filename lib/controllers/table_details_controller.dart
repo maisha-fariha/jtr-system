@@ -1198,7 +1198,10 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        orderId = updated.id > 0 ? updated.id : orderId;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -1209,19 +1212,24 @@ class TableDetailsController extends GetxController {
             productId: product.id,
             basePrice: product.unitPrice,
             menuSelections: menuSelections,
+            numberOfGuests: int.tryParse(snapshot.couverts),
           );
           orderId = created.id;
           return created;
         }
 
         orderId = id;
-        return _orderRepository.addComposedProductToOrder(
+        final updated = await _orderRepository.addComposedProductToOrder(
           orderId: id,
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
           layoutHints: effectiveLayoutHints,
+          tableNumber: orderNumber,
+          waiterId: _currentWaiterId,
         );
+        orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1252,7 +1260,10 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        orderId = updated.id > 0 ? updated.id : orderId;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         // Keep the tap-time layout as source of truth so open À SUIVRE sections
@@ -1267,19 +1278,26 @@ class TableDetailsController extends GetxController {
             productId: product.id,
             unitPrice: product.unitPrice,
             qty: 1,
+            numberOfGuests: int.tryParse(snapshot.couverts),
           );
           orderId = created.id;
           return created;
         }
 
+        // Empty UI shell may still point at a backend order that was auto
+        // closed/paid when the last item was cancelled — recreate if needed.
         orderId = id;
-        return _orderRepository.addSimpleProductToOrder(
+        final updated = await _orderRepository.addSimpleProductToOrder(
           orderId: id,
           productId: product.id,
           unitPrice: product.unitPrice,
           qty: 1,
           layoutHints: layoutHints,
+          tableNumber: orderNumber,
+          waiterId: _currentWaiterId,
         );
+        orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1470,6 +1488,7 @@ class TableDetailsController extends GetxController {
           lineIndices: lineIndices,
           previousDisplayEntries: trimmedDisplay,
         );
+        if (updated.id > 0) orderId = updated.id;
         _syncOrderInSession(
           updated,
           orderNumber,
@@ -1538,7 +1557,11 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        // Emptying may replace a closed/paid shell with a new remote order id.
+        if (updated.id > 0) orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -1546,10 +1569,12 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
-        return _orderRepository.cancelOrderLineAtIndex(
+        final updated = await _orderRepository.cancelOrderLineAtIndex(
           orderId: id,
           lineIndex: lineIndex,
         );
+        if (updated.id > 0) orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1584,14 +1609,21 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
-      sync: () => _orderRepository.adjustOrderLineQuantityAtIndex(
-        orderId: orderId,
-        lineIndex: lineIndex,
-        delta: delta,
-      ),
+      apply: (updated) {
+        if (updated.id > 0) this.orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
+          orderId: orderId,
+          lineIndex: lineIndex,
+          delta: delta,
+        );
+        if (updated.id > 0) this.orderId = updated.id;
+        return updated;
+      },
       recover: (snap) => _orderRepository.getOrderDetail(
-        orderId,
+        this.orderId ?? orderId,
         previousDisplayEntries: snap.displayEntries,
       ),
       onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
@@ -1616,14 +1648,21 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
-      sync: () => _orderRepository.setOrderLineQuantityAtIndex(
-        orderId: orderId,
-        lineIndex: lineIndex,
-        qty: qty,
-      ),
+      apply: (updated) {
+        if (updated.id > 0) this.orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.setOrderLineQuantityAtIndex(
+          orderId: orderId,
+          lineIndex: lineIndex,
+          qty: qty,
+        );
+        if (updated.id > 0) this.orderId = updated.id;
+        return updated;
+      },
       recover: (snap) => _orderRepository.getOrderDetail(
-        orderId,
+        this.orderId ?? orderId,
         previousDisplayEntries: snap.displayEntries,
       ),
       onError: (error) => _showOptimisticMutationError('modifier la quantité', error),

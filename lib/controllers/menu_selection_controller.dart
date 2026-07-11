@@ -472,7 +472,14 @@ class MenuSelectionController extends GetxController {
         menuSelections: menuSelections,
         comment: comment,
         layoutHints: layoutHints,
+        tableNumber: orderNumber,
+        waiterId: Get.isRegistered<SessionController>()
+            ? Get.find<SessionController>()
+                    .findOrder(orderNumber: orderNumber, orderId: orderId)
+                    ?.waiterId
+            : null,
       );
+      orderId = updated.id;
 
       if (Get.isRegistered<SessionController>()) {
         Get.find<SessionController>().updateOrderRow(updated);

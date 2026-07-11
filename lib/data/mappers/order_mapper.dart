@@ -114,6 +114,67 @@ class OrderMapper {
     return status != 'closed' && status != 'cancelled';
   }
 
+  /// True when the order has no non-cancelled line items.
+  static bool orderDetailHasNoVisibleItems(Map<String, dynamic> orderDetail) {
+    return countVisibleLineItems(orderDetail) == 0;
+  }
+
+  static int countVisibleLineItems(Map<String, dynamic> orderDetail) {
+    return extractProducts(orderDetail).length;
+  }
+
+  static bool isOrderClosedOrCancelled(Map<String, dynamic> orderDetail) {
+    final status = orderDetail['status']?.toString().toLowerCase();
+    return status == 'closed' || status == 'cancelled';
+  }
+
+  static bool isOrderFullyPaid(Map<String, dynamic> orderDetail) {
+    final detailed =
+        orderDetail['payment_status_detailed']?.toString().toLowerCase();
+    if (detailed == 'fully_paid' || detailed == 'paid') return true;
+
+    final payment = orderDetail['payment_status']?.toString().toLowerCase();
+    return payment == 'fully_paid' ||
+        payment == 'paid' ||
+        payment == 'completed';
+  }
+
+  /// Empty shells that the backend already closed/paid cannot accept new lines.
+  /// The first new item must open a fresh order for the same table.
+  static bool shouldRecreateOrderForAdd(Map<String, dynamic> orderDetail) {
+    if (!orderDetailHasNoVisibleItems(orderDetail)) return false;
+    return isOrderClosedOrCancelled(orderDetail) ||
+        isOrderFullyPaid(orderDetail);
+  }
+
+  /// Status to keep an emptied order open (delete icon is the only closer).
+  static String preserveOpenOrderStatus(Map<String, dynamic> orderDetail) {
+    final status = orderDetail['status']?.toString();
+    if (status != null &&
+        status.isNotEmpty &&
+        status.toLowerCase() != 'closed' &&
+        status.toLowerCase() != 'cancelled') {
+      return status;
+    }
+    return 'open';
+  }
+
+  /// Local cache copy that stays visible in the session list after all items
+  /// were cancelled (backend may mark the order closed automatically).
+  static Map<String, dynamic> asOpenEmptyOrderShell(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final copy = Map<String, dynamic>.from(orderDetail);
+    if (isOrderClosedOrCancelled(copy) || isOrderFullyPaid(copy)) {
+      copy['status'] = preserveOpenOrderStatus(orderDetail);
+      copy['payment_status'] = 'unpaid';
+      copy['payment_status_detailed'] = 'unpaid';
+    }
+    copy['total_price'] = copy['total_price'] ?? '0';
+    copy['remaining_amount'] = copy['remaining_amount'] ?? '0';
+    return copy;
+  }
+
   /// Union of [GET /api/orders] pages/lists by id (later list wins on duplicate).
   static List<Map<String, dynamic>> mergeOrderMapLists(
     List<Map<String, dynamic>> first,
@@ -2062,10 +2123,11 @@ class OrderMapper {
 
   /// PUT /api/orders/:id writable body.
   static Map<String, dynamic> buildOrderUpdatePayload(
-    Map<String, dynamic> orderDetail,
-  ) {
+    Map<String, dynamic> orderDetail, {
+    bool keepOpenWhenEmpty = false,
+  }) {
     final seatOrders = orderDetail['seat_orders'];
-    return {
+    final payload = <String, dynamic>{
       'waiter_id': orderDetail['waiter_id'],
       'number_of_guests': orderDetail['number_of_guests'],
       if (orderDetail['sales_zone_id'] != null)
@@ -2080,6 +2142,14 @@ class OrderMapper {
               .toList()
           : <dynamic>[],
     };
+
+    // Cancelling the last item must not close the order — only the delete icon
+    // should. Ask the API to keep the shell open when nothing visible remains.
+    if (keepOpenWhenEmpty && orderDetailHasNoVisibleItems(orderDetail)) {
+      payload['status'] = preserveOpenOrderStatus(orderDetail);
+    }
+
+    return payload;
   }
 
   /// PUT payload that only changes couverts / number_of_guests.
@@ -2180,7 +2250,7 @@ class OrderMapper {
       item['qty'] = qty;
       item['sub_total'] = unitPrice * qty;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustSimpleProductQuantity({
@@ -2329,6 +2399,41 @@ class OrderMapper {
     return _rebuildEntriesWithSuivreSplits(flatProducts, validSplits);
   }
 
+  /// Cancels every visible line (used to clear auto-added create defaults).
+  static Map<String, dynamic> cancelAllVisibleItems(
+    Map<String, dynamic> orderDetail, {
+    String cancelReason = 'Commande vide — article automatique annulé',
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) {
+      return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          item['status'] = 'cancelled';
+          item['cancel_reason'] = cancelReason;
+          item['cancelled_at'] = now;
+        }
+      }
+    }
+
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+  }
+
   static Map<String, dynamic> cancelOrderLinesAtIndices({
     required Map<String, dynamic> orderDetail,
     required Set<int> lineIndices,
@@ -2365,7 +2470,7 @@ class OrderMapper {
       }
     }
 
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> cancelOrderLineAtIndex({
@@ -2405,7 +2510,7 @@ class OrderMapper {
       if (cancelled) break;
     }
 
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustLineQuantityAtIndex({
@@ -2425,7 +2530,7 @@ class OrderMapper {
       item['qty'] = newQty;
       item['sub_total'] = unitPrice * newQty;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> applyOfferAtLineIndex({
@@ -2765,7 +2870,7 @@ class OrderMapper {
         item['status'] = 'cancelled';
       },
     );
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static void _mutateSimpleProductLines(

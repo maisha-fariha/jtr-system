@@ -263,7 +263,7 @@ class OrderRemoteDataSource {
     final body = {'course_ids': courseIds};
 
     try {
-      final response = await _client.post<Map<String, dynamic>>(
+      final response = await _client.post<dynamic>(
         path,
         data: body,
       );
@@ -275,17 +275,11 @@ class OrderRemoteDataSource {
         statusCode: response.statusCode,
       );
 
-      final envelope = ApiEnvelope<dynamic>.fromJson(
-        response.data!,
-        (json) => json,
+      _ensureMutationSucceeded(
+        statusCode: response.statusCode,
+        data: response.data,
+        fallbackMessage: 'Failed to request courses.',
       );
-
-      if (!envelope.success) {
-        throw ApiException(
-          message: envelope.message ?? 'Failed to request courses.',
-          statusCode: envelope.status,
-        );
-      }
     } on ApiException catch (error) {
       _appendApiError(error);
       rethrow;
@@ -456,7 +450,8 @@ class OrderRemoteDataSource {
       'payment_mode_id': paymentModeId,
     };
     try {
-      final response = await _client.post<Map<String, dynamic>>(
+      // Use dynamic: Postman documents an empty 200 body for /pay.
+      final response = await _client.post<dynamic>(
         path,
         data: body,
       );
@@ -475,17 +470,11 @@ class OrderRemoteDataSource {
         statusCode: response.statusCode,
       );
 
-      final envelope = ApiEnvelope<dynamic>.fromJson(
-        response.data!,
-        (json) => json,
+      _ensureMutationSucceeded(
+        statusCode: response.statusCode,
+        data: response.data,
+        fallbackMessage: 'Failed to pay order.',
       );
-
-      if (!envelope.success) {
-        throw ApiException(
-          message: envelope.message ?? 'Failed to pay order.',
-          statusCode: envelope.status,
-        );
-      }
     } on ApiException catch (error) {
       logPaymentApi(
         method: 'POST',
@@ -510,8 +499,56 @@ class OrderRemoteDataSource {
         error: error.toString(),
         writeToConsole: false,
       );
-      rethrow;
+      throw ApiException(message: 'Erreur paiement: $error');
     }
+  }
+
+  /// Accepts empty/null HTTP 2xx bodies (common for /pay) and tolerant envelopes.
+  void _ensureMutationSucceeded({
+    required int? statusCode,
+    required dynamic data,
+    required String fallbackMessage,
+  }) {
+    final code = statusCode ?? 0;
+    final raw = data;
+
+    if (raw == null || raw == '' || (raw is Map && raw.isEmpty)) {
+      if (code >= 200 && code < 300) return;
+      throw ApiException(
+        message: fallbackMessage,
+        statusCode: code > 0 ? code : null,
+      );
+    }
+
+    if (raw is! Map) {
+      if (code >= 200 && code < 300) return;
+      throw ApiException(
+        message: fallbackMessage,
+        statusCode: code > 0 ? code : null,
+      );
+    }
+
+    final map = raw is Map<String, dynamic>
+        ? raw
+        : Map<String, dynamic>.from(raw);
+
+    // Only fail when the API explicitly reports failure.
+    // (Some /pay responses are 200 with a message but no `success` flag.)
+    if (map.containsKey('success') && map['success'] == false) {
+      final envelope = ApiEnvelope.parseResponse(map);
+      throw ApiException(
+        message: envelope.message ?? fallbackMessage,
+        statusCode: envelope.status,
+      );
+    }
+
+    if (code >= 200 && code < 300) return;
+
+    final envelope = ApiEnvelope.parseResponse(map);
+    throw ApiException(
+      message: envelope.message ?? fallbackMessage,
+      statusCode: envelope.status,
+    );
   }
 
   Future<List<Map<String, dynamic>>> fetchPaymentModes() async {

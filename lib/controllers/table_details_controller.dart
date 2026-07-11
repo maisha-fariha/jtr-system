@@ -1001,16 +1001,19 @@ class TableDetailsController extends GetxController {
             'Erreur paiement',
             e.message,
             snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
             margin: const EdgeInsets.all(16),
           );
-        } catch (_) {
+          debugPrint(_orderRepository.lastPaymentLog);
+        } catch (e) {
           Get.snackbar(
             'Erreur',
             'Impossible d\'enregistrer le paiement.',
             snackPosition: SnackPosition.BOTTOM,
             margin: const EdgeInsets.all(16),
           );
+          debugPrint(_orderRepository.lastPaymentLog);
+          debugPrint('payOrder unexpected: $e');
         } finally {
           payingIsCash.value = null;
         }

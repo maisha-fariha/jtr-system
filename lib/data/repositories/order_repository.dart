@@ -2666,10 +2666,25 @@ class OrderRepository {
 
     try {
       var detail = await _fetchOrderDetailForPayment(orderId, apiLog);
+
+      // Same path as the red paper-plane "Envoyer" action, then a forced
+      // pass over every visible course id (covers items added after DEMANDÉE).
+      try {
+        apiLog.writeln('── Envoi cuisine (requestAllCourses) avant paiement ──');
+        await requestAllCourses(orderId);
+        if (lastKitchenSendLog != null) {
+          apiLog.writeln(lastKitchenSendLog);
+        }
+        detail = await _remote.fetchOrderDetail(orderId);
+      } on ApiException catch (e) {
+        apiLog.writeln('── requestAllCourses avant paiement: ${e.message} ──');
+      }
+
       detail = await _ensureKitchenSentBeforePayment(
         orderId,
         detail,
         apiLog,
+        forceAllVisibleCourses: true,
       );
 
       final amount = OrderMapper.formatPaymentAmount(
@@ -2701,9 +2716,21 @@ class OrderRepository {
       );
 
       apiLog.writeln('── GET /api/orders/$orderId (after pay) ──');
-      final updated = await _remote.fetchOrderDetail(orderId);
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
+      Map<String, dynamic> updated;
+      try {
+        updated = await _remote.fetchOrderDetail(orderId);
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+      } catch (e) {
+        // Payment already succeeded — don't fail the UI if refresh is denied
+        // (some backends hide paid/closed orders from waiter GET).
+        apiLog.writeln('── GET after pay skipped: $e ──');
+        updated = Map<String, dynamic>.from(detail);
+        updated['payment_status'] = 'paid';
+        updated['payment_status_detailed'] = 'fully_paid';
+        updated['remaining_amount'] = 0;
+        updated['status'] = updated['status'] ?? 'closed';
       }
 
       await _local.saveOrderDetail(orderId, updated);
@@ -2760,24 +2787,31 @@ class OrderRepository {
   Future<Map<String, dynamic>> _ensureKitchenSentBeforePayment(
     int orderId,
     Map<String, dynamic> detail,
-    StringBuffer apiLog,
-  ) async {
-    final courseIds =
-        OrderMapper.extractCourseIdsPendingKitchenSendBeforePayment(detail);
+    StringBuffer apiLog, {
+    bool forceAllVisibleCourses = false,
+  }) async {
+    var courseIds = forceAllVisibleCourses
+        ? OrderMapper.extractAllVisibleCourseIds(detail)
+        : OrderMapper.extractCourseIdsPendingKitchenSendBeforePayment(detail);
+
+    if (courseIds.isEmpty && !forceAllVisibleCourses) {
+      // Soft miss — still try every visible course (API may require re-fire).
+      courseIds = OrderMapper.extractAllVisibleCourseIds(detail);
+    }
     if (courseIds.isEmpty) return detail;
 
-    apiLog.writeln('── Envoi cuisine avant paiement ──');
-    apiLog.writeln('course_ids=${courseIds.join(',')}');
-    apiLog.writeln('── POST ${ApiEndpoints.requestCourses(orderId)} ──');
     apiLog.writeln(
-      formatApiPayload({'course_ids': courseIds}),
+      forceAllVisibleCourses
+          ? '── Envoi cuisine FORCE (tous services) avant paiement ──'
+          : '── Envoi cuisine avant paiement ──',
     );
+    apiLog.writeln('course_ids=${courseIds.join(',')}');
 
-    _remote.lastApiLog = null;
-    await _remote.requestCourses(orderId, courseIds);
-    if (_remote.lastApiLog != null) {
-      apiLog.writeln(_remote.lastApiLog);
-    }
+    await _requestCoursesForPayment(
+      orderId: orderId,
+      courseIds: courseIds,
+      apiLog: apiLog,
+    );
 
     final updated = await _remote.fetchOrderDetail(orderId);
     if (_remote.lastApiLog != null) {
@@ -2785,6 +2819,48 @@ class OrderRepository {
     }
     await _local.saveOrderDetail(orderId, updated);
     return updated;
+  }
+
+  Future<void> _requestCoursesForPayment({
+    required int orderId,
+    required List<int> courseIds,
+    required StringBuffer apiLog,
+  }) async {
+    apiLog.writeln('── POST ${ApiEndpoints.requestCourses(orderId)} ──');
+    apiLog.writeln(formatApiPayload({'course_ids': courseIds}));
+
+    _remote.lastApiLog = null;
+    try {
+      await _remote.requestCourses(orderId, courseIds);
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      return;
+    } on ApiException catch (e) {
+      apiLog.writeln('── request-courses batch: ${e.message} ──');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+    }
+
+    // Some tenants reject multi-id batches — fire each course alone.
+    for (final courseId in courseIds) {
+      apiLog.writeln(
+        '── POST ${ApiEndpoints.requestCourses(orderId)} (course=$courseId) ──',
+      );
+      _remote.lastApiLog = null;
+      try {
+        await _remote.requestCourses(orderId, [courseId]);
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+      } on ApiException catch (e) {
+        apiLog.writeln('── request-courses $courseId: ${e.message} ──');
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _postOrderPayment({
@@ -2818,12 +2894,13 @@ class OrderRepository {
       if (!OrderMapper.isSendBeforePaymentError(error)) rethrow;
 
       apiLog.writeln(
-        'Paiement refusé — nouvel envoi cuisine puis nouvel essai.',
+        'Paiement refusé — envoi FORCE de tous les services puis nouvel essai.',
       );
       final refreshed = await _ensureKitchenSentBeforePayment(
         orderId,
         await _fetchOrderDetailForPayment(orderId, apiLog),
         apiLog,
+        forceAllVisibleCourses: true,
       );
 
       final retryAmount = OrderMapper.formatPaymentAmount(
@@ -2841,11 +2918,41 @@ class OrderRepository {
       apiLog.writeln(formatApiPayload(retryBody));
 
       _remote.lastApiLog = null;
-      await _remote.payOrder(
-        orderId: orderId,
-        amount: retryAmount,
-        paymentModeId: paymentModeId,
-      );
+      try {
+        await _remote.payOrder(
+          orderId: orderId,
+          amount: retryAmount,
+          paymentModeId: paymentModeId,
+        );
+      } on ApiException catch (retryError) {
+        if (!OrderMapper.isSendBeforePaymentError(retryError)) rethrow;
+
+        // Last attempt: request each course again after a short beat, then pay.
+        apiLog.writeln('── Dernier essai envoi + paiement ──');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        final again = await _ensureKitchenSentBeforePayment(
+          orderId,
+          await _fetchOrderDetailForPayment(orderId, apiLog),
+          apiLog,
+          forceAllVisibleCourses: true,
+        );
+        final lastAmount = OrderMapper.formatPaymentAmount(
+          OrderMapper.parseOrderPayableAmount(again),
+        );
+        if (lastAmount <= 0) {
+          throw ApiException(message: 'Montant à encaisser invalide.');
+        }
+        apiLog.writeln('── POST /api/orders/$orderId/pay (retry 2) ──');
+        await _remote.payOrder(
+          orderId: orderId,
+          amount: lastAmount,
+          paymentModeId: paymentModeId,
+        );
+        if (_remote.lastApiLog != null) {
+          apiLog.writeln(_remote.lastApiLog);
+        }
+        return again;
+      }
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }

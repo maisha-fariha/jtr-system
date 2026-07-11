@@ -1959,34 +1959,10 @@ class OrderMapper {
 
       for (final course in courses) {
         if (course is! Map<String, dynamic>) continue;
-        final courseId = course['id'];
-        final courseIdInt = courseId is int
-            ? courseId
-            : (courseId is num ? courseId.toInt() : null);
-        if (courseIdInt == null) continue;
+        if (!_courseNeedsKitchenSend(course)) continue;
 
-        final status = course['status'] as String?;
-        if (status == 'in_progress' ||
-            status == 'to_be_continued' ||
-            status == 'pending') {
-          ids.add(courseIdInt);
-          continue;
-        }
-
-        final items = course['items'];
-        if (items is! List) continue;
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-          final itemStatus = item['status'] as String?;
-          if (itemStatus == null ||
-              itemStatus == 'in_progress' ||
-              itemStatus == 'pending' ||
-              itemStatus == 'to_be_continued') {
-            ids.add(courseIdInt);
-            break;
-          }
-        }
+        final courseIdInt = _courseRecordId(course);
+        if (courseIdInt != null) ids.add(courseIdInt);
       }
     }
 
@@ -1996,10 +1972,13 @@ class OrderMapper {
   }
 
   /// Courses that must be sent to the kitchen before POST /api/orders/:id/pay.
+  ///
+  /// Includes courses that were already demanded but later received new lines
+  /// (common after DEMANDÉE when waiter adds more items).
   static List<int> extractCourseIdsPendingKitchenSendBeforePayment(
     Map<String, dynamic> data,
   ) {
-    final ids = <int>{...extractKitchenSendCourseIds(data)};
+    final ids = <int>{};
 
     final seatOrders = data['seat_orders'];
     if (seatOrders is List) {
@@ -2010,19 +1989,114 @@ class OrderMapper {
 
         for (final course in courses) {
           if (course is! Map<String, dynamic>) continue;
-          if (_visibleItemCountInCourse(course) <= 0) continue;
-          if (_courseWasRequestedToKitchen(course)) continue;
-
-          final courseId = course['id'];
-          final courseIdInt = courseId is int
-              ? courseId
-              : (courseId is num ? courseId.toInt() : null);
+          if (!_courseNeedsKitchenSend(course)) continue;
+          final courseIdInt = _courseRecordId(course);
           if (courseIdInt != null) ids.add(courseIdInt);
         }
       }
     }
 
+    if (ids.isNotEmpty) return ids.toList();
+    return extractRequestableCourseIds(data);
+  }
+
+  /// Every course with visible items — last-resort fire before payment.
+  static List<int> extractAllVisibleCourseIds(Map<String, dynamic> data) {
+    final ids = <int>{};
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return const [];
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        final id = _courseRecordId(course);
+        if (id != null) ids.add(id);
+      }
+    }
     return ids.toList();
+  }
+
+  static int? _courseRecordId(Map<String, dynamic> course) {
+    final courseId = course['id'];
+    final courseIdInt = courseId is int
+        ? courseId
+        : (courseId is num ? courseId.toInt() : null);
+    if (courseIdInt == null || courseIdInt <= 0) return null;
+    return courseIdInt;
+  }
+
+  /// Whether this course still has lines the kitchen has not been asked for.
+  static bool _courseNeedsKitchenSend(Map<String, dynamic> course) {
+    if (_visibleItemCountInCourse(course) <= 0) return false;
+
+    if (!_courseWasRequestedToKitchen(course)) return true;
+
+    // Course was demanded earlier, but new items may have been added after.
+    final requestedAt = DateTime.tryParse(
+      course['requested_at']?.toString() ?? '',
+    );
+    final items = course['items'];
+    if (items is! List) return false;
+    for (final item in items) {
+      if (item is! Map<String, dynamic>) continue;
+      if (_itemNeedsKitchenSend(item, courseRequestedAt: requestedAt)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _itemNeedsKitchenSend(
+    Map<String, dynamic> item, {
+    DateTime? courseRequestedAt,
+  }) {
+    final status = item['status']?.toString().toLowerCase();
+    if (status == 'cancelled') return false;
+
+    final sentAt = item['requested_at'] ??
+        item['sent_at'] ??
+        item['fired_at'] ??
+        item['printed_at'];
+    if (sentAt != null && sentAt.toString().trim().isNotEmpty) return false;
+
+    const alreadySent = {
+      'sent',
+      'requested',
+      'preparing',
+      'prepared',
+      'ready',
+      'served',
+      'completed',
+      'done',
+      'delivered',
+    };
+    if (status != null && alreadySent.contains(status)) return false;
+
+    const unsent = {
+      'pending',
+      'in_progress',
+      'to_be_continued',
+      'draft',
+      'open',
+      'new',
+      'created',
+    };
+    if (status != null && unsent.contains(status)) return true;
+
+    // Item added after the course was demanded → must be re-fired.
+    if (courseRequestedAt != null) {
+      final created = DateTime.tryParse(item['created_at']?.toString() ?? '');
+      if (created != null && created.isAfter(courseRequestedAt)) return true;
+      // Present at demande time with no unsent marker → treat as already sent.
+      return false;
+    }
+
+    // Course never demanded: any visible line still needs a send.
+    return true;
   }
 
   static bool requiresKitchenSendBeforePayment(Map<String, dynamic> data) {
@@ -2031,8 +2105,9 @@ class OrderMapper {
 
   static bool isSendBeforePaymentError(ApiException error) {
     final message = error.message.toLowerCase();
-    return message.contains('envoyer') &&
-        (message.contains('payer') || message.contains('paiement'));
+    return (message.contains('envoyer') &&
+            (message.contains('payer') || message.contains('paiement'))) ||
+        (message.contains('send') && message.contains('before') && message.contains('pay'));
   }
 
   static int? resolveTableId(
@@ -2999,7 +3074,52 @@ class OrderMapper {
       if (parsed != null && parsed > 0) return parsed;
     }
 
-    return parseOrderTotalAmount(data);
+    final total = parseOrderTotalAmount(data);
+    if (total > 0) return total;
+
+    // Fallback: sum visible line totals when header amounts are missing/zero.
+    return _sumVisibleLineAmounts(order);
+  }
+
+  static double _sumVisibleLineAmounts(Map<String, dynamic> order) {
+    var sum = 0.0;
+    final seatOrders = order['seat_orders'];
+    if (seatOrders is! List) return 0;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map) continue;
+          if (item['status']?.toString().toLowerCase() == 'cancelled') continue;
+          if (item['is_offered'] == true || item['offered'] == true) continue;
+          final raw = item['total_price'] ??
+              item['total'] ??
+              item['price'] ??
+              item['unit_price'];
+          if (raw is num) {
+            final qty = (item['quantity'] as num?)?.toDouble() ?? 1;
+            // total_price is usually already qty * unit; unit_price needs qty.
+            if (item['total_price'] != null || item['total'] != null) {
+              sum += raw.toDouble();
+            } else {
+              sum += raw.toDouble() * qty;
+            }
+          } else if (raw is String) {
+            final parsed = double.tryParse(
+              raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+            );
+            if (parsed != null) sum += parsed;
+          }
+        }
+      }
+    }
+    return sum;
   }
 
   static double formatPaymentAmount(double amount) =>

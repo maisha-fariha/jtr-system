@@ -17,8 +17,10 @@ class SessionOrder {
     required this.total,
     required this.products,
     this.waiterId,
+    int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
-  }) : displayEntries = displayEntries ?? _entriesFromProducts(products);
+  })  : itemCount = itemCount ?? products.length,
+        displayEntries = displayEntries ?? _entriesFromProducts(products);
 
   /// API order id. `0` for locally created orders not yet synced.
   final int id;
@@ -36,6 +38,9 @@ class SessionOrder {
   final String total;
   final List<OrderProduct> products;
   final List<OrderDisplayEntry> displayEntries;
+
+  /// Visible line count (from detail or list API hint).
+  final int itemCount;
 
   static List<OrderDisplayEntry> _entriesFromProducts(List<OrderProduct> products) {
     return [
@@ -59,6 +64,7 @@ class SessionOrder {
     String? total,
     List<OrderProduct>? products,
     int? waiterId,
+    int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
   }) {
     final nextProducts = products ?? this.products;
@@ -75,6 +81,8 @@ class SessionOrder {
       total: total ?? this.total,
       waiterId: waiterId ?? this.waiterId,
       products: nextProducts,
+      itemCount: itemCount ??
+          (products != null ? nextProducts.length : this.itemCount),
       displayEntries: displayEntries ?? this.displayEntries,
     );
   }

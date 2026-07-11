@@ -431,7 +431,19 @@ class SessionController extends GetxController {
         profitCenter: incoming.profitCenter,
         couverts: incoming.couverts.isNotEmpty ? incoming.couverts : previous.couverts,
         waiterId: incoming.waiterId ?? previous.waiterId,
+        itemCount: previous.itemCount > 0
+            ? previous.itemCount
+            : (incoming.itemCount > 0
+                ? incoming.itemCount
+                : previous.products.length),
       );
+    }
+
+    // Lightweight row may carry an items_count hint — keep the higher count.
+    if (incoming.products.isEmpty &&
+        previous.itemCount > incoming.itemCount &&
+        previous.itemCount > 0) {
+      return incoming.copyWith(itemCount: previous.itemCount);
     }
 
     return incoming;

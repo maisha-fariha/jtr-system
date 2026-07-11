@@ -47,20 +47,34 @@ class StatisticsPage extends GetView<SessionController> {
           );
         }
 
-        final stats = controller.dayStatistics.value;
-        final orders = controller.orders;
-        final totalRevenue = stats?.totalRevenue ??
-            orders.fold<double>(0, (sum, o) => sum + _parseTotal(o.total));
-        final openTables =
-            stats != null && stats.openTables > 0 ? stats.openTables : orders.length;
-        final printedTickets = stats?.printedTickets ??
-            orders.where((o) => o.impressionCount > 0).length;
-        final avgPerTable = stats?.averagePerTable ??
-            (openTables > 0 ? totalRevenue / openTables : 0.0);
+        // KPIs must match DÉTAIL PAR TABLE (session open orders).
+        // Dashboard API stats are day-wide / differently keyed and drift.
+        final orders = controller.orders.toList();
+        final totalRevenue = orders.fold<double>(
+          0,
+          (sum, o) => sum + _parseTotal(o.total),
+        );
+        final openTables = orders.length;
+        final printedTickets = orders.fold<int>(
+          0,
+          (sum, o) => sum + o.impressionCount,
+        );
+        final avgPerTable =
+            openTables > 0 ? totalRevenue / openTables : 0.0;
 
         return RefreshIndicator(
           color: AppTheme.primary,
-          onRefresh: () => controller.loadDayStatistics(forceRefresh: true),
+          onRefresh: () async {
+            await Future.wait([
+              controller.loadDayStatistics(forceRefresh: true),
+              controller.loadSessionOrders(
+                forceRefresh: true,
+                showLoading: false,
+                enrichDetails: false,
+                replaceExistingList: false,
+              ),
+            ]);
+          },
           child: SingleChildScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: JtrResponsive.getResponsivePadding(
@@ -76,10 +90,7 @@ class StatisticsPage extends GetView<SessionController> {
                     Expanded(
                       child: _KpiCard(
                         label: 'REVENU TOTAL',
-                        value: _formatDisplayTotal(
-                          stats?.formattedTotalRevenue,
-                          totalRevenue,
-                        ),
+                        value: _formatTotal(totalRevenue),
                         icon: Icons.euro_symbol_rounded,
                         iconColor: AppTheme.primary,
                       ),
@@ -110,10 +121,7 @@ class StatisticsPage extends GetView<SessionController> {
                     Expanded(
                       child: _KpiCard(
                         label: 'MOY. PAR TABLE',
-                        value: _formatDisplayTotal(
-                          stats?.formattedAveragePerTable,
-                          avgPerTable,
-                        ),
+                        value: _formatTotal(avgPerTable),
                         icon: Icons.bar_chart_rounded,
                         iconColor: const Color(0xFFE8A838),
                       ),
@@ -138,21 +146,19 @@ class StatisticsPage extends GetView<SessionController> {
     );
   }
 
-  String _formatDisplayTotal(String? fromApi, double fallback) {
-    if (fromApi != null && fromApi.isNotEmpty) return fromApi;
-    return _formatTotal(fallback);
+  String _formatTotal(double value) {
+    final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
+    return '$formatted €';
   }
 
   double _parseTotal(String total) {
     return double.tryParse(
-          total.replaceAll(' €', '').replaceAll(',', '.'),
+          total
+              .replaceAll('€', '')
+              .replaceAll(' ', '')
+              .replaceAll(',', '.'),
         ) ??
         0;
-  }
-
-  String _formatTotal(double value) {
-    final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
-    return '$formatted €';
   }
 }
 
@@ -324,7 +330,7 @@ class _OrderStatRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${order.products.length} article${order.products.length != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}',
+                  '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}',
                   style: TextStyle(
                     fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),

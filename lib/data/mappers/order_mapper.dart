@@ -135,6 +135,10 @@ class OrderMapper {
         ? (waiter['name'] as String? ?? '—')
         : (data['waiter_name'] as String? ?? '—');
 
+    final products = data.containsKey('seat_orders')
+        ? extractProducts(data)
+        : const <OrderProduct>[];
+
     return SessionOrder(
       id: orderId,
       number: displayKey(orderId: orderId, tableNumber: tableNumber),
@@ -148,10 +152,37 @@ class OrderMapper {
       total: formatPrice(
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
-      products: const [],
+      products: products,
+      itemCount: _itemCountFromListMap(data, products.length),
       displayEntries: const [],
       waiterId: waiterIdFromOrderMap(data),
     );
+  }
+
+  static int _itemCountFromListMap(
+    Map<String, dynamic> data,
+    int productsLength,
+  ) {
+    for (final key in [
+      'items_count',
+      'itemsCount',
+      'products_count',
+      'productsCount',
+      'line_items_count',
+      'visible_items_count',
+      'items_qty',
+    ]) {
+      final raw = data[key];
+      if (raw is num && raw >= 0) return raw.toInt();
+      if (raw is String) {
+        final parsed = int.tryParse(raw);
+        if (parsed != null && parsed >= 0) return parsed;
+      }
+    }
+    if (data.containsKey('seat_orders')) {
+      return countVisibleLineItems(data);
+    }
+    return productsLength;
   }
 
   /// Keeps only open orders for the active business day list.
@@ -619,6 +650,7 @@ class OrderMapper {
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
       products: products,
+      itemCount: products.length,
       displayEntries: displayEntries.isNotEmpty
           ? displayEntries
           : [

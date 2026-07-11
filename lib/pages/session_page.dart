@@ -4,9 +4,11 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
+import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -93,8 +95,10 @@ class SessionPage extends GetView<SessionController> {
               ),
             ),
             const _ActionButtons(),
-            Divider(height: 1, color: AppTheme.cardBorder),
-            _BottomNavBar(),
+            if (kShowBottomNavigationBar) ...[
+              Divider(height: 1, color: AppTheme.cardBorder),
+              _BottomNavBar(),
+            ],
           ],
         ),
             Obx(() {
@@ -196,6 +200,15 @@ class _SessionHeader extends GetView<SessionController> {
                 ),
               ),
             ),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
+            IconButton(
+              onPressed: AppNavigation.logout,
+              icon: Icon(
+                Icons.logout,
+                color: AppTheme.toolbarIconColor(Icons.logout),
+                size: JtrResponsive.getResponsiveSize(context, 28),
+              ),
+            ),
           ],
         ),
       );
@@ -206,11 +219,22 @@ class _SessionHeader extends GetView<SessionController> {
 class _SessionTableLayout {
   _SessionTableLayout._();
 
+  static const List<int> columnFlexes = [2, 1, 2, 3, 1, 2, 4];
+  static const List<Alignment> columnAlignments = [
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.center,
+    Alignment.centerRight,
+  ];
+
   static EdgeInsets outerPadding(BuildContext context) =>
       JtrResponsive.getResponsivePadding(context, horizontal: 8);
 
   static EdgeInsets innerPadding(BuildContext context) =>
-      JtrResponsive.getResponsivePadding(context, horizontal: 0, vertical: 12);
+      JtrResponsive.getResponsivePadding(context, horizontal: 8, vertical: 12);
 
   static TextStyle headerStyle(BuildContext context) => TextStyle(
         fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
@@ -247,9 +271,13 @@ class _SessionTableRow extends StatelessWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            for (final cell in cells)
+            for (var i = 0; i < cells.length; i++)
               Expanded(
-                child: Center(child: cell),
+                flex: _SessionTableLayout.columnFlexes[i],
+                child: Align(
+                  alignment: _SessionTableLayout.columnAlignments[i],
+                  child: cells[i],
+                ),
               ),
           ],
         ),
@@ -278,7 +306,7 @@ class _TableHeader extends StatelessWidget {
           Text('CTR.\nPROFIT', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
           Text('CVT.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
           Text('IMP.', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
-          Text('TOTAL', textAlign: TextAlign.center, style: _SessionTableLayout.headerStyle(context)),
+          Text('TOTAL', textAlign: TextAlign.right, style: _SessionTableLayout.headerStyle(context)),
         ],
       ),
     );
@@ -369,6 +397,7 @@ class _OrderRow extends GetView<SessionController> {
                     children: [
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[0],
                         expandOnTap: true,
                         child: Text(
                           order.number,
@@ -382,6 +411,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[1],
                         child: Text(
                           order.group,
                           textAlign: TextAlign.center,
@@ -390,6 +420,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[2],
                         child: Text(
                           order.poste,
                           textAlign: TextAlign.center,
@@ -398,6 +429,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[3],
                         child: Text(
                           order.profitCenter,
                           textAlign: TextAlign.center,
@@ -409,6 +441,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[4],
                         child: Text(
                           order.couverts,
                           textAlign: TextAlign.center,
@@ -417,6 +450,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
+                        flex: _SessionTableLayout.columnFlexes[5],
                         child: Container(
                           width: JtrResponsive.getResponsiveSize(context, 22),
                           height: JtrResponsive.getResponsiveSize(context, 22),
@@ -439,13 +473,19 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                       _OrderTableCell(
                         orderNumber: order.number,
-                        child: Text(
-                          order.total,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.darkText,
+                        flex: _SessionTableLayout.columnFlexes[6],
+                        alignment: Alignment.centerRight,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            order.total,
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.darkText,
+                            ),
                           ),
                         ),
                       ),
@@ -472,7 +512,7 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                     ),
                   )
-                else if (order.products.isEmpty)
+                else if (order.displayEntries.isEmpty)
                   Padding(
                     padding: JtrResponsive.getResponsivePadding(
                       context,
@@ -488,15 +528,7 @@ class _OrderRow extends GetView<SessionController> {
                     ),
                   )
                 else
-                  for (var i = 0; i < order.products.length; i++) ...[
-                    _ProductRow(
-                      orderNumber: order.number,
-                      productIndex: i,
-                      product: order.products[i],
-                    ),
-                    if (i < order.products.length - 1)
-                      Divider(height: 1, color: AppTheme.subtleDivider),
-                  ],
+                  ..._buildExpandedDetailRows(context, order),
                 JtrResponsive.getResponsiveSpacing(context, 4),
               ],
             ],
@@ -509,27 +541,116 @@ class _OrderRow extends GetView<SessionController> {
   }
 }
 
+List<Widget> _buildExpandedDetailRows(BuildContext context, SessionOrder order) {
+  final rows = <Widget>[];
+  final entries = order.displayEntries;
+
+  for (var i = 0; i < entries.length; i++) {
+    final entry = entries[i];
+
+    if (entry.type == OrderDisplayEntryType.product && entry.product != null) {
+      rows.add(
+        _ProductRow(
+          orderNumber: order.number,
+          productIndex: entry.lineIndex ?? 0,
+          product: entry.product!,
+        ),
+      );
+    } else {
+      rows.add(_SessionCourseDivider(entry: entry));
+    }
+
+    if (i < entries.length - 1) {
+      rows.add(Divider(height: 1, color: AppTheme.subtleDivider));
+    }
+  }
+
+  return rows;
+}
+
 class _OrderTableCell extends GetView<SessionController> {
   const _OrderTableCell({
     required this.orderNumber,
     required this.child,
+    this.flex = 1,
+    this.alignment = Alignment.center,
     this.expandOnTap = false,
   });
 
   final String orderNumber;
   final Widget child;
+  final int flex;
+  final Alignment alignment;
   final bool expandOnTap;
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
+      flex: flex,
       child: GestureDetector(
         onTap: () => controller.selectRow(
           orderNumber: orderNumber,
           expandOnNumberTap: expandOnTap,
         ),
         behavior: HitTestBehavior.opaque,
-        child: Center(child: child),
+        child: Align(alignment: alignment, child: child),
+      ),
+    );
+  }
+}
+
+class _SessionCourseDivider extends StatelessWidget {
+  const _SessionCourseDivider({required this.entry});
+
+  final OrderDisplayEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDemande = entry.type == OrderDisplayEntryType.demandeSeparator;
+    final accent = isDemande ? const Color(0xFF27AE60) : AppTheme.primary;
+    final label = isDemande
+        ? 'DEMANDÉE ${entry.demandeTimeLabel ?? ''}'.trim()
+        : 'À SUIVRE';
+
+    return Padding(
+      padding: JtrResponsive.getResponsivePadding(
+        context,
+        horizontal: 12,
+        vertical: 6,
+      ),
+      child: Container(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 10,
+          vertical: 8,
+        ),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(
+            JtrResponsive.getResponsiveRadius(context, 10),
+          ),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              isDemande ? Icons.done_all_rounded : Icons.restaurant_menu,
+              size: JtrResponsive.getResponsiveSize(context, 14),
+              color: accent,
+            ),
+            JtrResponsive.getResponsiveHorizontalSpacing(context, 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                fontWeight: FontWeight.w700,
+                color: accent,
+                letterSpacing: 0.35,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -5,6 +5,7 @@ import '../controllers/order_menu_controller.dart';
 import '../models/menu_category.dart';
 import '../models/menu_item.dart';
 import '../routes/app_pages.dart';
+import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -37,6 +38,7 @@ class MenuPage extends GetView<OrderMenuController> {
 
   @override
   Widget build(BuildContext context) {
+    final presetMenu = controller.presetMenu;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -56,38 +58,68 @@ class MenuPage extends GetView<OrderMenuController> {
               const _MenuHeader(),
               Divider(height: 1, color: AppTheme.cardBorder),
               Expanded(
-                child: SingleChildScrollView(
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    bottom: 16,
-                  ),
-                  child: Padding(
-                    padding: JtrResponsive.getResponsivePadding(
-                      context,
-                      horizontal: 24,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final showSidePanel = presetMenu != null;
+                    final sideWidth = (constraints.maxWidth * 0.28).clamp(
+                      110.0,
+                      190.0,
+                    );
+
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        JtrResponsive.getResponsiveSpacing(context, 24),
-                        for (final category
-                            in controller.visibleCategories) ...[
-                          _CourseSectionHeader(category: category),
-                          _CourseSectionBody(category: category),
-                          JtrResponsive.getResponsiveSpacing(context, 32),
-                        ],
+                        if (showSidePanel)
+                          SizedBox(
+                            width: sideWidth,
+                            child: const _SelectedMenuSidePanel(),
+                          ),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            padding: JtrResponsive.getResponsivePadding(
+                              context,
+                              bottom: 16,
+                            ),
+                            child: Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                horizontal: 16,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  JtrResponsive.getResponsiveSpacing(
+                                    context,
+                                    24,
+                                  ),
+                                  for (final category
+                                      in controller.visibleCategories) ...[
+                                    _CourseSectionHeader(category: category),
+                                    _CourseSectionBody(category: category),
+                                    JtrResponsive.getResponsiveSpacing(
+                                      context,
+                                      32,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ],
-                    ),
-                  ),
+                    );
+                  },
                 ),
               ),
             ],
           ),
         ),
-        bottomNavigationBar: const SafeArea(
-          top: false,
-          child: _MenuBottomNav(),
-        ),
+        bottomNavigationBar: kShowBottomNavigationBar
+            ? const SafeArea(
+                top: false,
+                child: _MenuBottomNav(),
+              )
+            : null,
       ),
     );
   }
@@ -104,10 +136,7 @@ class _MenuHeader extends GetView<OrderMenuController> {
       height: JtrResponsive.adaptiveHeight(context, 64, compact: 48),
       child: Padding(
         // Figma: left container at x=16; confirm button at x=334 → right pad=16
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          horizontal: 16,
-        ),
+        padding: JtrResponsive.getResponsivePadding(context, horizontal: 16),
         child: Row(
           children: [
             const _MenuIconButton(),
@@ -210,17 +239,188 @@ class _OrderDisplay extends GetView<OrderMenuController> {
         ),
         JtrResponsive.getResponsiveSpacing(context, 2),
         // Access .value inside build — tracked by GetView's implicit Obx
-        Obx(() => Text(
-              'Table ${controller.currentTable.value}',
+        Obx(
+          () => Text(
+            'Table ${controller.currentTable.value}',
+            style: TextStyle(
+              fontSize: _menuPageFontSize(context, 16),
+              fontWeight: FontWeight.bold,
+              color: AppTheme.darkText,
+              height: 1.2,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
+  const _SelectedMenuSidePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final menu = controller.presetMenu;
+      if (menu == null) return const SizedBox.shrink();
+
+      // Group current selections by course.
+      final selectedByCourse = <int, List<MenuItem>>{};
+      for (final item in controller.selectedItems) {
+        selectedByCourse
+            .putIfAbsent(item.courseNumber, () => <MenuItem>[])
+            .add(item);
+      }
+
+      return Container(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 12,
+          right: 10,
+          top: 18,
+          bottom: 12,
+        ),
+        decoration: BoxDecoration(
+          border: Border(right: BorderSide(color: AppTheme.cardBorder)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: JtrResponsive.getResponsiveSize(context, 46),
+              height: JtrResponsive.getResponsiveSize(context, 46),
+              decoration: BoxDecoration(
+                color: AppTheme.lightButton,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppTheme.primary.withValues(alpha: 0.25),
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                menu.badgeLabel,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                  fontWeight: FontWeight.w800,
+                  color: AppTheme.primary,
+                ),
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 10),
+            Text(
+              'CHOIX ${controller.choiceNumber}',
               style: TextStyle(
-                fontSize: _menuPageFontSize(context, 16),
-                fontWeight: FontWeight.bold,
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textSecondary,
+                letterSpacing: 0.4,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 6),
+            Text(
+              menu.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: _menuPageFontSize(context, 13),
+                fontWeight: FontWeight.w800,
                 color: AppTheme.darkText,
                 height: 1.2,
               ),
-            )),
-      ],
-    );
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 6),
+            Text(
+              menu.formattedPrice,
+              style: TextStyle(
+                fontSize: _menuPageFontSize(context, 12),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.primary,
+                height: 1.2,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 12),
+            Divider(
+              height: 1,
+              color: AppTheme.cardBorder.withValues(alpha: 0.8),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 10),
+            Text(
+              'SÉLECTION',
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+                fontWeight: FontWeight.w800,
+                color: AppTheme.textSecondary,
+                letterSpacing: 0.5,
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 8),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final category in controller.visibleCategories)
+                    Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        bottom: 10,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'CHOIX ${category.number}',
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                10,
+                              ),
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 4),
+                          if (selectedByCourse[category.number]?.isNotEmpty ??
+                              false)
+                            Text(
+                              '${selectedByCourse[category.number]!.length}x ${selectedByCourse[category.number]!.first.name}'
+                              '${selectedByCourse[category.number]!.length > 1 ? ' +${selectedByCourse[category.number]!.length - 1}' : ''}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  12,
+                                ),
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.darkText,
+                              ),
+                            )
+                          else
+                            Text(
+                              '—',
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  12,
+                                ),
+                                fontWeight: FontWeight.w700,
+                                color: AppTheme.textSecondary.withValues(
+                                  alpha: 0.6,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -403,11 +603,7 @@ class _CourseItemsGrid extends StatelessWidget {
           runSpacing: runSpacing,
           children: [
             for (final item in category.items)
-              _MenuItemButton(
-                item: item,
-                category: category,
-                width: cellWidth,
-              ),
+              _MenuItemButton(item: item, category: category, width: cellWidth),
           ],
         );
       },
@@ -552,10 +748,7 @@ class _MenuBottomNav extends GetView<OrderMenuController> {
         border: Border(top: BorderSide(color: AppTheme.cardBorder)),
       ),
       child: Padding(
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          horizontal: 32,
-        ),
+        padding: JtrResponsive.getResponsivePadding(context, horizontal: 32),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [

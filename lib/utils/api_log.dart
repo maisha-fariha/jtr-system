@@ -86,6 +86,47 @@ void logTicketPrint({
   debugPrint(text);
 }
 
+/// Payment trace (POST /api/orders/:id/pay) — always printed to the console.
+void logPaymentApi({
+  required String method,
+  required String path,
+  Object? request,
+  Object? response,
+  int? statusCode,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ PAYMENT $method $path'
+        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(request));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(response));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('STATUS: ERREUR')
+      ..writeln('ERROR:')
+      ..writeln(error);
+  } else if (response != null) {
+    buffer.writeln('STATUS: OK');
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
 /// Logs API request/response to the debug console (visible in `flutter run`).
 void logApiCall({
   required String method,

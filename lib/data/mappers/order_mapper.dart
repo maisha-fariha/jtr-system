@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/network/api_exception.dart';
 import '../../models/order_display_entry.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
@@ -403,26 +404,7 @@ class OrderMapper {
           final status = item['status'] as String?;
           if (status == 'cancelled') continue;
 
-          final product = item['product'];
-          final name = product is Map<String, dynamic>
-              ? (product['name'] as String? ?? 'Article')
-              : 'Article';
-          final qty = item['qty'] ?? 1;
-          final subTotal = item['sub_total']?.toString() ?? '0';
-          final isOffer = item['is_offer'] == true;
-          final comment = item['comment'];
-          final message = comment is String && comment.trim().isNotEmpty
-              ? comment.trim()
-              : null;
-
-          products.add(
-            OrderProduct(
-              quantity: '$qty',
-              name: name,
-              price: isOffer ? '0,00 €' : formatPrice(subTotal),
-              message: message,
-            ),
-          );
+          products.add(orderProductFromItem(item));
         }
       }
     }
@@ -537,13 +519,25 @@ class OrderMapper {
         continue;
       }
 
-      final course = findCourseInOrderDetail(data, courseNumber);
-      if (course == null || !_courseWasRequestedToKitchen(course)) {
+      // À SUIVRE headers store the course-number "above" (used to route new
+      // items into the next course). Show DEMANDÉE only when that follow-up
+      // course (`courseNumber + 1`) was requested — not when an earlier course
+      // above the divider was already sent to the kitchen.
+      final courseNext = courseNumber > 0
+          ? findCourseInOrderDetail(data, courseNumber + 1)
+          : null;
+
+      final courseToUse = courseNext != null &&
+              _courseWasRequestedToKitchen(courseNext)
+          ? courseNext
+          : null;
+
+      if (courseToUse == null) {
         result.add(entry);
         continue;
       }
 
-      final timeLabel = formatDemandeTime(course['requested_at']);
+      final timeLabel = formatDemandeTime(courseToUse['requested_at']);
       if (timeLabel == null) {
         result.add(entry);
         continue;
@@ -722,26 +716,9 @@ class OrderMapper {
             sawNonSuivreItemsInCourse = true;
           }
 
-          final product = item['product'];
-          final name = product is Map<String, dynamic>
-              ? (product['name'] as String? ?? 'Article')
-              : 'Article';
-          final qty = item['qty'] ?? 1;
-          final subTotal = item['sub_total']?.toString() ?? '0';
-          final isOffer = item['is_offer'] == true;
-          final comment = item['comment'];
-          final message = comment is String && comment.trim().isNotEmpty
-              ? comment.trim()
-              : null;
-
           entries.add(
             OrderDisplayEntry.product(
-              product: OrderProduct(
-                quantity: '$qty',
-                name: name,
-                price: isOffer ? '0,00 €' : formatPrice(subTotal),
-                message: message,
-              ),
+              product: orderProductFromItem(item),
               lineIndex: lineIndex++,
               sectionIndex: activeSection,
               courseNumber: courseNumber,
@@ -917,10 +894,16 @@ class OrderMapper {
     var entries = extractOrderDisplayEntries(data);
     entries = applyDemandeSeparatorsFromApi(data, entries);
     final apiSuivreCount = suivreSeparatorCount(entries);
+    final previousSuivreCount = previousDisplayEntries == null
+        ? 0
+        : suivreSeparatorCount(previousDisplayEntries);
+    final effectiveSuivreCount = suivreCountHint > previousSuivreCount
+        ? suivreCountHint
+        : previousSuivreCount;
 
     // Only overlay local À SUIVRE rows that are not yet reflected by API courses.
-    if (suivreCountHint > apiSuivreCount) {
-      var pending = suivreCountHint - apiSuivreCount;
+    if (effectiveSuivreCount > apiSuivreCount) {
+      var pending = effectiveSuivreCount - apiSuivreCount;
       while (pending > 0) {
         final force = entries.isNotEmpty && _isSectionDivider(entries.last);
         entries = appendSuivreSeparatorAfterRequest(entries, force: force);
@@ -928,9 +911,16 @@ class OrderMapper {
       }
     }
 
+    if (previousDisplayEntries != null && previousDisplayEntries.isNotEmpty) {
+      entries = reconcileSuivreDisplay(
+        previous: previousDisplayEntries,
+        next: entries,
+      );
+    }
+
     return _normalizeSuivreLayout(
       entries,
-      keepTrailingEmptySuivre: suivreCountHint > apiSuivreCount,
+      keepTrailingEmptySuivre: effectiveSuivreCount > apiSuivreCount,
     );
   }
 
@@ -939,7 +929,10 @@ class OrderMapper {
     bool keepTrailingEmptySuivre = false,
   }) {
     var result = _dedupeConsecutiveSuivreSeparators(entries);
-    result = _stripEmptySuivreSections(result);
+    result = _stripEmptySuivreSections(
+      result,
+      keepTrailingEmpty: keepTrailingEmptySuivre,
+    );
     if (!keepTrailingEmptySuivre) {
       result = _stripTrailingEmptySuivreSeparators(result);
     }
@@ -963,8 +956,9 @@ class OrderMapper {
 
   /// Drops À SUIVRE headers that are not followed by any product line.
   static List<OrderDisplayEntry> _stripEmptySuivreSections(
-    List<OrderDisplayEntry> entries,
-  ) {
+    List<OrderDisplayEntry> entries, {
+    bool keepTrailingEmpty = false,
+  }) {
     final result = <OrderDisplayEntry>[];
     for (var i = 0; i < entries.length; i++) {
       final entry = entries[i];
@@ -988,6 +982,20 @@ class OrderMapper {
 
       if (hasProducts) {
         result.add(entry);
+        continue;
+      }
+
+      if (keepTrailingEmpty) {
+        var hasLaterDivider = false;
+        for (var j = i + 1; j < entries.length; j++) {
+          if (_isSectionDivider(entries[j])) {
+            hasLaterDivider = true;
+            break;
+          }
+        }
+        if (!hasLaterDivider) {
+          result.add(entry);
+        }
       }
     }
     return result;
@@ -1698,6 +1706,46 @@ class OrderMapper {
     return extractRequestableCourseIds(data);
   }
 
+  /// Courses that must be sent to the kitchen before POST /api/orders/:id/pay.
+  static List<int> extractCourseIdsPendingKitchenSendBeforePayment(
+    Map<String, dynamic> data,
+  ) {
+    final ids = <int>{...extractKitchenSendCourseIds(data)};
+
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          if (_visibleItemCountInCourse(course) <= 0) continue;
+          if (_courseWasRequestedToKitchen(course)) continue;
+
+          final courseId = course['id'];
+          final courseIdInt = courseId is int
+              ? courseId
+              : (courseId is num ? courseId.toInt() : null);
+          if (courseIdInt != null) ids.add(courseIdInt);
+        }
+      }
+    }
+
+    return ids.toList();
+  }
+
+  static bool requiresKitchenSendBeforePayment(Map<String, dynamic> data) {
+    return extractCourseIdsPendingKitchenSendBeforePayment(data).isNotEmpty;
+  }
+
+  static bool isSendBeforePaymentError(ApiException error) {
+    final message = error.message.toLowerCase();
+    return message.contains('envoyer') &&
+        (message.contains('payer') || message.contains('paiement'));
+  }
+
   static int? resolveTableId(
     List<Map<String, dynamic>> tables,
     String tableNumber,
@@ -2032,6 +2080,16 @@ class OrderMapper {
               .toList()
           : <dynamic>[],
     };
+  }
+
+  /// PUT payload that only changes couverts / number_of_guests.
+  static Map<String, dynamic> buildUpdateGuestCountPayload(
+    Map<String, dynamic> orderDetail, {
+    required int numberOfGuests,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    working['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
+    return buildOrderUpdatePayload(working);
   }
 
   static int quantityForSimpleProduct(
@@ -2658,16 +2716,32 @@ class OrderMapper {
 
       final matchesCash = label.contains('esp') ||
           label.contains('espece') ||
+          label.contains('espèce') ||
+          label.contains('especes') ||
           label.contains('cash') ||
           label.contains('liquide');
       final matchesCard = label.contains('carte') ||
           label.contains('card') ||
           label.contains('credit') ||
+          label.contains('crédit') ||
           label.contains('cb') ||
           label.contains('tpe');
 
-      if (isCash && matchesCash) return id;
-      if (!isCash && matchesCard) return id;
+      final type = mode['type']?.toString().toLowerCase() ?? '';
+      final code = mode['code']?.toString().toLowerCase() ?? '';
+
+      if (isCash &&
+          (matchesCash || type == 'cash' || code == 'cash' || code == 'espece')) {
+        return id;
+      }
+      if (!isCash &&
+          (matchesCard ||
+              type == 'card' ||
+              type == 'credit' ||
+              code == 'card' ||
+              code == 'credit')) {
+        return id;
+      }
     }
 
     if (candidates.length == 1) {
@@ -3016,6 +3090,97 @@ class OrderMapper {
     ];
   }
 
+  static List<Map<String, dynamic>> _menuSelectionsWithDisplayNames(
+    List<Map<String, dynamic>> selections,
+  ) {
+    final sanitized = sanitizeMenuSelectionsForWrite(selections);
+    return [
+      for (var i = 0; i < sanitized.length; i++)
+        {
+          ...sanitized[i],
+          if (i < selections.length)
+            ..._menuSelectionDisplayFields(selections[i]),
+        },
+    ];
+  }
+
+  static Map<String, dynamic> _menuSelectionDisplayFields(
+    Map<String, dynamic> selection,
+  ) {
+    final fields = <String, dynamic>{};
+    final productName = selection['selected_product_name'];
+    if (productName is String && productName.trim().isNotEmpty) {
+      fields['selected_product_name'] = productName.trim();
+    }
+    final categoryName = selection['menu_category_name'];
+    if (categoryName is String && categoryName.trim().isNotEmpty) {
+      fields['menu_category_name'] = categoryName.trim();
+    }
+    return fields;
+  }
+
+  static List<String> menuSelectionLabelsFromMaps(
+    List<Map<String, dynamic>> selections,
+  ) {
+    final labels = <String>[];
+    for (final selection in selections) {
+      final name = _menuSelectionLabel(selection);
+      if (name != null) labels.add(name);
+    }
+    return labels;
+  }
+
+  static List<String> menuSelectionLabelsFromItem(Map<String, dynamic> item) {
+    final menus = item['menu_selections'];
+    if (menus is! List || menus.isEmpty) return const [];
+    return menuSelectionLabelsFromMaps(
+      menus.whereType<Map<String, dynamic>>().toList(),
+    );
+  }
+
+  static String? _menuSelectionLabel(Map<String, dynamic> selection) {
+    for (final key in ['selected_product_name', 'name', 'label']) {
+      final raw = selection[key];
+      if (raw is String && raw.trim().isNotEmpty) {
+        return raw.trim().toUpperCase();
+      }
+    }
+
+    for (final nestedKey in ['selected_product', 'product']) {
+      final nested = selection[nestedKey];
+      if (nested is Map<String, dynamic>) {
+        final name = nested['name'];
+        if (name is String && name.trim().isNotEmpty) {
+          return name.trim().toUpperCase();
+        }
+      }
+    }
+
+    return null;
+  }
+
+  static OrderProduct orderProductFromItem(Map<String, dynamic> item) {
+    final product = item['product'];
+    final name = product is Map<String, dynamic>
+        ? (product['name'] as String? ?? 'Article')
+        : 'Article';
+    final qty = item['qty'] ?? 1;
+    final subTotal = item['sub_total']?.toString() ?? '0';
+    final isOffer = item['is_offer'] == true;
+    final comment = item['comment'];
+    final message = comment is String && comment.trim().isNotEmpty
+        ? comment.trim()
+        : null;
+
+    return OrderProduct(
+      quantity: '$qty',
+      name: name,
+      price: isOffer ? '0,00 €' : formatPrice(subTotal),
+      message: message,
+      menuItems: menuSelectionLabelsFromItem(item),
+    );
+  }
+
   static Map<String, dynamic> _sanitizeSeatOrderForUpdate(
     Map<String, dynamic> seat,
   ) {
@@ -3086,7 +3251,7 @@ class OrderMapper {
     bool forCreate = false,
     String? uid,
   }) {
-    final sanitizedMenus = sanitizeMenuSelectionsForWrite(menuSelections);
+    final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
     final hasMenus = sanitizedMenus.isNotEmpty;
 
     return {
@@ -3131,5 +3296,514 @@ class OrderMapper {
   static double _parseMoney(Object? value) {
     if (value is num) return value.toDouble();
     return double.tryParse(value?.toString().replaceAll(',', '.') ?? '') ?? 0;
+  }
+
+  // ── Optimistic UI predictions (Phase 1) ─────────────────────────────────
+
+  static SessionOrder predictAfterAppendSimpleProduct({
+    required SessionOrder current,
+    Map<String, dynamic>? cachedDetail,
+    required int productId,
+    required String productName,
+    required double unitPrice,
+    int qty = 1,
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+  }) {
+    final layoutHints = current.displayEntries;
+    final detail = _cachedDetailAlignedWithSession(cachedDetail, current);
+    if (detail != null) {
+      final simulated = simulateDetailAfterAppendSimpleItem(
+        orderDetail: detail,
+        productId: productId,
+        productName: productName,
+        unitPrice: unitPrice,
+        qty: qty,
+        suivreSectionCount: suivreSectionCount,
+        suivreSplitHints: suivreSplitHints,
+        layoutHints: layoutHints,
+      );
+      return fromOrderDetail(
+        simulated,
+        previousDisplayEntries: layoutHints,
+        suivreSplitHints: suivreSplitHints,
+        suivreCountHint: suivreSectionCount,
+      );
+    }
+
+    return _predictAppendOnSessionOrder(
+      current: current,
+      productName: productName,
+      unitPrice: unitPrice,
+      qty: qty,
+    );
+  }
+
+  static double _menuSelectionsSupplement(
+    List<Map<String, dynamic>> menuSelections,
+  ) {
+    return menuSelections.fold<double>(
+      0,
+      (sum, selection) {
+        final price = selection['price'];
+        if (price is num) return sum + price.toDouble();
+        return sum +
+            (double.tryParse(price?.toString().replaceAll(',', '.') ?? '') ??
+                0);
+      },
+    );
+  }
+
+  static SessionOrder predictAfterAppendComposedProduct({
+    required SessionOrder current,
+    Map<String, dynamic>? cachedDetail,
+    required int productId,
+    required String productName,
+    required double basePrice,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final effectiveLayout = layoutHints ?? current.displayEntries;
+    final workingCurrent = layoutHints != null
+        ? current.copyWith(displayEntries: layoutHints)
+        : current;
+    final subTotal = basePrice + _menuSelectionsSupplement(menuSelections);
+    final detail = _cachedDetailAlignedWithSession(cachedDetail, workingCurrent);
+    if (detail != null) {
+      final simulated = simulateDetailAfterAppendComposedItem(
+        orderDetail: detail,
+        productId: productId,
+        productName: productName,
+        subTotal: subTotal,
+        menuSelections: menuSelections,
+        comment: comment,
+        suivreSectionCount: suivreSectionCount,
+        suivreSplitHints: suivreSplitHints,
+        layoutHints: effectiveLayout,
+      );
+      return fromOrderDetail(
+        simulated,
+        previousDisplayEntries: effectiveLayout,
+        suivreSplitHints: suivreSplitHints,
+        suivreCountHint: suivreSectionCount,
+      );
+    }
+
+    return _predictAppendOnSessionOrder(
+      current: workingCurrent,
+      productName: productName,
+      unitPrice: subTotal,
+      qty: 1,
+      menuItems: menuSelectionLabelsFromMaps(menuSelections),
+    );
+  }
+
+  static SessionOrder predictAfterCancelLineAtIndex(
+    SessionOrder current,
+    int lineIndex,
+  ) {
+    return _predictRemoveLineOnSessionOrder(current, lineIndex);
+  }
+
+  static SessionOrder predictAfterAdjustLineQuantityAtIndex({
+    required SessionOrder current,
+    required int lineIndex,
+    required int delta,
+  }) {
+    return _predictAdjustLineQuantityOnSessionOrder(
+      current,
+      lineIndex,
+      delta,
+    );
+  }
+
+  static SessionOrder predictAfterSetLineQuantityAtIndex({
+    required SessionOrder current,
+    required int lineIndex,
+    required int qty,
+  }) {
+    return _predictSetLineQuantityOnSessionOrder(
+      current,
+      lineIndex,
+      qty,
+    );
+  }
+
+  static Map<String, dynamic>? _cachedDetailAlignedWithSession(
+    Map<String, dynamic>? cachedDetail,
+    SessionOrder current,
+  ) {
+    if (cachedDetail == null) return null;
+    if (extractProducts(cachedDetail).length != current.products.length) {
+      return null;
+    }
+    return cachedDetail;
+  }
+
+  static Map<String, dynamic> simulateDetailAfterAppendSimpleItem({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required String productName,
+    required double unitPrice,
+    int qty = 1,
+    String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatNumber = resolveDefaultSeatNumber(working);
+    final course = resolveAppendCourse(
+      working,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
+    );
+    final itemStatus = _resolveAppendItemStatus(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+    );
+
+    final newItem = _buildNewItemPayload(
+      seatNumber: seatNumber,
+      courseId: course.id,
+      productId: productId,
+      qty: qty,
+      subTotal: unitPrice * qty,
+      status: itemStatus,
+      comment: comment,
+      forCreate: false,
+    );
+    if (productName.isNotEmpty) {
+      newItem['product'] = {'id': productId, 'name': productName};
+    }
+
+    _appendItemToSeatOrders(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+      newItem: newItem,
+    );
+    _recomputeDetailTotals(working);
+    return working;
+  }
+
+  static Map<String, dynamic> simulateDetailAfterAppendComposedItem({
+    required Map<String, dynamic> orderDetail,
+    required int productId,
+    required String productName,
+    required double subTotal,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatNumber = resolveDefaultSeatNumber(working);
+    final course = resolveAppendCourse(
+      working,
+      seatNumber: seatNumber,
+      suivreSectionCount: suivreSectionCount,
+      suivreSplitHints: suivreSplitHints,
+      layoutHints: layoutHints,
+    );
+    final itemStatus = _resolveAppendItemStatus(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+    );
+
+    final newItem = _buildNewItemPayload(
+      seatNumber: seatNumber,
+      courseId: course.id,
+      productId: productId,
+      qty: 1,
+      subTotal: subTotal,
+      status: itemStatus,
+      comment: comment,
+      menuSelections: menuSelections,
+      isStillMenuMissing: false,
+      forCreate: false,
+    );
+    if (productName.isNotEmpty) {
+      newItem['product'] = {'id': productId, 'name': productName};
+    }
+
+    _appendItemToSeatOrders(
+      working,
+      seatNumber: seatNumber,
+      courseNumber: course.number,
+      newItem: newItem,
+    );
+    _recomputeDetailTotals(working);
+    return working;
+  }
+
+  static Map<String, dynamic> simulateDetailAfterAdjustLineQuantityAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required int delta,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      final currentQty = (item['qty'] as num?)?.toInt() ?? 1;
+      final newQty = currentQty + delta;
+      if (newQty <= 0) {
+        item['status'] = 'cancelled';
+        return;
+      }
+      final unitPrice = _itemUnitPrice(item);
+      item['qty'] = newQty;
+      item['sub_total'] = unitPrice * newQty;
+    });
+    _recomputeDetailTotals(working);
+    return working;
+  }
+
+  static Map<String, dynamic> simulateDetailAfterSetLineQuantityAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required int qty,
+  }) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      if (qty <= 0) {
+        item['status'] = 'cancelled';
+        return;
+      }
+      final unitPrice = _itemUnitPrice(item);
+      item['qty'] = qty;
+      item['sub_total'] = unitPrice * qty;
+    });
+    _recomputeDetailTotals(working);
+    return working;
+  }
+
+  static void _recomputeDetailTotals(Map<String, dynamic> orderDetail) {
+    var sum = 0.0;
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          final items = course['items'];
+          if (items is! List) continue;
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            if (item['status'] == 'cancelled') continue;
+            if (item['is_offer'] == true) continue;
+            sum += _parseMoney(item['sub_total']);
+          }
+        }
+      }
+    }
+
+    final formatted = sum.toStringAsFixed(2);
+    orderDetail['total_price'] = formatted;
+    orderDetail['remaining_amount'] = formatted;
+  }
+
+  static SessionOrder _predictAppendOnSessionOrder({
+    required SessionOrder current,
+    required String productName,
+    required double unitPrice,
+    int qty = 1,
+    List<String> menuItems = const [],
+  }) {
+    final products = List<OrderProduct>.from(current.products);
+    final newProduct = OrderProduct(
+      quantity: '$qty',
+      name: productName,
+      price: formatPrice((unitPrice * qty).toStringAsFixed(2)),
+      menuItems: menuItems,
+    );
+    products.add(newProduct);
+    final lineIndex = products.length - 1;
+
+    return current.copyWith(
+      products: products,
+      displayEntries: _appendProductToDisplayEntries(
+        current.displayEntries,
+        product: newProduct,
+        lineIndex: lineIndex,
+      ),
+      total: _sumFormattedPrices(products),
+    );
+  }
+
+  static SessionOrder _predictAdjustLineQuantityOnSessionOrder(
+    SessionOrder current,
+    int lineIndex,
+    int delta,
+  ) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return current;
+
+    final line = current.products[lineIndex];
+    final currentQty = int.tryParse(line.quantity) ?? 1;
+    final newQty = currentQty + delta;
+    if (newQty <= 0) {
+      return _predictRemoveLineOnSessionOrder(current, lineIndex);
+    }
+
+    final unitPrice = currentQty > 0
+        ? _parseFormattedEuroPrice(line.price) / currentQty
+        : 0.0;
+    final updatedLine = line.copyWith(
+      quantity: '$newQty',
+      price: formatPrice((unitPrice * newQty).toStringAsFixed(2)),
+    );
+
+    final products = List<OrderProduct>.from(current.products);
+    products[lineIndex] = updatedLine;
+
+    return current.copyWith(
+      products: products,
+      displayEntries: _updateDisplayEntriesForLine(
+        current.displayEntries,
+        lineIndex: lineIndex,
+        product: updatedLine,
+      ),
+      total: _sumFormattedPrices(products),
+    );
+  }
+
+  static SessionOrder _predictSetLineQuantityOnSessionOrder(
+    SessionOrder current,
+    int lineIndex,
+    int qty,
+  ) {
+    if (qty <= 0) {
+      return _predictRemoveLineOnSessionOrder(current, lineIndex);
+    }
+    return _predictAdjustLineQuantityOnSessionOrder(
+      current,
+      lineIndex,
+      qty - (int.tryParse(current.products[lineIndex].quantity) ?? 1),
+    );
+  }
+
+  static SessionOrder _predictRemoveLineOnSessionOrder(
+    SessionOrder current,
+    int lineIndex,
+  ) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return current;
+
+    final products = List<OrderProduct>.from(current.products)..removeAt(lineIndex);
+
+    return current.copyWith(
+      products: products,
+      displayEntries: _reindexDisplayEntriesAfterLineRemoval(
+        current.displayEntries,
+        lineIndex,
+      ),
+      total: _sumFormattedPrices(products),
+    );
+  }
+
+  static List<OrderDisplayEntry> _appendProductToDisplayEntries(
+    List<OrderDisplayEntry> entries, {
+    required OrderProduct product,
+    required int lineIndex,
+  }) {
+    final result = entries.toList();
+    var sectionIndex = 0;
+    int? courseNumber;
+
+    for (var i = result.length - 1; i >= 0; i--) {
+      final entry = result[i];
+      if (entry.type == OrderDisplayEntryType.suivreSeparator) {
+        sectionIndex = entry.sectionIndex ?? 0;
+        courseNumber = (entry.courseNumber ?? 0) + 1;
+        break;
+      }
+      if (entry.type == OrderDisplayEntryType.product && courseNumber == null) {
+        sectionIndex = entry.sectionIndex ?? 0;
+        courseNumber = entry.courseNumber;
+      }
+    }
+
+    result.add(
+      OrderDisplayEntry.product(
+        product: product,
+        lineIndex: lineIndex,
+        sectionIndex: sectionIndex,
+        courseNumber: courseNumber,
+      ),
+    );
+    return result;
+  }
+
+  static List<OrderDisplayEntry> _updateDisplayEntriesForLine(
+    List<OrderDisplayEntry> entries, {
+    required int lineIndex,
+    required OrderProduct product,
+  }) {
+    return [
+      for (final entry in entries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == lineIndex)
+          OrderDisplayEntry.product(
+            product: product,
+            lineIndex: lineIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+          )
+        else
+          entry,
+    ];
+  }
+
+  static List<OrderDisplayEntry> _reindexDisplayEntriesAfterLineRemoval(
+    List<OrderDisplayEntry> entries,
+    int removedLineIndex,
+  ) {
+    final result = <OrderDisplayEntry>[];
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.product) {
+        final index = entry.lineIndex;
+        if (index == null) {
+          result.add(entry);
+          continue;
+        }
+        if (index == removedLineIndex) continue;
+        if (index > removedLineIndex) {
+          result.add(
+            OrderDisplayEntry.product(
+              product: entry.product!,
+              lineIndex: index - 1,
+              sectionIndex: entry.sectionIndex ?? 0,
+              courseNumber: entry.courseNumber,
+            ),
+          );
+          continue;
+        }
+      }
+      result.add(entry);
+    }
+    return result;
+  }
+
+  static String _sumFormattedPrices(List<OrderProduct> products) {
+    var sum = 0.0;
+    for (final product in products) {
+      sum += _parseFormattedEuroPrice(product.price);
+    }
+    return formatPrice(sum.toStringAsFixed(2));
+  }
+
+  static double _parseFormattedEuroPrice(String price) {
+    return double.tryParse(
+      price.replaceAll('€', '').replaceAll(',', '.').trim(),
+    ) ??
+        0;
   }
 }

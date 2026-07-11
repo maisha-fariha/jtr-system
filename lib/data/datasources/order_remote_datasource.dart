@@ -259,20 +259,36 @@ class OrderRemoteDataSource {
   }
 
   Future<void> requestCourses(int orderId, List<int> courseIds) async {
-    final response = await _client.post<Map<String, dynamic>>(
-      ApiEndpoints.requestCourses(orderId),
-      data: {'course_ids': courseIds},
-    );
-    final envelope = ApiEnvelope<dynamic>.fromJson(
-      response.data!,
-      (json) => json,
-    );
+    final path = ApiEndpoints.requestCourses(orderId);
+    final body = {'course_ids': courseIds};
 
-    if (!envelope.success) {
-      throw ApiException(
-        message: envelope.message ?? 'Failed to request courses.',
-        statusCode: envelope.status,
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
       );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<dynamic>.fromJson(
+        response.data!,
+        (json) => json,
+      );
+
+      if (!envelope.success) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to request courses.',
+          statusCode: envelope.status,
+        );
+      }
+    } on ApiException catch (error) {
+      _appendApiError(error);
+      rethrow;
     }
   }
 
@@ -451,6 +467,13 @@ class OrderRemoteDataSource {
         response: response.data,
         statusCode: response.statusCode,
       );
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
 
       final envelope = ApiEnvelope<dynamic>.fromJson(
         response.data!,
@@ -464,7 +487,29 @@ class OrderRemoteDataSource {
         );
       }
     } on ApiException catch (error) {
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        statusCode: error.statusCode,
+        error: error.message,
+      );
       _appendApiError(error);
+      rethrow;
+    } catch (error) {
+      logPaymentApi(
+        method: 'POST',
+        path: path,
+        request: body,
+        error: error.toString(),
+      );
+      _recordApiLog(
+        method: 'POST',
+        path: path,
+        request: body,
+        error: error.toString(),
+        writeToConsole: false,
+      );
       rethrow;
     }
   }

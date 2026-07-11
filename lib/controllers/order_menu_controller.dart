@@ -36,6 +36,10 @@ class OrderMenuController extends GetxController {
     final args = Get.arguments;
     if (args is! Map) return;
 
+    // GetX can reuse the controller instance across route opens.
+    _selected.clear();
+    collapsedCategories.clear();
+
     currentTable.value = (args['table'] as String?) ?? '';
     returnToSelection = args['returnToSelection'] == true;
     choiceNumber = (args['choiceNumber'] as int?) ?? 1;
@@ -48,9 +52,15 @@ class OrderMenuController extends GetxController {
     final initialSelections = args['initialSelections'];
     if (initialSelections is Map) {
       for (final entry in initialSelections.entries) {
-        final item = entry.value;
-        if (item is MenuItem) {
-          _selected[_key(item)] = true;
+        final value = entry.value;
+        if (value is MenuItem) {
+          _selected[_key(value)] = true;
+          continue;
+        }
+        if (value is List) {
+          for (final v in value) {
+            if (v is MenuItem) _selected[_key(v)] = true;
+          }
         }
       }
     }
@@ -74,15 +84,28 @@ class OrderMenuController extends GetxController {
     final key = _key(item);
     final isOn = _selected[key] == true;
 
-    if (!isOn) {
-      for (final other in visibleCategories.expand((category) => category.items)) {
-        if (other.courseNumber == item.courseNumber && other.name != item.name) {
-          _selected.remove(_key(other));
-        }
-      }
+    if (isOn) {
+      _selected.remove(key);
+      return;
     }
 
-    _selected[key] = !isOn;
+    final maxAllowed = choiceNumber < 1 ? 1 : choiceNumber;
+    final currentlySelectedInCourse = selectedItems
+        .where((e) => e.courseNumber == item.courseNumber)
+        .length;
+
+    if (currentlySelectedInCourse >= maxAllowed) {
+      Get.snackbar(
+        'Limite atteinte',
+        'Vous pouvez sélectionner au maximum $maxAllowed article(s) pour ce choix.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+        duration: const Duration(seconds: 2),
+      );
+      return;
+    }
+
+    _selected[key] = true;
   }
 
   int get selectedCount => _selected.values.where((value) => value).length;
@@ -100,10 +123,10 @@ class OrderMenuController extends GetxController {
   double get selectedTotal =>
       selectedItems.fold(0, (sum, item) => sum + item.priceValue);
 
-  Map<int, MenuItem> _selectedItemsByCourse() {
-    final map = <int, MenuItem>{};
+  Map<int, List<MenuItem>> _selectedItemsByCourse() {
+    final map = <int, List<MenuItem>>{};
     for (final item in selectedItems) {
-      map[item.courseNumber] = item;
+      map.putIfAbsent(item.courseNumber, () => <MenuItem>[]).add(item);
     }
     return map;
   }
@@ -120,7 +143,7 @@ class OrderMenuController extends GetxController {
       return;
     }
 
-    if (returnToSelection && presetMenu != null) {
+    if (presetMenu != null) {
       Get.back(
         result: MenuActiveSelection(
           menu: presetMenu!,

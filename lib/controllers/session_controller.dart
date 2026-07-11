@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../data/repositories/auth_repository.dart';
@@ -86,6 +87,13 @@ class SessionController extends GetxController {
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
 
+  /// When deleting an order we optimistically remove it from [orders],
+  /// but a subsequent forced refresh may temporarily still return the
+  /// deleted row (backend eventual consistency).
+  /// We suppress re-adding those orders until the server list stops
+  /// containing them.
+  final Set<String> _suppressedTableNumbers = <String>{};
+
   @override
   void onInit() {
     super.onInit();
@@ -153,7 +161,24 @@ class SessionController extends GetxController {
       final loaded = enrichDetails
           ? await _mergeThinOrderRows(summaries)
           : summaries;
-      orders.assignAll(loaded);
+
+      // Hide "recently deleted" orders until the backend stops returning them.
+      final filtered = loaded.where((o) {
+        for (final suppressed in _suppressedTableNumbers) {
+          if (_tableKeysMatch(o.number, suppressed)) return false;
+        }
+        return true;
+      }).toList();
+
+      orders.assignAll(filtered);
+
+      if (forceRefresh && _suppressedTableNumbers.isNotEmpty) {
+        // Remove suppression entries once the server no longer includes them.
+        _suppressedTableNumbers.removeWhere(
+          (suppressed) =>
+              !loaded.any((o) => _tableKeysMatch(o.number, suppressed)),
+        );
+      }
       if (retainOrders != null) {
         for (final order in retainOrders) {
           _upsertOrderInList(order);
@@ -227,7 +252,34 @@ class SessionController extends GetxController {
     return merged;
   }
 
+  bool _isOrderSuppressed(String orderNumber) {
+    for (final suppressed in _suppressedTableNumbers) {
+      if (_tableKeysMatch(orderNumber, suppressed)) return true;
+    }
+    return false;
+  }
+
   void _upsertOrderInList(SessionOrder order) {
+    if (_isOrderSuppressed(order.number)) {
+      orders.removeWhere((item) => _tableKeysMatch(item.number, order.number));
+      orders.refresh();
+      return;
+    }
+
+    if (order.id <= 0) {
+      final byNumber = orders.indexWhere(
+        (item) => _tableKeysMatch(item.number, order.number),
+      );
+      if (byNumber >= 0) {
+        orders[byNumber] = order;
+        orders.refresh();
+        return;
+      }
+      orders.insert(0, order);
+      orders.refresh();
+      return;
+    }
+
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
       orders[idx] = order;
@@ -330,6 +382,7 @@ class SessionController extends GetxController {
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
     if (existing == null) return;
@@ -347,10 +400,11 @@ class SessionController extends GetxController {
 
     try {
       final previous = orders[idx];
+      final layoutHints =
+          previousDisplayEntries ?? previous.displayEntries;
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
-        previousDisplayEntries:
-            forceRefresh ? null : previous.displayEntries,
+        previousDisplayEntries: layoutHints,
       );
       orders[idx] = detail;
       orders.refresh();
@@ -432,6 +486,16 @@ class SessionController extends GetxController {
       return;
     }
 
+    // Own open order already in this app's session list → reopen + optional guest PUT.
+    final existingOwn = _findOwnOpenOrderForTable(tableNumber);
+    if (existingOwn != null) {
+      await _reopenOwnOrderAndUpdateGuests(
+        existing: existingOwn,
+        guests: guests,
+      );
+      return;
+    }
+
     isCreatingOrder.value = true;
     SessionOrder? created;
     var attemptedCreate = false;
@@ -451,7 +515,8 @@ class SessionController extends GetxController {
         return;
       }
       if (OrderMapper.isTableInUse(tables, tableNumber)) {
-        logOrderFlow('_createTableAndOpenDetails ABORT table occupied');
+        // Table in use by another waiter / session — not in our list.
+        logOrderFlow('_createTableAndOpenDetails ABORT table occupied (other)');
         if (context.mounted) {
           TableOccupiedDialog.show(
             context: context,
@@ -541,9 +606,75 @@ class SessionController extends GetxController {
     }
   }
 
+  /// Finds an open order for [tableNumber] already shown in this waiter's list.
+  SessionOrder? _findOwnOpenOrderForTable(String tableNumber) {
+    final normalized = OrderMapper.normalizeTableKey(tableNumber);
+    if (normalized.isEmpty) return null;
+
+    for (final order in orders) {
+      if (_tableKeysMatch(order.number, normalized) ||
+          _tableKeysMatch(order.number, OrderMapper.tableDisplayNumber(normalized))) {
+        return order;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _reopenOwnOrderAndUpdateGuests({
+    required SessionOrder existing,
+    required int guests,
+  }) async {
+    logOrderFlow(
+      '_reopenOwnOrderAndUpdateGuests table=${existing.number} orderId=${existing.id} guests=$guests',
+    );
+
+    var target = existing;
+    final currentGuests = int.tryParse(existing.couverts.trim()) ?? 0;
+    final nextGuests = guests < 1 ? 1 : guests;
+
+    if (existing.id > 0 && currentGuests != nextGuests) {
+      isCreatingOrder.value = true;
+      try {
+        target = await _orderRepository.updateOrderGuestCount(
+          orderId: existing.id,
+          numberOfGuests: nextGuests,
+        );
+        _upsertOrderInList(target);
+      } on ApiException catch (e) {
+        _showSnack('Erreur', e.message);
+        // Still open details with local guest count so waiter can continue.
+        target = existing.copyWith(couverts: '$nextGuests');
+        _upsertOrderInList(target);
+      } catch (_) {
+        _showSnack('Erreur', 'Impossible de mettre à jour les couverts.');
+        target = existing.copyWith(couverts: '$nextGuests');
+        _upsertOrderInList(target);
+      } finally {
+        isCreatingOrder.value = false;
+      }
+    } else if (currentGuests != nextGuests) {
+      target = existing.copyWith(couverts: '$nextGuests');
+      _upsertOrderInList(target);
+    }
+
+    openTableDetails(
+      target.number,
+      orderId: target.id > 0 ? target.id : null,
+    );
+    unawaited(
+      refreshOrderList(
+        pinOrder: target.id > 0 ? target : null,
+        background: true,
+      ),
+    );
+  }
+
   bool isTableOccupied(String tableNumber) {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
+
+    // Own list order is reopened via nouvelle commande — not "occupied" for this waiter.
+    if (_findOwnOpenOrderForTable(normalized) != null) return false;
 
     if (OrderMapper.isTableInUse(
       _sessionRepository.cachedTables,
@@ -552,10 +683,7 @@ class SessionController extends GetxController {
       return true;
     }
 
-    return orders.any((order) {
-      final orderTable = order.number.replaceFirst(RegExp(r'^T'), '');
-      return orderTable == normalized || order.number == 'T$normalized';
-    });
+    return false;
   }
 
   String get _currentUserDisplayName {
@@ -666,6 +794,8 @@ class SessionController extends GetxController {
     final order = findOrder(orderNumber: orderNumber);
     if (order == null) return;
 
+    _suppressedTableNumbers.add(order.number);
+
     try {
       if (order.isLocalOnly) {
         final tableId = -order.id;
@@ -683,10 +813,22 @@ class SessionController extends GetxController {
       _clearUiStateForOrder(order.number);
 
       unawaited(_sessionRepository.getTablesList(forceRefresh: true));
-      unawaited(loadSessionOrders(forceRefresh: true));
+      // Reload without showing loading indicator; the suppression filter
+      // prevents the deleted order from reappearing during eventual
+      // consistency window.
+      unawaited(loadSessionOrders(
+        forceRefresh: true,
+        showLoading: false,
+      ));
     } on ApiException catch (e) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) => _tableKeysMatch(suppressed, order.number),
+      );
       _showSnack('Erreur', e.message);
     } catch (_) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) => _tableKeysMatch(suppressed, order.number),
+      );
       _showSnack('Erreur', 'Impossible d\'annuler la table.');
     }
   }

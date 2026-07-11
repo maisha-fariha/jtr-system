@@ -642,6 +642,10 @@ class _ProductLine extends GetView<TableDetailsController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final isSelected = controller.isOrderLineSelected(productIndex);
+      controller.orderUiRevision.value;
+      final hasMenuItems = product.hasMenuItems;
+      final isMenuExpanded = hasMenuItems &&
+          controller.isMenuLineExpanded(productIndex);
 
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
@@ -708,20 +712,77 @@ class _ProductLine extends GetView<TableDetailsController> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          product.name,
-                          style: TextStyle(
-                            fontSize:
-                                JtrResponsive.getResponsiveFontSize(context, 13),
-                            fontWeight: FontWeight.w600,
-                            color: isSelected
-                                ? AppTheme.primary
-                                : AppTheme.darkText,
-                            letterSpacing: 0.2,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                product.name,
+                                style: TextStyle(
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    13,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: isSelected
+                                      ? AppTheme.primary
+                                      : AppTheme.darkText,
+                                  letterSpacing: 0.2,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (hasMenuItems)
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: () => controller.toggleMenuLineExpansion(
+                                  productIndex,
+                                ),
+                                child: Padding(
+                                  padding: JtrResponsive.getResponsivePadding(
+                                    context,
+                                    left: 4,
+                                  ),
+                                  child: Icon(
+                                    isMenuExpanded
+                                        ? Icons.keyboard_arrow_up
+                                        : Icons.keyboard_arrow_down,
+                                    size: JtrResponsive.getResponsiveSize(
+                                      context,
+                                      16,
+                                    ),
+                                    color: AppTheme.primary,
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
+                        if (hasMenuItems && isMenuExpanded)
+                          for (final menuItem in product.menuItems) ...[
+                            JtrResponsive.getResponsiveSpacing(context, 2),
+                            Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                left: 12,
+                              ),
+                              child: Text(
+                                menuItem,
+                                style: TextStyle(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    11,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.primary,
+                                  letterSpacing: 0.3,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         if (product.message != null &&
                             product.message!.isNotEmpty) ...[
                           JtrResponsive.getResponsiveSpacing(context, 2),
@@ -1007,7 +1068,10 @@ class _PaymentButtons extends GetView<TableDetailsController> {
     return Obx(() {
       final loading = controller.paymentModesLoading.value;
       final error = controller.paymentModesError.value;
-      final busy = controller.isAddingProduct.value;
+      controller.payingIsCash.value;
+      final paying = controller.isPaying;
+      final cashBusy = controller.isPayingCash;
+      final cardBusy = controller.isPayingCard;
       final canPay = controller.canPay;
 
       return Padding(
@@ -1054,11 +1118,11 @@ class _PaymentButtons extends GetView<TableDetailsController> {
               ),
               JtrResponsive.getResponsiveSpacing(context, 8),
               TextButton(
-                onPressed: busy ? null : () => controller.reloadPaymentModes(),
+                onPressed: paying ? null : () => controller.reloadPaymentModes(),
                 child: const Text('Réessayer'),
               ),
               TextButton(
-                onPressed: busy
+                onPressed: paying
                     ? null
                     : () {
                         final log = controller.lastPaymentModesLoadLog;
@@ -1078,8 +1142,8 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                     child: _PaymentButton(
                       label: 'ESPECE',
                       backgroundColor: _cashGrey,
-                      enabled: canPay,
-                      busy: busy,
+                      enabled: canPay && !paying,
+                      busy: cashBusy,
                       onTap: () =>
                           controller.payOrder(context: context, isCash: true),
                     ),
@@ -1089,8 +1153,8 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                     child: _PaymentButton(
                       label: 'CARTE DE CREDIT',
                       backgroundColor: AppTheme.primary,
-                      enabled: canPay,
-                      busy: busy,
+                      enabled: canPay && !paying,
+                      busy: cardBusy,
                       onTap: () =>
                           controller.payOrder(context: context, isCash: false),
                     ),
@@ -1245,6 +1309,8 @@ class _MenuGrid extends GetView<TableDetailsController> {
         return const Center(child: CircularProgressIndicator(strokeWidth: 2));
       }
 
+      controller.orderUiRevision.value;
+
       if (controller.catalogError.value != null &&
           controller.categoryRoots.isEmpty &&
           controller.products.isEmpty) {
@@ -1353,6 +1419,10 @@ class _MenuGrid extends GetView<TableDetailsController> {
                       isInOrder: isInOrder,
                       isSelected: isSelected,
                     ),
+                    gradient: _menuGridItemGradient(
+                      isInOrder: isInOrder,
+                      isSelected: isSelected,
+                    ),
                     borderRadius: BorderRadius.circular(itemRadius),
                     border: _menuGridItemBorder(
                       isInOrder: isInOrder,
@@ -1361,86 +1431,130 @@ class _MenuGrid extends GetView<TableDetailsController> {
                     boxShadow: _menuGridItemShadow(isSelected),
                   ),
                   child: Stack(
-                    alignment: Alignment.center,
                     children: [
-                      Padding(
-                        padding: JtrResponsive.getResponsivePadding(
-                          context,
-                          all: 10,
-                        ),
-                        child: Text(
-                          product.name,
-                          textAlign: TextAlign.center,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: _categoryPartFontSize(context, 11),
-                            fontWeight: FontWeight.w600,
-                            color: AppTheme.darkText.withValues(
-                              alpha: isInOrder ? 0.7 : 0.85,
+                      Positioned(
+                        top: JtrResponsive.getResponsiveHeight(context, 0),
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          height: JtrResponsive.getResponsiveHeight(context, 4),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? AppTheme.primary.withValues(alpha: 0.95)
+                                : (isInOrder
+                                    ? AppTheme.primary.withValues(alpha: 0.65)
+                                    : Colors.transparent),
+                            borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(itemRadius),
                             ),
-                            height: 1.25,
                           ),
                         ),
                       ),
-                      if (product.isComposed)
-                        Positioned(
-                          top: JtrResponsive.getResponsiveHeight(
-                            context,
-                            6,
-                          ),
-                          right: JtrResponsive.getResponsiveWidth(
-                            context,
-                            6,
-                          ),
-                          child: Icon(
-                            Icons.tune,
-                            size: JtrResponsive.getResponsiveSize(
-                              context,
-                              14,
-                            ),
-                            color: AppTheme.primary.withValues(
-                              alpha: 0.8,
-                            ),
-                          ),
+                      Padding(
+                        padding: JtrResponsive.getResponsivePadding(
+                          context,
+                          left: 10,
+                          right: 10,
+                          top: 12,
+                          bottom: 10,
                         ),
-                      if (isInOrder)
-                        Positioned(
-                          bottom: JtrResponsive.getResponsiveHeight(
-                            context,
-                            8,
-                          ),
-                          child: Container(
-                            padding: JtrResponsive.getResponsivePadding(
-                              context,
-                              horizontal: 8,
-                              vertical: 2,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                if (product.isComposed)
+                                  Container(
+                                    padding: JtrResponsive.getResponsivePadding(
+                                      context,
+                                      horizontal: 6,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.lightButton.withValues(
+                                        alpha: 0.7,
+                                      ),
+                                      borderRadius: BorderRadius.circular(
+                                        JtrResponsive.getResponsiveRadius(
+                                          context,
+                                          8,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      Icons.tune,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        12,
+                                      ),
+                                      color: AppTheme.primary.withValues(
+                                        alpha: 0.85,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary.withValues(
-                                alpha: 0.12,
-                              ),
-                              borderRadius: BorderRadius.circular(
-                                JtrResponsive.getResponsiveRadius(
-                                  context,
-                                  6,
+                            Expanded(
+                              child: Center(
+                                child: Text(
+                                  product.name,
+                                  textAlign: TextAlign.center,
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: _categoryPartFontSize(context, 11),
+                                    fontWeight: FontWeight.w700,
+                                    color: AppTheme.darkText.withValues(
+                                      alpha: isInOrder ? 0.78 : 0.92,
+                                    ),
+                                    height: 1.28,
+                                  ),
                                 ),
                               ),
                             ),
-                            child: Text(
-                              '×$orderQty',
-                              style: TextStyle(
-                                fontSize:
-                                    JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  10,
-                                ),
-                                fontWeight: FontWeight.w800,
-                                color: AppTheme.primary,
-                              ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                if (isInOrder)
+                                  Container(
+                                    padding: JtrResponsive.getResponsivePadding(
+                                      context,
+                                      horizontal: 8,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primary.withValues(
+                                        alpha: 0.12,
+                                      ),
+                                      borderRadius: BorderRadius.circular(
+                                        JtrResponsive.getResponsiveRadius(
+                                          context,
+                                          999,
+                                        ),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'In order x$orderQty',
+                                      style: TextStyle(
+                                        fontSize:
+                                            JtrResponsive.getResponsiveFontSize(
+                                          context,
+                                          9,
+                                        ),
+                                        fontWeight: FontWeight.w800,
+                                        color: AppTheme.primary,
+                                        letterSpacing: 0.2,
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  const SizedBox.shrink(),
+                              ],
                             ),
-                          ),
+                          ],
                         ),
+                      ),
                     ],
                   ),
                 ),
@@ -1522,6 +1636,10 @@ class _CategoryGrid extends StatelessWidget {
                     isInOrder: false,
                     isSelected: false,
                   ),
+                  gradient: _menuGridItemGradient(
+                    isInOrder: false,
+                    isSelected: false,
+                  ),
                   borderRadius: BorderRadius.circular(itemRadius),
                   border: _menuGridItemBorder(
                     isInOrder: false,
@@ -1576,12 +1694,81 @@ Color _menuGridItemBackground({
   required bool isSelected,
 }) {
   if (Get.isDarkMode) {
-    if (isSelected) return AppTheme.primary.withValues(alpha: 0.18);
-    return AppTheme.inactiveSurface;
+    if (isSelected) return AppTheme.primary.withValues(alpha: 0.16);
+    if (isInOrder) return const Color(0xFF342823);
+    return const Color(0xFF222222);
   }
 
-  if (isSelected) return AppTheme.lightButton;
-  return isInOrder ? AppTheme.lightButton.withValues(alpha: 0.55) : AppTheme.background;
+  if (isSelected) return const Color(0xFFF8D9D3);
+  if (isInOrder) return const Color(0xFFFEF1EE);
+  return const Color(0xFFFFFCFB);
+}
+
+Gradient? _menuGridItemGradient({
+  required bool isInOrder,
+  required bool isSelected,
+}) {
+  if (Get.isDarkMode) {
+    if (isSelected) {
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          AppTheme.primary.withValues(alpha: 0.22),
+          const Color(0xFF2B211E),
+        ],
+      );
+    }
+    if (isInOrder) {
+      return const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color(0xFF362924),
+          Color(0xFF262626),
+        ],
+      );
+    }
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFF2B2B2B),
+        Color(0xFF202020),
+      ],
+    );
+  }
+
+  if (isSelected) {
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFFFDEAE6),
+        Color(0xFFF8D1C8),
+      ],
+    );
+  }
+
+  if (isInOrder) {
+    return const LinearGradient(
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+      colors: [
+        Color(0xFFFFF7F5),
+        Color(0xFFFDE5E0),
+      ],
+    );
+  }
+
+  return const LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFFFFFFF),
+      Color(0xFFFBF3F1),
+    ],
+  );
 }
 
 Border? _menuGridItemBorder({
@@ -1589,29 +1776,52 @@ Border? _menuGridItemBorder({
   required bool isSelected,
 }) {
   if (isSelected) {
-    return Border.all(color: AppTheme.primary, width: 2.5);
+    return Border.all(
+      color: AppTheme.primary.withValues(alpha: 0.95),
+      width: 2,
+    );
   }
 
   if (Get.isDarkMode) {
     return isInOrder
-        ? Border.all(color: AppTheme.primary.withValues(alpha: 0.5), width: 1.5)
-        : null;
+        ? Border.all(
+            color: AppTheme.primary.withValues(alpha: 0.45),
+            width: 1.2,
+          )
+        : Border.all(color: AppTheme.cardBorder.withValues(alpha: 0.85));
   }
 
   return Border.all(
-    color: isInOrder ? AppTheme.primary.withValues(alpha: 0.45) : AppTheme.cardBorder,
-    width: isInOrder ? 1.5 : 1,
+    color: isInOrder
+        ? AppTheme.primary.withValues(alpha: 0.30)
+        : const Color(0xFFF1E2DE),
+    width: isInOrder ? 1.2 : 1,
   );
 }
 
 List<BoxShadow>? _menuGridItemShadow(bool isSelected) {
-  if (Get.isDarkMode) return null;
+  if (Get.isDarkMode) {
+    return [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: isSelected ? 0.28 : 0.18),
+        blurRadius: isSelected ? 14 : 8,
+        offset: const Offset(0, 5),
+      ),
+    ];
+  }
 
   return [
     BoxShadow(
-      color: Colors.black.withValues(alpha: 0.04),
-      blurRadius: 4,
-      offset: const Offset(0, 2),
+      color: isSelected
+          ? AppTheme.primary.withValues(alpha: 0.16)
+          : Colors.black.withValues(alpha: 0.06),
+      blurRadius: isSelected ? 16 : 10,
+      offset: const Offset(0, 6),
+    ),
+    BoxShadow(
+      color: Colors.white.withValues(alpha: 0.55),
+      blurRadius: 2,
+      offset: const Offset(0, -1),
     ),
   ];
 }

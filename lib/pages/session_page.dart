@@ -76,20 +76,46 @@ class SessionPage extends GetView<SessionController> {
                     onRefresh: () => controller.loadSessionOrders(
                       forceRefresh: true,
                     ),
-                    child: ListView.separated(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      padding: JtrResponsive.getResponsivePadding(
-                        context,
-                        top: 8,
-                        bottom: 8,
-                      ),
-                      itemCount: controller.orders.length,
-                      separatorBuilder: (context, index) =>
-                          JtrResponsive.getResponsiveSpacing(context, 8),
-                      itemBuilder: (context, index) {
-                        return _OrderRow(order: controller.orders[index]);
-                      },
-                    ),
+                    child: Obx(() {
+                      final loadingMore = controller.isLoadingMoreOrders.value;
+                      final count = controller.orders.length +
+                          (loadingMore ? 1 : 0);
+                      return ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: JtrResponsive.getResponsivePadding(
+                          context,
+                          top: 8,
+                          bottom: 8,
+                        ),
+                        itemCount: count,
+                        separatorBuilder: (context, index) =>
+                            JtrResponsive.getResponsiveSpacing(context, 8),
+                        itemBuilder: (context, index) {
+                          if (loadingMore &&
+                              index == controller.orders.length) {
+                            return Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                vertical: 16,
+                              ),
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 28,
+                                  height: 28,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: AppTheme.primary,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+                          return _OrderRow(
+                            order: controller.orders[index],
+                          );
+                        },
+                      );
+                    }),
                   );
                 }),
               ),

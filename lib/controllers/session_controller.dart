@@ -79,6 +79,8 @@ class SessionController extends GetxController {
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
   final isLoadingOrders = false.obs;
+  /// True while pages 2..N are loading after page 1 is already on screen.
+  final isLoadingMoreOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
   final activeDay = ActiveDayInfo.fallback().obs;
@@ -184,6 +186,7 @@ class SessionController extends GetxController {
             cached,
             retainOrders: retainOrders,
             enrichDetails: enrichDetails,
+            replaceList: true,
           );
           if (showLoading) {
             isLoadingOrders.value = false;
@@ -196,31 +199,38 @@ class SessionController extends GetxController {
         }
       }
 
-      void onAllPages(List<SessionOrder> all) {
+      void onMorePages(List<SessionOrder> more) {
         _applySessionOrderSummaries(
-          all,
+          more,
           retainOrders: retainOrders,
           enrichDetails: enrichDetails,
-          clearSuppressedMatches: true,
+          replaceList: false,
         );
       }
 
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
               waiterId: _currentWaiterId,
-              onAllPagesLoaded: onAllPages,
+              onLoadingMoreChanged: (loading) {
+                isLoadingMoreOrders.value = loading;
+              },
+              onMorePagesLoaded: onMorePages,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
               waiterId: _currentWaiterId,
-              onAllPagesLoaded: onAllPages,
+              onLoadingMoreChanged: (loading) {
+                isLoadingMoreOrders.value = loading;
+              },
+              onMorePagesLoaded: onMorePages,
             );
 
-      // Page 1 is enough to dismiss the spinner (~Postman latency).
+      // Page 1 paints immediately (~Postman latency).
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
         enrichDetails: enrichDetails,
+        replaceList: true,
         clearSuppressedMatches: forceRefresh,
       );
     } on ApiException catch (e) {
@@ -248,19 +258,24 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onAllPagesLoaded: (all) {
+        onLoadingMoreChanged: (loading) {
+          isLoadingMoreOrders.value = loading;
+        },
+        onMorePagesLoaded: (more) {
           _applySessionOrderSummaries(
-            all,
+            more,
             retainOrders: retainOrders,
             enrichDetails: enrichDetails,
-            clearSuppressedMatches: true,
+            replaceList: false,
           );
         },
       );
+      // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
         enrichDetails: enrichDetails,
+        replaceList: false,
         clearSuppressedMatches: true,
       );
     } catch (_) {
@@ -278,12 +293,15 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onAllPagesLoaded: (all) {
+        onLoadingMoreChanged: (loading) {
+          isLoadingMoreOrders.value = loading;
+        },
+        onMorePagesLoaded: (more) {
           _applySessionOrderSummaries(
-            all,
+            more,
             retainOrders: retainOrders,
             enrichDetails: false,
-            clearSuppressedMatches: true,
+            replaceList: false,
           );
         },
       );
@@ -291,6 +309,7 @@ class SessionController extends GetxController {
         summaries,
         retainOrders: retainOrders,
         enrichDetails: false,
+        replaceList: true,
         clearSuppressedMatches: true,
       );
     } catch (_) {
@@ -305,6 +324,9 @@ class SessionController extends GetxController {
     Iterable<SessionOrder>? retainOrders,
     bool enrichDetails = false,
     bool clearSuppressedMatches = false,
+    /// When true, replace the visible list (page 1 / pull-to-refresh).
+    /// When false, update in place + append only — avoids rows jumping.
+    bool replaceList = true,
   }) {
     // Empty orders must stay until the delete icon closes them. List APIs often
     // drop empty / auto-closed shells after the last item is cancelled.
@@ -320,7 +342,20 @@ class SessionController extends GetxController {
       return true;
     }).toList();
 
-    orders.assignAll(filtered);
+    if (replaceList || orders.isEmpty) {
+      // Lightweight list API has no line items — keep any already-loaded detail.
+      final previousById = <int, SessionOrder>{
+        for (final order in orders)
+          if (order.id > 0) order.id: order,
+      };
+      orders.assignAll([
+        for (final order in filtered)
+          _preferDetailedOrder(order, previousById[order.id]),
+      ]);
+    } else {
+      _mergeSessionOrdersStable(filtered);
+    }
+
     if (retainOrders != null) {
       for (final order in retainOrders) {
         _upsertOrderInList(order);
@@ -349,6 +384,47 @@ class SessionController extends GetxController {
     if (enrichDetails) {
       unawaited(_enrichOrdersInBackground(filtered));
     }
+  }
+
+  /// Updates existing rows in place and appends only new ids (no reshuffle).
+  void _mergeSessionOrdersStable(List<SessionOrder> incoming) {
+    final incomingById = <int, SessionOrder>{
+      for (final order in incoming)
+        if (order.id > 0) order.id: order,
+    };
+
+    for (var i = 0; i < orders.length; i++) {
+      final current = orders[i];
+      if (current.id <= 0) continue;
+      final updated = incomingById[current.id];
+      if (updated == null) continue;
+      orders[i] = _preferDetailedOrder(updated, current);
+    }
+
+    final existingIds = <int>{
+      for (final order in orders)
+        if (order.id > 0) order.id,
+    };
+    for (final order in incoming) {
+      if (order.id <= 0 || existingIds.contains(order.id)) continue;
+      orders.add(order);
+      existingIds.add(order.id);
+    }
+  }
+
+  /// Session list summaries omit products; never wipe lines already loaded.
+  SessionOrder _preferDetailedOrder(
+    SessionOrder incoming,
+    SessionOrder? previous,
+  ) {
+    if (previous == null) return incoming;
+    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+      return incoming.copyWith(
+        products: previous.products,
+        displayEntries: previous.displayEntries,
+      );
+    }
+    return incoming;
   }
 
   /// Reloads open orders for the session screen after create/edit on a table.
@@ -434,7 +510,7 @@ class SessionController extends GetxController {
         (item) => _tableKeysMatch(item.number, order.number),
       );
       if (byNumber >= 0) {
-        orders[byNumber] = order;
+        orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
         orders.refresh();
         return;
       }
@@ -445,7 +521,7 @@ class SessionController extends GetxController {
 
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
-      orders[idx] = order;
+      orders[idx] = _preferDetailedOrder(order, orders[idx]);
       orders.refresh();
       return;
     }
@@ -454,7 +530,7 @@ class SessionController extends GetxController {
       (item) => _tableKeysMatch(item.number, order.number),
     );
     if (byNumber >= 0) {
-      orders[byNumber] = order;
+      orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
       orders.refresh();
       return;
     }
@@ -884,15 +960,23 @@ class SessionController extends GetxController {
       _upsertOrderInList(target);
     }
 
+    // List rows are lightweight (total only). Load full seat_orders before
+    // opening table details so items are visible (same as tapping the list).
+    if (target.id > 0 && target.products.isEmpty) {
+      isCreatingOrder.value = true;
+      try {
+        target = await _orderRepository.getOrderDetail(target.id);
+        _upsertOrderInList(target);
+      } catch (_) {
+        // Table details bootstrap will retry loadOrderDetails.
+      } finally {
+        isCreatingOrder.value = false;
+      }
+    }
+
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
-    );
-    unawaited(
-      refreshOrderList(
-        pinOrder: target.id > 0 ? target : null,
-        background: true,
-      ),
     );
   }
 

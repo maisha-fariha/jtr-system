@@ -93,7 +93,15 @@ class SessionRemoteDataSource {
   /// Page 1 only — same cost as a single Postman request.
   Future<({List<Map<String, dynamic>> orders, int lastPage})>
       fetchOrdersFirstPage({int? waiterId}) {
-    return _fetchOrdersPage(page: 1, waiterId: waiterId);
+    return fetchOrdersPage(page: 1, waiterId: waiterId);
+  }
+
+  /// Single orders page (`per_page: 10`).
+  Future<({List<Map<String, dynamic>> orders, int lastPage})> fetchOrdersPage({
+    required int page,
+    int? waiterId,
+  }) {
+    return _fetchOrdersPage(page: page, waiterId: waiterId);
   }
 
   /// Pages 2..[lastPage] in parallel (capped).
@@ -114,7 +122,7 @@ class SessionRemoteDataSource {
     for (var i = 0; i < remainingPages.length; i += batchSize) {
       final batch = remainingPages.skip(i).take(batchSize).toList();
       final pages = await Future.wait(
-        batch.map((page) => _fetchOrdersPage(page: page, waiterId: waiterId)),
+        batch.map((page) => fetchOrdersPage(page: page, waiterId: waiterId)),
       );
       for (final page in pages) {
         orders.addAll(page.orders);

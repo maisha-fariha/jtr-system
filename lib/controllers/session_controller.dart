@@ -668,40 +668,21 @@ class SessionController extends GetxController {
     } finally {
       isCreatingOrder.value = false;
       if (attemptedCreate) {
-        if (created != null && created.id <= 0) {
-          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
-            tableNumber,
-          );
-          if (resolved != null && resolved > 0) {
-            try {
-              final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.id > 0
-                  ? detail
-                  : detail.copyWith(id: resolved);
-            } catch (_) {
-              // Keep session placeholder — order will be POSTed on first item.
-            }
-          }
-        }
-
+        // Session-only placeholders (id <= 0) are intentional: API requires a
+        // real item on POST /api/orders, so we create the order on first add.
         if (created == null) {
           final resolved = await _orderRepository.resolveOrderIdForTableNumber(
             tableNumber,
           );
           if (resolved != null && resolved > 0) {
             try {
-              final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.id > 0
-                  ? detail
-                  : detail.copyWith(id: resolved);
+              created = await _orderRepository.openAsEmptyTableOrder(resolved);
             } catch (_) {}
           }
         }
 
         if (created != null) {
-          if (created.id > 0) {
-            _upsertOrderInList(created);
-          }
+          _upsertOrderInList(created);
           logOrderFlow(
             '_createTableAndOpenDetails OPEN table=${created.number} orderId=${created.id}',
           );
@@ -712,7 +693,7 @@ class SessionController extends GetxController {
         }
         unawaited(
           refreshOrderList(
-            pinOrder: created != null && created.id > 0 ? created : null,
+            pinOrder: created,
             background: true,
           ),
         );

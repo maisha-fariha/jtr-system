@@ -1215,7 +1215,7 @@ class OrderMapper {
     return payload;
   }
 
-  /// POST /api/orders with seat/course shell and one default line item.
+  /// POST /api/orders with seat/course shell and one selected line item.
   static Map<String, dynamic> buildCreateOrderSeatCoursePayload({
     required int waiterId,
     required int numberOfGuests,
@@ -1258,7 +1258,8 @@ class OrderMapper {
     return payload;
   }
 
-  /// Payload candidates for POST /api/orders when opening a table.
+  /// Payload candidates for POST /api/orders when the waiter selected a product
+  /// (first article on a new/local order). Never used for empty table open.
   static List<Map<String, dynamic>> createOrderPayloadCandidates({
     required int waiterId,
     required int numberOfGuests,
@@ -1284,22 +1285,18 @@ class OrderMapper {
         unitPrice: unitPrice,
         salesZoneId: salesZoneId,
       ),
-      buildCreateOrderHeaderPayload(
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        tableId: tableId,
-        salesZoneId: salesZoneId,
-      ),
     ];
   }
 
-  /// Session-only placeholder until POST /api/orders succeeds.
+  /// Session-only placeholder until the first selected article POSTs /api/orders.
+  /// [id] is `-tableId` so delete can end the table session while local-only.
   static SessionOrder buildSessionPlaceholderOrder({
     required int tableNumber,
     required int numberOfGuests,
+    int? tableId,
   }) {
     return SessionOrder(
-      id: 0,
+      id: tableId != null && tableId > 0 ? -tableId : 0,
       number: displayKey(orderId: 0, tableNumber: tableNumber),
       numberColor: AppTheme.primary,
       group: '1',
@@ -2428,6 +2425,29 @@ class OrderMapper {
           item['cancel_reason'] = cancelReason;
           item['cancelled_at'] = now;
         }
+      }
+    }
+
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+  }
+
+  /// Removes all line items from seat courses (stronger empty-order clear).
+  static Map<String, dynamic> stripAllVisibleItems(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) {
+      return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    }
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        course['items'] = <dynamic>[];
       }
     }
 

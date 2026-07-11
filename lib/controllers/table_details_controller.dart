@@ -165,6 +165,18 @@ class TableDetailsController extends GetxController {
   }) async {
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
+
+    // Fresh / emptied commande is stored empty in session — don't overwrite
+    // with a backend auto-injected default product (or fail on local-only).
+    final current = order;
+    if (current != null && current.products.isEmpty) {
+      if (current.isLocalOnly) return;
+      if (orderId == null || orderId == current.id) {
+        orderId = current.id;
+        return;
+      }
+    }
+
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,
@@ -1315,7 +1327,16 @@ class TableDetailsController extends GetxController {
 
   Future<int?> _resolveOrderIdForBackgroundSync() async {
     final fast = _fastResolvedOrderId;
-    if (fast != null) return fast;
+    if (fast != null && fast > 0) return fast;
+
+    // Local session-only shell (id <= 0): create with the first selected item
+    // instead of attaching whatever order the table list might still reference.
+    final current = order;
+    if (orderId == null || orderId! <= 0) {
+      if (current == null || current.isLocalOnly) {
+        return null;
+      }
+    }
 
     final resolved =
         await _orderRepository.resolveOrderIdForTableNumber(orderNumber);

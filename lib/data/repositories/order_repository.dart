@@ -11,7 +11,6 @@ import '../datasources/order_remote_datasource.dart';
 import '../datasources/session_datasource.dart';
 import '../../utils/api_log.dart';
 import '../mappers/order_mapper.dart';
-import 'catalog_repository.dart';
 
 class OrderRepository {
   OrderRepository({
@@ -20,20 +19,17 @@ class OrderRepository {
     required SessionRemoteDataSource sessionRemote,
     required SessionLocalDataSource sessionLocal,
     required ConnectivityService connectivity,
-    required CatalogRepository catalog,
   })  : _remote = remote,
         _local = local,
         _sessionRemote = sessionRemote,
         _sessionLocal = sessionLocal,
-        _connectivity = connectivity,
-        _catalog = catalog;
+        _connectivity = connectivity;
 
   final OrderRemoteDataSource _remote;
   final OrderLocalDataSource _local;
   final SessionRemoteDataSource _sessionRemote;
   final SessionLocalDataSource _sessionLocal;
   final ConnectivityService _connectivity;
-  final CatalogRepository _catalog;
 
   /// Last create-order debug trace (for on-screen error/success dialog).
   String? lastCreateOrderLog;
@@ -59,6 +55,25 @@ class OrderRepository {
   Map<String, dynamic>? cachedOrderDetail(int orderId) {
     if (orderId <= 0) return null;
     return _local.readOrderDetail(orderId);
+  }
+
+  /// Forces a newly opened table order to show with zero visible lines.
+  Future<SessionOrder> openAsEmptyTableOrder(int orderId) async {
+    final apiLog = StringBuffer('── openAsEmptyTableOrder id=$orderId ──');
+    var detail = await _remote.fetchOrderDetail(orderId);
+    if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+      detail = await _clearVisibleItemsKeepOpen(orderId, detail, apiLog);
+    }
+    final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+    await _local.saveOrderDetail(orderId, shell);
+    await _sessionLocal.upsertOpenOrderInList(shell);
+    lastCreateOrderLog = apiLog.toString();
+    return OrderMapper.fromOrderDetail(shell).copyWith(
+      id: orderId,
+      products: const [],
+      displayEntries: const [],
+      total: OrderMapper.formatPrice('0'),
+    );
   }
 
   Future<SessionOrder> getOrderDetail(
@@ -273,47 +288,37 @@ class OrderRepository {
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
 
-    var orderId = await _createOrderOnTable(
+    // Backend requires seat_orders.courses.items to be non-empty on
+    // POST /api/orders. We never invent an unselected product, so nouvelle
+    // commande only opens the table session and keeps a local empty shell.
+    // The real POST /api/orders runs on the first waiter-selected article.
+    await _tryStartTableSession(
       table: table,
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
-      salesZoneId: resolvedSalesZoneId,
-      tables: tables,
       apiLog: apiLog,
     );
 
-    if (orderId == null || orderId <= 0) {
-      apiLog.writeln(
-        '── POST /api/orders échoué — commande créée au premier article ──',
-      );
-      final order = OrderMapper.buildSessionPlaceholderOrder(
-        tableNumber: table.tableNumber,
-        numberOfGuests: numberOfGuests,
-      );
-      lastCreateOrderLog = apiLog.toString();
-      logOrderFlow(
-        'createTableOrder END session-only table=$tableNumber (POST /api/orders on first item)',
-      );
-      return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
-    }
-
-    apiLog.writeln('── GET /api/orders/$orderId (seat_orders) ──');
-    final detail = await _remote.fetchOrderDetail(orderId);
-    await _local.saveOrderDetail(orderId, detail);
-    await _sessionLocal.upsertOpenOrderInList(detail);
-    apiLog.writeln(formatApiPayload(detail));
-
-    final order = OrderMapper.fromOrderDetail(detail).copyWith(
-      id: orderId,
+    final order = OrderMapper.buildSessionPlaceholderOrder(
+      tableNumber: table.tableNumber,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
     );
 
     apiLog
       ..writeln()
       ..writeln('── Résultat final ──')
-      ..writeln('orderId=${order.id}, affichage=${order.number}');
+      ..writeln(
+        'session-only placeholder id=${order.id}, '
+        'affichage=${order.number}, items=0 '
+        '(POST /api/orders on first selected article)',
+      );
 
     lastCreateOrderLog = apiLog.toString();
-    logOrderFlow('createTableOrder END orderId=$orderId table=$tableNumber');
+    logOrderFlow(
+      'createTableOrder END session-only table=$tableNumber '
+      'tableId=${table.id} (order on first item)',
+    );
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
   }
 
@@ -340,168 +345,31 @@ class OrderRepository {
       );
       if (orderId == null || orderId <= 0) return null;
 
-      final detail = await _remote.fetchOrderDetail(orderId);
-      await _local.saveOrderDetail(orderId, detail);
-      await _sessionLocal.upsertOpenOrderInList(detail);
+      var detail = await _remote.fetchOrderDetail(orderId);
+      final apiLog = StringBuffer('── Commande récupérée après erreur POST: $orderId ──');
+      if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+        apiLog.writeln('\n── Clearing auto-items on recovered new order ──');
+        detail = await _clearVisibleItemsKeepOpen(orderId, detail, apiLog);
+      }
 
-      final order = OrderMapper.fromOrderDetail(detail).copyWith(
+      final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+      await _local.saveOrderDetail(orderId, shell);
+      await _sessionLocal.upsertOpenOrderInList(shell);
+
+      final order = OrderMapper.fromOrderDetail(shell).copyWith(
         id: orderId,
+        products: const [],
+        displayEntries: const [],
+        total: OrderMapper.formatPrice('0'),
       );
 
       return CreateTableOrderResult(
         order: order,
-        apiLog: '── Commande récupérée après erreur POST: $orderId ──',
+        apiLog: apiLog.toString(),
       );
     } catch (_) {
       return null;
     }
-  }
-
-  Future<int?> _createOrderOnTable({
-    required ResolvedTable table,
-    required int waiterId,
-    required int numberOfGuests,
-    required int? salesZoneId,
-    required List<Map<String, dynamic>> tables,
-    required StringBuffer apiLog,
-  }) async {
-    logOrderFlow(
-      '_createOrderOnTable table=${table.tableNumber} id=${table.id}',
-    );
-    apiLog
-      ..writeln('── Données table (GET /api/tables/list) ──')
-      ..writeln('table_id=${table.id}')
-      ..writeln('table_number=${table.tableNumber}')
-      ..writeln('status=${table.status ?? '—'}')
-      ..writeln('sales_zone_id=${salesZoneId ?? '—'}');
-
-    // 1. POST /api/orders first (main API for opening a table).
-    logOrderFlow('POST /api/orders FIRST (before session)');
-    var orderId = await _postCreateOrderRecord(
-      table: table,
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      salesZoneId: salesZoneId,
-      apiLog: apiLog,
-    );
-    if (orderId != null && orderId > 0) {
-      logOrderFlow('POST /api/orders OK before session → orderId=$orderId');
-      await _tryStartTableSession(
-        table: table,
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        apiLog: apiLog,
-      );
-      return orderId;
-    }
-
-    // 2. Open session, then retry POST /api/orders.
-    await _tryStartTableSession(
-      table: table,
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      apiLog: apiLog,
-    );
-
-    logOrderFlow('POST /api/orders RETRY (after session)');
-    orderId = await _postCreateOrderRecord(
-      table: table,
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      salesZoneId: salesZoneId,
-      apiLog: apiLog,
-    );
-    if (orderId != null && orderId > 0) {
-      logOrderFlow('POST /api/orders OK after session → orderId=$orderId');
-      return orderId;
-    }
-
-    orderId = await _resolveOrderIdForTable(
-      tableId: table.id,
-      tableNumber: table.tableNumber,
-      initialTables: tables,
-      maxAttempts: 2,
-    );
-    if (orderId != null && orderId > 0) {
-      apiLog.writeln('── Order id résolu via GET /api/tables/list: $orderId ──');
-      return orderId;
-    }
-
-    return null;
-  }
-
-  Future<int?> _postCreateOrderRecord({
-    required ResolvedTable table,
-    required int waiterId,
-    required int numberOfGuests,
-    required int? salesZoneId,
-    required StringBuffer apiLog,
-  }) async {
-    final defaultProduct = await _catalog.resolveDefaultOrderProduct();
-    if (defaultProduct == null) {
-      logOrderFlow(
-        'POST /api/orders ABORT no default product in catalog for seat_orders.items',
-      );
-      apiLog.writeln(
-        '── Aucun produit simple disponible pour POST /api/orders (seat_orders.items requis) ──',
-      );
-      return null;
-    }
-
-    logOrderFlow(
-      'POST /api/orders default product id=${defaultProduct.id} '
-      '${defaultProduct.name} price=${defaultProduct.unitPrice}',
-    );
-    apiLog.writeln(
-      '── Produit par défaut: id=${defaultProduct.id}, '
-      '${defaultProduct.name}, ${defaultProduct.unitPrice} ──',
-    );
-
-    final payloads = OrderMapper.createOrderPayloadCandidates(
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      tableId: table.id,
-      salesZoneId: salesZoneId,
-      productId: defaultProduct.id,
-      unitPrice: defaultProduct.unitPrice,
-    );
-
-    for (var i = 0; i < payloads.length; i++) {
-      final payload = payloads[i];
-      apiLog
-        ..writeln()
-        ..writeln('── POST /api/orders (tentative ${i + 1}/${payloads.length}) ──')
-        ..writeln(formatApiPayload(payload));
-
-      logOrderFlow(
-        'POST /api/orders attempt ${i + 1}/${payloads.length} table_id=${table.id}',
-      );
-
-      _remote.lastApiLog = null;
-      try {
-        final created = await _remote.createOrder(payload);
-        if (_remote.lastApiLog != null) {
-          apiLog.writeln(_remote.lastApiLog);
-        }
-
-        final orderId = OrderMapper.extractOrderIdFromPayload(created);
-        if (orderId != null && orderId > 0) {
-          apiLog.writeln('── Commande créée via POST /api/orders: $orderId ──');
-          logOrderFlow('POST /api/orders SUCCESS orderId=$orderId');
-          return orderId;
-        }
-        apiLog.writeln('── Réponse POST sans order id ──');
-      } on ApiException catch (orderError) {
-        apiLog.writeln('── POST /api/orders échoué ──');
-        if (_remote.lastApiLog != null) {
-          apiLog.writeln(_remote.lastApiLog);
-        }
-        apiLog.writeln('Raison: ${orderError.message}');
-        logOrderFlow('POST /api/orders FAILED: ${orderError.message}');
-      }
-    }
-
-    return null;
   }
 
   Future<void> _tryStartTableSession({
@@ -2001,9 +1869,8 @@ class OrderRepository {
   /// Persists a post-mutation order. Empty shells stay open in the session list;
   /// only [closeOrder] (delete icon) removes them.
   ///
-  /// When the backend auto-closes / fully-pays an emptied order, we immediately
-  /// open a fresh empty remote order so it still appears after cache wipe /
-  /// fresh install.
+  /// When the backend auto-closes / fully-pays an emptied order, we keep a
+  /// local session placeholder (API rejects empty POST /api/orders).
   Future<SessionOrder> _persistOrderAfterItemMutation({
     required int orderId,
     required Map<String, dynamic> detail,
@@ -2096,118 +1963,41 @@ class OrderRepository {
     return order;
   }
 
-  /// Opens a new empty order on the same table after the previous one was
-  /// auto-closed/paid by emptying items. Survives fresh install (remote list).
+  /// After the backend auto-closes/pays an emptied order, keep a local
+  /// session-only shell. Empty POST /api/orders is rejected (items required);
+  /// the next waiter-selected article creates the real order.
   Future<SessionOrder?> _ensureRemoteEmptyOpenOrder({
     required int oldOrderId,
     required Map<String, dynamic> detail,
   }) async {
     final apiLog = StringBuffer();
     apiLog.writeln(
-      '── Ensure remote empty open order (old_id=$oldOrderId) ──',
+      '── Ensure local empty shell after dead order (old_id=$oldOrderId) ──',
     );
 
     final tableId = (detail['table_id'] as num?)?.toInt();
     final tableNumber = OrderMapper.tableNumberFromDetail(detail);
-    final waiterId = OrderMapper.waiterIdFromOrderMap(detail);
     final guests = (detail['number_of_guests'] as num?)?.toInt() ?? 1;
-    final salesZoneId = (detail['sales_zone_id'] as num?)?.toInt() ??
-        (detail['sales_zone'] is Map<String, dynamic>
-            ? ((detail['sales_zone'] as Map<String, dynamic>)['id'] as num?)
-                ?.toInt()
-            : null);
 
-    if (tableId == null || tableId <= 0 || waiterId == null || waiterId <= 0) {
-      apiLog.writeln('── Missing table/waiter — cannot recreate empty order ──');
+    if (tableNumber == null || tableNumber <= 0) {
+      apiLog.writeln('── Missing table number — cannot keep empty shell ──');
       lastAddItemLog = apiLog.toString();
       return null;
     }
 
     await _retireDeadOrderShell(oldOrderId, apiLog: apiLog);
 
-    // 1) Prefer header-only create (no default line item).
-    try {
-      final header = OrderMapper.buildCreateOrderHeaderPayload(
-        waiterId: waiterId,
-        numberOfGuests: guests < 1 ? 1 : guests,
-        tableId: tableId,
-        salesZoneId: salesZoneId,
-      );
-      apiLog.writeln('── POST /api/orders (empty header) ──');
-      apiLog.writeln(formatApiPayload(header));
-      final created = await _remote.createOrder(header);
-      final newId = OrderMapper.extractOrderIdFromPayload(created);
-      if (newId != null && newId > 0) {
-        var fresh = OrderMapper.unwrapOrderDetail(created);
-        if (OrderMapper.orderIdFromDetail(fresh) != newId) {
-          fresh = await _remote.fetchOrderDetail(newId);
-        }
-
-        // Backend may still inject a default product — clear it, keep order open.
-        if (!OrderMapper.orderDetailHasNoVisibleItems(fresh)) {
-          fresh = await _clearVisibleItemsKeepOpen(newId, fresh, apiLog);
-        }
-
-        final shell = OrderMapper.asOpenEmptyOrderShell(fresh);
-        await _local.saveOrderDetail(newId, shell);
-        await _sessionLocal.upsertOpenOrderInList(shell);
-
-        final order = OrderMapper.fromOrderDetail(shell).copyWith(
-          id: newId,
-          products: const [],
-          displayEntries: const [],
-          total: OrderMapper.formatPrice('0'),
-        );
-        apiLog.writeln('── Empty remote order ready id=$newId ──');
-        lastAddItemLog = apiLog.toString();
-        return order;
-      }
-    } catch (e) {
-      apiLog.writeln('── Header create failed: $e ──');
-    }
-
-    // 2) Fallback: create with default product, then cancel all lines.
-    try {
-      final table = ResolvedTable(
-        id: tableId,
-        tableNumber: tableNumber ?? tableId,
-        salesZoneId: salesZoneId,
-      );
-      final newId = await _postCreateOrderRecord(
-        table: table,
-        waiterId: waiterId,
-        numberOfGuests: guests < 1 ? 1 : guests,
-        salesZoneId: salesZoneId,
-        apiLog: apiLog,
-      );
-      if (newId == null || newId <= 0) {
-        lastAddItemLog = apiLog.toString();
-        return null;
-      }
-
-      var fresh = await _remote.fetchOrderDetail(newId);
-      if (!OrderMapper.orderDetailHasNoVisibleItems(fresh)) {
-        fresh = await _clearVisibleItemsKeepOpen(newId, fresh, apiLog);
-      }
-
-      final shell = OrderMapper.asOpenEmptyOrderShell(fresh);
-      await _local.saveOrderDetail(newId, shell);
-      await _sessionLocal.upsertOpenOrderInList(shell);
-
-      final order = OrderMapper.fromOrderDetail(shell).copyWith(
-        id: newId,
-        products: const [],
-        displayEntries: const [],
-        total: OrderMapper.formatPrice('0'),
-      );
-      apiLog.writeln('── Empty remote order ready (fallback) id=$newId ──');
-      lastAddItemLog = apiLog.toString();
-      return order;
-    } catch (e) {
-      apiLog.writeln('── Fallback empty create failed: $e ──');
-      lastAddItemLog = apiLog.toString();
-      return null;
-    }
+    final placeholder = OrderMapper.buildSessionPlaceholderOrder(
+      tableNumber: tableNumber,
+      numberOfGuests: guests < 1 ? 1 : guests,
+      tableId: tableId,
+    );
+    apiLog.writeln(
+      '── Local session placeholder id=${placeholder.id} '
+      '(POST /api/orders on first selected article) ──',
+    );
+    lastAddItemLog = apiLog.toString();
+    return placeholder;
   }
 
   Future<Map<String, dynamic>> _clearVisibleItemsKeepOpen(
@@ -2215,11 +2005,27 @@ class OrderRepository {
     Map<String, dynamic> detail,
     StringBuffer apiLog,
   ) async {
-    final payload = OrderMapper.cancelAllVisibleItems(detail);
-    apiLog.writeln('── PUT /api/orders/$orderId (clear auto items, keep open) ──');
+    // Strip items from the body (empty arrays) — never re-POST an unselected
+    // product like OMLETTE NATURE, even as cancelled.
+    var payload = OrderMapper.stripAllVisibleItems(detail);
+    apiLog.writeln(
+      '── PUT /api/orders/$orderId (strip auto items, keep open) ──',
+    );
     apiLog.writeln(formatApiPayload(payload));
     try {
       var updated = await _remote.updateOrder(orderId, payload);
+      try {
+        updated = await _remote.fetchOrderDetail(orderId);
+      } catch (_) {}
+      if (OrderMapper.orderDetailHasNoVisibleItems(updated)) {
+        return OrderMapper.asOpenEmptyOrderShell(updated);
+      }
+
+      // Fallback: mark remaining lines cancelled if strip was ignored.
+      apiLog.writeln('── Strip ignored — cancel remaining visible lines ──');
+      payload = OrderMapper.cancelAllVisibleItems(updated);
+      apiLog.writeln(formatApiPayload(payload));
+      updated = await _remote.updateOrder(orderId, payload);
       try {
         updated = await _remote.fetchOrderDetail(orderId);
       } catch (_) {}

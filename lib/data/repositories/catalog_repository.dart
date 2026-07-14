@@ -176,18 +176,22 @@ class CatalogRepository {
       ..sort((a, b) => a.name.compareTo(b.name));
   }
 
-  /// First active simple product used to satisfy POST /api/orders item validation.
-  Future<CatalogProductModel?> resolveDefaultOrderProduct() async {
+  /// First simple (non-composed) product — used only to satisfy API create
+  /// validation, then cancelled/stripped so the new order stays empty in UI.
+  /// Prefers the cheapest active simple product (often a placeholder SKU).
+  Future<CatalogProductModel?> resolveSeedProductForEmptyOrder() async {
     try {
       final products = await getProducts();
-      final matches = products
-          .where((p) => p.isActive && !p.isComposed && p.id > 0)
-          .toList()
-        ..sort((a, b) => a.id.compareTo(b.id));
-      if (matches.isEmpty) return null;
-      return matches.first;
-    } catch (_) {
-      return null;
-    }
+      CatalogProductModel? best;
+      for (final product in products) {
+        if (!product.isActive || product.isComposed) continue;
+        if (product.id <= 0) continue;
+        if (best == null || product.unitPrice < best.unitPrice) {
+          best = product;
+        }
+      }
+      return best;
+    } catch (_) {}
+    return null;
   }
 }

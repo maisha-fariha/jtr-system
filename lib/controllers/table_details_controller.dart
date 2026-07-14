@@ -20,6 +20,7 @@ import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
+import '../widgets/menu_message_typing_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
@@ -58,11 +59,26 @@ class TableDetailsController extends GetxController {
   late final String orderNumber;
   int? orderId;
 
+  /// When true (fresh empty create), skip blocking GET detail on open.
+  bool _deferDetailFetch = false;
+
+  /// Snapshot from navigation — avoids empty flashes and keeps latest total.
+  SessionOrder? seedOrder;
+
   final collapsedSuivreSections = <int>{}.obs;
   final expandedMenuLineIndices = <int>{}.obs;
   final selectedSuivreSection = RxnInt();
   final suivreUiRevision = 0.obs;
   final orderUiRevision = 0.obs;
+
+  /// Undo banner after a line delete, e.g. `1 PIZZA TONNO supprimé(e)`.
+  final undoDeleteLabel = RxnString();
+  Timer? _pendingDeleteTimer;
+  SessionOrder? _pendingDeleteSnapshot;
+  int? _pendingDeleteLineIndex;
+  int _pendingDeleteGeneration = 0;
+
+  static const _undoDeleteDuration = Duration(seconds: 5);
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
@@ -78,6 +94,109 @@ class TableDetailsController extends GetxController {
     }
     expandedMenuLineIndices.refresh();
     orderUiRevision.value++;
+  }
+
+  /// Tap on a product row: select it, and toggle menu choices expand/collapse.
+  void onOrderLineRowTap(int lineIndex, OrderProduct product) {
+    selectOrderLine(lineIndex, product);
+    if (product.hasMenuItems) {
+      toggleMenuLineExpansion(lineIndex);
+    }
+  }
+
+  Future<void> editOrderLineComment(
+    int lineIndex, {
+    BuildContext? context,
+  }) async {
+    final current = order;
+    if (current == null ||
+        lineIndex < 0 ||
+        lineIndex >= current.products.length) {
+      return;
+    }
+
+    final product = current.products[lineIndex];
+    await MenuMessageTypingDialog.show(
+      context: context,
+      itemLabel: product.name,
+      initialMessage: product.message ?? '',
+      onSave: (message) => unawaited(
+        _saveOrderLineComment(lineIndex: lineIndex, comment: message),
+      ),
+    );
+  }
+
+  Future<void> _saveOrderLineComment({
+    required int lineIndex,
+    required String comment,
+  }) async {
+    final id = resolvedOrderId;
+    final current = order;
+    if (id == null || id <= 0 || current == null) return;
+    if (lineIndex < 0 || lineIndex >= current.products.length) return;
+
+    final trimmed = comment.trim();
+    final snapshot = OrderOptimisticSync.deepSnapshot(current);
+    final updatedProducts = [...current.products];
+    updatedProducts[lineIndex] = current.products[lineIndex].copyWith(
+      message: trimmed.isEmpty ? null : trimmed,
+      clearMessage: trimmed.isEmpty,
+    );
+    final updatedEntries = [
+      for (final entry in current.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == lineIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(
+              message: trimmed.isEmpty ? null : trimmed,
+              clearMessage: trimmed.isEmpty,
+            ),
+            lineIndex: lineIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+          )
+        else
+          entry,
+    ];
+    _syncOrderInSession(
+      current.copyWith(
+        products: updatedProducts,
+        displayEntries: updatedEntries,
+      ),
+      orderNumber,
+      displayEntriesOverride: updatedEntries,
+    );
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) {
+        if (updated.id > 0) orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.updateOrderLineCommentAtIndex(
+          orderId: id,
+          lineIndex: lineIndex,
+          comment: trimmed,
+        );
+        if (updated.id > 0) orderId = updated.id;
+        return updated;
+      },
+      recover: (snap) async {
+        try {
+          return await _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        } catch (_) {
+          return snap;
+        }
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('enregistrer le message', error),
+    );
   }
 
   bool isSuivreSectionSelected(int sectionIndex) =>
@@ -125,8 +244,21 @@ class TableDetailsController extends GetxController {
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    _deferDetailFetch = args is Map && args['deferDetailFetch'] == true;
+    final rawSeed = args is Map ? args['seedOrder'] : null;
+    if (rawSeed is SessionOrder) {
+      seedOrder = rawSeed;
+      if ((orderId == null || orderId! <= 0) && rawSeed.id > 0) {
+        orderId = rawSeed.id;
+      }
+      if (orderNumber.isEmpty) {
+        orderNumber = rawSeed.number;
+      }
+    }
     logOrderFlow(
-      'TableDetailsController.onInit table=$orderNumber orderId=${orderId ?? 'none'}',
+      'TableDetailsController.onInit table=$orderNumber '
+      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch '
+      'hasSeed=${seedOrder != null}',
     );
 
     _loadCatalog();
@@ -134,6 +266,10 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
+    // Fresh empty create already has a local shell — open immediately.
+    if (_deferDetailFetch && orderId != null && orderId! > 0) {
+      return;
+    }
     await _ensureResolvedOrderId();
     await _refreshOrder();
   }
@@ -165,6 +301,17 @@ class TableDetailsController extends GetxController {
   }) async {
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
+
+    final current = order;
+    // Local-only shell has no remote detail yet.
+    if (current != null && current.isLocalOnly) return;
+
+    if (current != null && current.id > 0) {
+      orderId = current.id;
+    }
+
+    // Session list rows are lightweight (total only, no lines). Always fetch
+    // GET /api/orders/:id so table details can show seat_orders items.
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,
@@ -174,11 +321,12 @@ class TableDetailsController extends GetxController {
   }
 
   SessionOrder? get order {
-    if (!Get.isRegistered<SessionController>()) return null;
+    if (!Get.isRegistered<SessionController>()) return seedOrder;
     return Get.find<SessionController>().findOrder(
-      orderNumber: orderNumber,
-      orderId: orderId,
-    );
+          orderNumber: orderNumber,
+          orderId: orderId,
+        ) ??
+        seedOrder;
   }
 
   int? get resolvedOrderId {
@@ -461,21 +609,10 @@ class TableDetailsController extends GetxController {
     }
 
     final currentOrder = order;
-    final orderNumber = this.orderNumber;
-    final orderId = this.orderId;
-    if (Get.isRegistered<SessionController>()) {
-      final session = Get.find<SessionController>();
-      if (currentOrder != null) {
-        session.updateOrderRow(currentOrder);
-      }
-      unawaited(
-        session.refreshOrderList(
-          pinOrder: currentOrder,
-          ensureOrderNumber: orderNumber,
-          ensureOrderId: orderId,
-          background: true,
-        ),
-      );
+    if (Get.isRegistered<SessionController>() && currentOrder != null) {
+      // Sync this table's row only — do not force-refresh the whole session
+      // list (that re-sorts and moves rows when returning from details).
+      Get.find<SessionController>().updateOrderRow(currentOrder);
     }
     Get.back();
   }
@@ -864,16 +1001,19 @@ class TableDetailsController extends GetxController {
             'Erreur paiement',
             e.message,
             snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 4),
             margin: const EdgeInsets.all(16),
           );
-        } catch (_) {
+          debugPrint(_orderRepository.lastPaymentLog);
+        } catch (e) {
           Get.snackbar(
             'Erreur',
             'Impossible d\'enregistrer le paiement.',
             snackPosition: SnackPosition.BOTTOM,
             margin: const EdgeInsets.all(16),
           );
+          debugPrint(_orderRepository.lastPaymentLog);
+          debugPrint('payOrder unexpected: $e');
         } finally {
           payingIsCash.value = null;
         }
@@ -1104,10 +1244,8 @@ class TableDetailsController extends GetxController {
         ),
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur ajout article',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur ajout article', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
     }
@@ -1198,7 +1336,10 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        orderId = updated.id > 0 ? updated.id : orderId;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -1209,19 +1350,25 @@ class TableDetailsController extends GetxController {
             productId: product.id,
             basePrice: product.unitPrice,
             menuSelections: menuSelections,
+            numberOfGuests: int.tryParse(snapshot.couverts),
           );
           orderId = created.id;
           return created;
         }
 
         orderId = id;
-        return _orderRepository.addComposedProductToOrder(
+        final updated = await _orderRepository.addComposedProductToOrder(
           orderId: id,
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
           layoutHints: effectiveLayoutHints,
+          tableNumber: orderNumber,
+          waiterId: _currentWaiterId,
+          expectEmptyShell: snapshot.products.isEmpty,
         );
+        orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1252,7 +1399,10 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        orderId = updated.id > 0 ? updated.id : orderId;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         // Keep the tap-time layout as source of truth so open À SUIVRE sections
@@ -1267,19 +1417,27 @@ class TableDetailsController extends GetxController {
             productId: product.id,
             unitPrice: product.unitPrice,
             qty: 1,
+            numberOfGuests: int.tryParse(snapshot.couverts),
           );
           orderId = created.id;
           return created;
         }
 
+        // Empty UI shell may still point at a backend order that was auto
+        // closed/paid when the last item was cancelled — recreate if needed.
         orderId = id;
-        return _orderRepository.addSimpleProductToOrder(
+        final updated = await _orderRepository.addSimpleProductToOrder(
           orderId: id,
           productId: product.id,
           unitPrice: product.unitPrice,
           qty: 1,
           layoutHints: layoutHints,
+          tableNumber: orderNumber,
+          waiterId: _currentWaiterId,
+          expectEmptyShell: snapshot.products.isEmpty,
         );
+        orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1297,14 +1455,31 @@ class TableDetailsController extends GetxController {
 
   Future<int?> _resolveOrderIdForBackgroundSync() async {
     final fast = _fastResolvedOrderId;
-    if (fast != null) return fast;
+    if (fast != null && fast > 0) return fast;
+
+    // Local session-only shell (id <= 0): create with the first selected item
+    // instead of attaching whatever order the table list might still reference.
+    final current = order;
+    if (orderId == null || orderId! <= 0) {
+      if (current == null || current.isLocalOnly) {
+        return null;
+      }
+    }
 
     final resolved =
         await _orderRepository.resolveOrderIdForTableNumber(orderNumber);
     if (resolved != null && resolved > 0) {
       orderId = resolved;
+      return resolved;
     }
-    return resolved;
+
+    // Prefer the id we already opened with (create / seedOrder) when tables
+    // list has not yet published the new active order.
+    if (orderId != null && orderId! > 0) return orderId;
+    if (current != null && current.id > 0 && !current.isLocalOnly) {
+      return current.id;
+    }
+    return null;
   }
 
   Future<void> _setOrderLineQuantity(int lineIndex, int qty) async {
@@ -1330,15 +1505,22 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
-
-    Get.find<SessionController>().updateOrderRow(
-      updated.copyWith(
-        displayEntries: displayEntries,
-      ),
+    final synced = updated.copyWith(
+      displayEntries: displayEntries,
     );
+
+    // Keep seed in sync so back-navigation always has the latest total.
+    if (seedOrder != null &&
+        (seedOrder!.id == synced.id ||
+            seedOrder!.number == synced.number ||
+            seedOrder!.number == displayNumber)) {
+      seedOrder = synced;
+    }
+
+    Get.find<SessionController>().updateOrderRow(synced);
     orderUiRevision.value++;
 
-    final id = updated.id;
+    final id = synced.id;
     if (id > 0 && Get.isRegistered<OrderRepository>()) {
       unawaited(
         Get.find<OrderRepository>().persistSuivreLayoutHints(
@@ -1393,10 +1575,8 @@ class TableDetailsController extends GetxController {
         duration: const Duration(seconds: 2),
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur offre',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'offrir l\'article.');
     } finally {
@@ -1470,6 +1650,7 @@ class TableDetailsController extends GetxController {
           lineIndices: lineIndices,
           previousDisplayEntries: trimmedDisplay,
         );
+        if (updated.id > 0) orderId = updated.id;
         _syncOrderInSession(
           updated,
           orderNumber,
@@ -1488,10 +1669,8 @@ class TableDetailsController extends GetxController {
         displayEntriesOverride: refreshed.displayEntries,
       );
     } on ApiException catch (e) {
-      ApiDebugDialog.show(
-        title: 'Erreur annulation',
-        body: '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${e.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur annulation', body: e.message);
     } catch (_) {
       Get.snackbar('Erreur', 'Impossible d\'annuler cette suite.');
     } finally {
@@ -1500,6 +1679,13 @@ class TableDetailsController extends GetxController {
   }
 
   void cancelOrderLine(int productIndex) {
+    unawaited(_cancelOrderLine(productIndex));
+  }
+
+  Future<void> _cancelOrderLine(int productIndex) async {
+    // Finish any previous deferred delete before starting a new one.
+    await _commitPendingDeleteIfAny();
+
     final currentOrder = order;
     if (currentOrder == null ||
         productIndex < 0 ||
@@ -1523,12 +1709,69 @@ class TableDetailsController extends GetxController {
     );
     _syncOrderInSession(predicted, orderNumber);
 
-    unawaited(
-      _syncCancelLineInBackground(
-        lineIndex: productIndex,
-        rollbackSnapshot: snapshot,
-      ),
+    final qtyLabel = line.quantity.trim().isEmpty ? '1' : line.quantity.trim();
+    undoDeleteLabel.value =
+        '$qtyLabel ${line.name.trim().toUpperCase()} supprimé(e)';
+
+    _pendingDeleteSnapshot = snapshot;
+    _pendingDeleteLineIndex = productIndex;
+    final generation = ++_pendingDeleteGeneration;
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = Timer(_undoDeleteDuration, () {
+      if (generation != _pendingDeleteGeneration) return;
+      unawaited(_commitPendingDeleteIfAny());
+    });
+  }
+
+  void undoPendingDelete() {
+    final snapshot = _pendingDeleteSnapshot;
+    if (snapshot == null) return;
+
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = null;
+    _pendingDeleteSnapshot = null;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteGeneration++;
+    undoDeleteLabel.value = null;
+
+    _syncOrderInSession(snapshot, orderNumber);
+  }
+
+  Future<void> _commitPendingDeleteIfAny() async {
+    final lineIndex = _pendingDeleteLineIndex;
+    final snapshot = _pendingDeleteSnapshot;
+    if (lineIndex == null || snapshot == null) return;
+
+    _pendingDeleteTimer?.cancel();
+    _pendingDeleteTimer = null;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteSnapshot = null;
+    undoDeleteLabel.value = null;
+
+    await _syncCancelLineInBackground(
+      lineIndex: lineIndex,
+      rollbackSnapshot: snapshot,
     );
+  }
+
+  @override
+  void onClose() {
+    _pendingDeleteTimer?.cancel();
+    // Persist the delete if the waiter leaves before the undo window ends.
+    final lineIndex = _pendingDeleteLineIndex;
+    final snapshot = _pendingDeleteSnapshot;
+    _pendingDeleteLineIndex = null;
+    _pendingDeleteSnapshot = null;
+    undoDeleteLabel.value = null;
+    if (lineIndex != null && snapshot != null) {
+      unawaited(
+        _syncCancelLineInBackground(
+          lineIndex: lineIndex,
+          rollbackSnapshot: snapshot,
+        ),
+      );
+    }
+    super.onClose();
   }
 
   Future<void> _syncCancelLineInBackground({
@@ -1538,7 +1781,11 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
+      apply: (updated) {
+        // Emptying may replace a closed/paid shell with a new remote order id.
+        if (updated.id > 0) orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -1546,10 +1793,12 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
-        return _orderRepository.cancelOrderLineAtIndex(
+        final updated = await _orderRepository.cancelOrderLineAtIndex(
           orderId: id,
           lineIndex: lineIndex,
         );
+        if (updated.id > 0) orderId = updated.id;
+        return updated;
       },
       recover: (snap) async {
         final id = _fastResolvedOrderId;
@@ -1584,14 +1833,21 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
-      sync: () => _orderRepository.adjustOrderLineQuantityAtIndex(
-        orderId: orderId,
-        lineIndex: lineIndex,
-        delta: delta,
-      ),
+      apply: (updated) {
+        if (updated.id > 0) this.orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
+          orderId: orderId,
+          lineIndex: lineIndex,
+          delta: delta,
+        );
+        if (updated.id > 0) this.orderId = updated.id;
+        return updated;
+      },
       recover: (snap) => _orderRepository.getOrderDetail(
-        orderId,
+        this.orderId ?? orderId,
         previousDisplayEntries: snap.displayEntries,
       ),
       onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
@@ -1616,14 +1872,21 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) => _syncOrderInSession(updated, orderNumber),
-      sync: () => _orderRepository.setOrderLineQuantityAtIndex(
-        orderId: orderId,
-        lineIndex: lineIndex,
-        qty: qty,
-      ),
+      apply: (updated) {
+        if (updated.id > 0) this.orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated = await _orderRepository.setOrderLineQuantityAtIndex(
+          orderId: orderId,
+          lineIndex: lineIndex,
+          qty: qty,
+        );
+        if (updated.id > 0) this.orderId = updated.id;
+        return updated;
+      },
       recover: (snap) => _orderRepository.getOrderDetail(
-        orderId,
+        this.orderId ?? orderId,
         previousDisplayEntries: snap.displayEntries,
       ),
       onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
@@ -1632,11 +1895,8 @@ class TableDetailsController extends GetxController {
 
   void _showOptimisticMutationError(String action, Object error) {
     if (error is ApiException) {
-      ApiDebugDialog.show(
-        title: 'Erreur',
-        body:
-            '${_orderRepository.lastAddItemLog ?? ''}\n\nMESSAGE: ${error.message}',
-      );
+      debugPrint(_orderRepository.lastAddItemLog);
+      ApiDebugDialog.show(title: 'Erreur', body: error.message);
       return;
     }
     Get.snackbar('Erreur', 'Impossible de $action.');

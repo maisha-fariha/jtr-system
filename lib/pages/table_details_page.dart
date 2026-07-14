@@ -6,12 +6,12 @@ import 'package:get/get.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
-import '../widgets/api_debug_dialog.dart';
 
 class TableDetailsPage extends GetView<TableDetailsController> {
   const TableDetailsPage({super.key});
@@ -28,21 +28,25 @@ class TableDetailsPage extends GetView<TableDetailsController> {
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Obx(() {
-          if (!Get.isRegistered<SessionController>()) {
-            return const SizedBox.shrink();
+          final sessionRegistered = Get.isRegistered<SessionController>();
+          final session =
+              sessionRegistered ? Get.find<SessionController>() : null;
+          if (session != null) {
+            session.orders.length;
           }
 
-          final session = Get.find<SessionController>();
-          final order = session.findOrder(
-            orderNumber: controller.orderNumber,
-            orderId: controller.orderId,
-          );
+          final order = session?.findOrder(
+                orderNumber: controller.orderNumber,
+                orderId: controller.orderId,
+              ) ??
+              controller.seedOrder ??
+              controller.order;
 
           if (order == null) {
-            return Center(
-              child: Text(
-                'Table introuvable',
-                style: TextStyle(color: AppTheme.textSecondary),
+            return const ColoredBox(
+              color: Colors.white,
+              child: Center(
+                child: CircularProgressIndicator(color: AppTheme.primary),
               ),
             );
           }
@@ -55,7 +59,7 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
-                  SessionOrder? currentOrder = session.findOrder(
+                  SessionOrder? currentOrder = session?.findOrder(
                     orderNumber: controller.orderNumber,
                     orderId: controller.orderId,
                   );
@@ -509,7 +513,72 @@ class _OrderSummaryState extends State<_OrderSummary> {
               ],
             ),
           ),
+          const _DeleteUndoBanner(),
         ],
+      );
+    });
+  }
+}
+
+class _DeleteUndoBanner extends GetView<TableDetailsController> {
+  const _DeleteUndoBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final label = controller.undoDeleteLabel.value;
+      if (label == null || label.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      // Rebuild when theme toggles.
+      if (Get.isRegistered<ThemeController>()) {
+        ThemeController.to.isDark.value;
+      }
+
+      return Material(
+        color: AppTheme.lightButton,
+        child: Padding(
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            left: 16,
+            right: 8,
+            top: 10,
+            bottom: 10,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: controller.undoPendingDelete,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.primary,
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                ),
+                child: Text(
+                  'Annuler',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     });
   }
@@ -666,8 +735,17 @@ class _ProductLine extends GetView<TableDetailsController> {
         ),
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
-          extentRatio: 0.39,
+          extentRatio: 0.52,
           children: [
+            _ProductSlidableAction(
+              icon: Icons.edit_outlined,
+              backgroundColor: AppTheme.lightButton,
+              iconColor: AppTheme.primary,
+              onPressed: () => controller.editOrderLineComment(
+                productIndex,
+                context: context,
+              ),
+            ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
               backgroundColor: AppTheme.lightButton,
@@ -689,7 +767,7 @@ class _ProductLine extends GetView<TableDetailsController> {
               ? AppTheme.primary.withValues(alpha: 0.08)
               : Colors.transparent,
           child: InkWell(
-            onTap: () => controller.selectOrderLine(productIndex, product),
+            onTap: () => controller.onOrderLineRowTap(productIndex, product),
             child: Padding(
               padding: JtrResponsive.getResponsivePadding(context, vertical: 6),
               child: Row(
@@ -734,27 +812,15 @@ class _ProductLine extends GetView<TableDetailsController> {
                               ),
                             ),
                             if (hasMenuItems)
-                              GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () => controller.toggleMenuLineExpansion(
-                                  productIndex,
+                              Icon(
+                                isMenuExpanded
+                                    ? Icons.keyboard_arrow_up
+                                    : Icons.keyboard_arrow_down,
+                                size: JtrResponsive.getResponsiveSize(
+                                  context,
+                                  16,
                                 ),
-                                child: Padding(
-                                  padding: JtrResponsive.getResponsivePadding(
-                                    context,
-                                    left: 4,
-                                  ),
-                                  child: Icon(
-                                    isMenuExpanded
-                                        ? Icons.keyboard_arrow_up
-                                        : Icons.keyboard_arrow_down,
-                                    size: JtrResponsive.getResponsiveSize(
-                                      context,
-                                      16,
-                                    ),
-                                    color: AppTheme.primary,
-                                  ),
-                                ),
+                                color: AppTheme.primary,
                               ),
                           ],
                         ),
@@ -784,36 +850,21 @@ class _ProductLine extends GetView<TableDetailsController> {
                             ),
                           ],
                         if (product.message != null &&
-                            product.message!.isNotEmpty) ...[
+                            product.message!.trim().isNotEmpty) ...[
                           JtrResponsive.getResponsiveSpacing(context, 2),
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  product.message!,
-                                  style: TextStyle(
-                                    fontSize:
-                                        JtrResponsive.getResponsiveFontSize(
-                                      context,
-                                      11,
-                                    ),
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.primary,
-                                    letterSpacing: 0.3,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                          Text(
+                            product.message!,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                11,
                               ),
-                              Icon(
-                                Icons.keyboard_arrow_down,
-                                size: JtrResponsive.getResponsiveSize(
-                                  context,
-                                  14,
-                                ),
-                                color: AppTheme.primary,
-                              ),
-                            ],
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.primary,
+                              letterSpacing: 0.3,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ],
@@ -1120,19 +1171,6 @@ class _PaymentButtons extends GetView<TableDetailsController> {
               TextButton(
                 onPressed: paying ? null : () => controller.reloadPaymentModes(),
                 child: const Text('Réessayer'),
-              ),
-              TextButton(
-                onPressed: paying
-                    ? null
-                    : () {
-                        final log = controller.lastPaymentModesLoadLog;
-                        if (log == null || log.isEmpty) return;
-                        ApiDebugDialog.show(
-                          title: 'Chargement modes de paiement',
-                          body: log,
-                        );
-                      },
-                child: const Text('Détails'),
               ),
             ] else ...[
               JtrResponsive.getResponsiveSpacing(context, 12),

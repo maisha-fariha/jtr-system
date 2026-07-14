@@ -71,48 +71,99 @@ class SessionRemoteDataSource {
   }
 
   /// Open orders for the active business day only ([active_day]=true).
+  ///
+  /// When [firstPageOnly] is true, returns after page 1 so the session list
+  /// can paint without waiting on further pagination.
   Future<List<Map<String, dynamic>>> fetchOrdersList({
     int? waiterId,
+    bool firstPageOnly = false,
   }) async {
-    final allOrders = <Map<String, dynamic>>[];
-    var page = 1;
-    var lastPage = 1;
-
-    while (page <= lastPage && page <= 25) {
-      final queryParameters = <String, dynamic>{
-        'active_day': true,
-        'per_page': 100,
-        'page': page,
-      };
-      if (waiterId != null && waiterId > 0) {
-        queryParameters['waiter_id'] = waiterId;
-      }
-
-      final response = await _client.get<Map<String, dynamic>>(
-        ApiEndpoints.orders,
-        queryParameters: queryParameters,
-      );
-      final envelope = ApiEnvelope<dynamic>.fromJson(
-        response.data!,
-        (json) => json,
-      );
-
-      if (!envelope.success) {
-        throw ApiException(
-          message: envelope.message ?? 'Failed to load orders.',
-          statusCode: envelope.status,
-        );
-      }
-
-      final pageOrders = _extractOrdersFromPayload(envelope.data);
-      allOrders.addAll(pageOrders);
-
-      lastPage = _readLastPage(envelope.data);
-      if (pageOrders.isEmpty) break;
-      page++;
+    final first = await fetchOrdersFirstPage(waiterId: waiterId);
+    if (firstPageOnly || first.lastPage <= 1) {
+      return first.orders;
     }
 
-    return allOrders;
+    final rest = await fetchOrdersRemainingPages(
+      lastPage: first.lastPage,
+      waiterId: waiterId,
+    );
+    return [...first.orders, ...rest];
+  }
+
+  /// Page 1 only — same cost as a single Postman request.
+  Future<({List<Map<String, dynamic>> orders, int lastPage})>
+      fetchOrdersFirstPage({int? waiterId}) {
+    return fetchOrdersPage(page: 1, waiterId: waiterId);
+  }
+
+  /// Single orders page (`per_page: 10`).
+  Future<({List<Map<String, dynamic>> orders, int lastPage})> fetchOrdersPage({
+    required int page,
+    int? waiterId,
+  }) {
+    return _fetchOrdersPage(page: page, waiterId: waiterId);
+  }
+
+  /// Pages 2..[lastPage] in parallel (capped).
+  Future<List<Map<String, dynamic>>> fetchOrdersRemainingPages({
+    required int lastPage,
+    int? waiterId,
+  }) async {
+    if (lastPage <= 1) return const [];
+
+    final remainingPages = <int>[
+      for (var p = 2; p <= lastPage && p <= 50; p++) p,
+    ];
+    if (remainingPages.isEmpty) return const [];
+
+    // Small batches avoid slamming the API (13+ concurrent often >3s).
+    const batchSize = 4;
+    final orders = <Map<String, dynamic>>[];
+    for (var i = 0; i < remainingPages.length; i += batchSize) {
+      final batch = remainingPages.skip(i).take(batchSize).toList();
+      final pages = await Future.wait(
+        batch.map((page) => fetchOrdersPage(page: page, waiterId: waiterId)),
+      );
+      for (final page in pages) {
+        orders.addAll(page.orders);
+      }
+    }
+    return orders;
+  }
+
+  Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
+    required int page,
+    int? waiterId,
+  }) async {
+    final queryParameters = <String, dynamic>{
+      'active_day': true,
+      'per_page': 10,
+      'page': page,
+    };
+    if (waiterId != null && waiterId > 0) {
+      queryParameters['waiter_id'] = waiterId;
+    }
+
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.orders,
+      queryParameters: queryParameters,
+    );
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load orders.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return (
+      orders: _extractOrdersFromPayload(envelope.data),
+      lastPage: _readLastPage(envelope.data),
+    );
   }
 
   /// Fallback when [fetchOrdersList] returns nothing ([GET /api/days/open-orders]).
@@ -257,17 +308,33 @@ class SessionRemoteDataSource {
     return list.whereType<Map<String, dynamic>>().toList();
   }
 
+  /// Reads Laravel-style pagination from:
+  /// `data: { data: [...], meta: { last_page, per_page, total, ... } }`
   int _readLastPage(dynamic data) {
     if (data is! Map<String, dynamic>) return 1;
 
     final meta = data['meta'];
     if (meta is Map<String, dynamic>) {
       final last = meta['last_page'];
-      if (last is num) return last.toInt();
+      if (last is num && last.toInt() > 0) return last.toInt();
+
+      final total = meta['total'];
+      final perPage = meta['per_page'];
+      if (total is num && perPage is num && perPage > 0) {
+        final computed = (total.toInt() + perPage.toInt() - 1) ~/ perPage.toInt();
+        if (computed > 0) return computed;
+      }
     }
 
     final directMeta = data['last_page'];
-    if (directMeta is num) return directMeta.toInt();
+    if (directMeta is num && directMeta.toInt() > 0) return directMeta.toInt();
+
+    final total = data['total'];
+    final perPage = data['per_page'];
+    if (total is num && perPage is num && perPage > 0) {
+      final computed = (total.toInt() + perPage.toInt() - 1) ~/ perPage.toInt();
+      if (computed > 0) return computed;
+    }
 
     return 1;
   }

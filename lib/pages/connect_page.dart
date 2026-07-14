@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/connect_controller.dart';
-import '../data/repositories/auth_repository.dart';
-import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/themed_asset_image.dart';
@@ -30,8 +28,6 @@ class ConnectPage extends GetView<ConnectController> {
               JtrResponsive.getResponsiveSpacing(context, 35),
               _buildConnectionStatus(context),
               const Spacer(),
-              Obx(() => _buildNextButton(context)),
-              JtrResponsive.getResponsiveSpacing(context, 24),
             ],
           ),
         ),
@@ -200,53 +196,6 @@ class ConnectPage extends GetView<ConnectController> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildNextButton(BuildContext context) {
-    final isEnabled = controller.isConnected.value;
-    final isReturningUser = Get.find<AuthRepository>().isAuthenticated;
-
-    return SizedBox(
-      width: double.infinity,
-      height: JtrResponsive.getResponsiveHeight(context, 56),
-      child: ElevatedButton(
-        onPressed: isEnabled
-            ? () => Get.offNamed(
-                  isReturningUser ? AppRoutes.session : AppRoutes.login,
-                )
-            : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.primary,
-          foregroundColor: Colors.white,
-          disabledBackgroundColor: AppTheme.primary.withValues(alpha: 0.4),
-          disabledForegroundColor: Colors.white.withValues(alpha: 0.7),
-          elevation: isEnabled ? 4 : 0,
-          shadowColor: AppTheme.primary.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(
-              JtrResponsive.getResponsiveRadius(context, 16),
-            ),
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              isReturningUser ? 'Continuer' : 'Next',
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-            Icon(
-              Icons.chevron_right,
-              size: JtrResponsive.getResponsiveSize(context, 24),
-            ),
-          ],
-        ),
       ),
     );
   }

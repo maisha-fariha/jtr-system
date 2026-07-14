@@ -79,6 +79,8 @@ class SessionController extends GetxController {
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
   final isLoadingOrders = false.obs;
+  /// True while pages 2..N are loading after page 1 is already on screen.
+  final isLoadingMoreOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
   final activeDay = ActiveDayInfo.fallback().obs;
@@ -97,9 +99,30 @@ class SessionController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    loadActiveDay();
-    loadSessionOrders();
-    _prefetchTables();
+    // Paint cached rows immediately so the session screen is not blank.
+    _hydrateOrdersFromCache();
+    unawaited(loadActiveDay());
+    // Cache-first: if Hive had rows, soft-refresh in background.
+    // Cold start (empty cache) still awaits the fast first-page network fetch.
+    unawaited(
+      loadSessionOrders(
+        forceRefresh: orders.isEmpty,
+        showLoading: orders.isEmpty,
+        enrichDetails: false,
+      ),
+    );
+    unawaited(_prefetchTables());
+  }
+
+  void _hydrateOrdersFromCache() {
+    try {
+      final cached = _sessionRepository.getCachedSessionOrders(
+        waiterId: _currentWaiterId,
+      );
+      if (cached.isNotEmpty) {
+        orders.assignAll(cached);
+      }
+    } catch (_) {}
   }
 
   Future<void> loadActiveDay({bool forceRefresh = false}) async {
@@ -143,48 +166,75 @@ class SessionController extends GetxController {
     bool forceRefresh = false,
     Iterable<SessionOrder>? retainOrders,
     bool showLoading = true,
-    bool enrichDetails = true,
+    bool enrichDetails = false,
+    /// When false, page-1 updates merge in place (no reshuffle).
+    bool replaceExistingList = true,
   }) async {
-    if (showLoading) {
+    if (showLoading && orders.isEmpty) {
       isLoadingOrders.value = true;
     }
     ordersError.value = null;
 
     try {
-      if (forceRefresh && showLoading) {
-        await loadActiveDay(forceRefresh: true);
-      }
-      final summaries = await _sessionRepository.getSessionOrders(
-        forceRefresh: forceRefresh,
-        waiterId: _currentWaiterId,
-      );
-      final loaded = enrichDetails
-          ? await _mergeThinOrderRows(summaries)
-          : summaries;
-
-      // Hide "recently deleted" orders until the backend stops returning them.
-      final filtered = loaded.where((o) {
-        for (final suppressed in _suppressedTableNumbers) {
-          if (_tableKeysMatch(o.number, suppressed)) return false;
+      // Don't re-fetch active day here — onInit already loads it.
+      // Stale-while-revalidate: paint cache instantly, then refresh UI when
+      // the first network page returns (no spinner if rows already visible).
+      if (!forceRefresh) {
+        final cached = _sessionRepository.getCachedSessionOrders(
+          waiterId: _currentWaiterId,
+        );
+        if (cached.isNotEmpty) {
+          _applySessionOrderSummaries(
+            cached,
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+            replaceList: orders.isEmpty,
+          );
+          if (showLoading) {
+            isLoadingOrders.value = false;
+          }
+          unawaited(_softRefreshSessionOrders(
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+          ));
+          return;
         }
-        return true;
-      }).toList();
+      }
 
-      orders.assignAll(filtered);
-
-      if (forceRefresh && _suppressedTableNumbers.isNotEmpty) {
-        // Remove suppression entries once the server no longer includes them.
-        _suppressedTableNumbers.removeWhere(
-          (suppressed) =>
-              !loaded.any((o) => _tableKeysMatch(o.number, suppressed)),
+      void onMorePages(List<SessionOrder> more) {
+        _applySessionOrderSummaries(
+          more,
+          retainOrders: retainOrders,
+          enrichDetails: enrichDetails,
+          replaceList: false,
         );
       }
-      if (retainOrders != null) {
-        for (final order in retainOrders) {
-          _upsertOrderInList(order);
-        }
-      }
-      orders.refresh();
+
+      final summaries = forceRefresh
+          ? await _sessionRepository.refreshSessionOrdersFromNetwork(
+              waiterId: _currentWaiterId,
+              onLoadingMoreChanged: (loading) {
+                isLoadingMoreOrders.value = loading;
+              },
+              onMorePagesLoaded: onMorePages,
+            )
+          : await _sessionRepository.getSessionOrders(
+              forceRefresh: true,
+              waiterId: _currentWaiterId,
+              onLoadingMoreChanged: (loading) {
+                isLoadingMoreOrders.value = loading;
+              },
+              onMorePagesLoaded: onMorePages,
+            );
+
+      // Page 1: replace only when allowed (pull-to-refresh / first paint).
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: enrichDetails,
+        replaceList: replaceExistingList || orders.isEmpty,
+        clearSuppressedMatches: forceRefresh,
+      );
     } on ApiException catch (e) {
       ordersError.value = e.message;
       if (orders.isEmpty && showLoading) {
@@ -202,12 +252,213 @@ class SessionController extends GetxController {
     }
   }
 
+  Future<void> _softRefreshSessionOrders({
+    Iterable<SessionOrder>? retainOrders,
+    bool enrichDetails = false,
+  }) async {
+    try {
+      final summaries =
+          await _sessionRepository.refreshSessionOrdersFromNetwork(
+        waiterId: _currentWaiterId,
+        onLoadingMoreChanged: (loading) {
+          isLoadingMoreOrders.value = loading;
+        },
+        onMorePagesLoaded: (more) {
+          _applySessionOrderSummaries(
+            more,
+            retainOrders: retainOrders,
+            enrichDetails: enrichDetails,
+            replaceList: false,
+          );
+        },
+      );
+      // Soft refresh: update fields in place — do not reshuffle the list.
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: enrichDetails,
+        replaceList: false,
+        clearSuppressedMatches: true,
+      );
+    } catch (_) {
+      // Keep the cached list already on screen.
+    }
+  }
+
+  /// Pull-to-refresh / post-CRUD: keep list visible, soft-swap from light API.
+  Future<void> refreshSessionOrders({
+    Iterable<SessionOrder>? retainOrders,
+  }) async {
+    ordersError.value = null;
+    unawaited(loadActiveDay(forceRefresh: true));
+    try {
+      final summaries =
+          await _sessionRepository.refreshSessionOrdersFromNetwork(
+        waiterId: _currentWaiterId,
+        onLoadingMoreChanged: (loading) {
+          isLoadingMoreOrders.value = loading;
+        },
+        onMorePagesLoaded: (more) {
+          _applySessionOrderSummaries(
+            more,
+            retainOrders: retainOrders,
+            enrichDetails: false,
+            replaceList: false,
+          );
+        },
+      );
+      _applySessionOrderSummaries(
+        summaries,
+        retainOrders: retainOrders,
+        enrichDetails: false,
+        replaceList: true,
+        clearSuppressedMatches: true,
+      );
+    } catch (_) {
+      if (orders.isEmpty) {
+        ordersError.value = 'Impossible de charger les commandes.';
+      }
+    }
+  }
+
+  void _applySessionOrderSummaries(
+    List<SessionOrder> summaries, {
+    Iterable<SessionOrder>? retainOrders,
+    bool enrichDetails = false,
+    bool clearSuppressedMatches = false,
+    /// When true, replace the visible list (page 1 / pull-to-refresh).
+    /// When false, update in place + append only — avoids rows jumping.
+    bool replaceList = true,
+  }) {
+    // Empty orders must stay until the delete icon closes them. List APIs often
+    // drop empty / auto-closed shells after the last item is cancelled.
+    final emptyShellsToKeep = <SessionOrder>[
+      for (final order in orders)
+        if (order.products.isEmpty && !_isOrderSuppressed(order.number)) order,
+    ];
+
+    final filtered = summaries.where((o) {
+      for (final suppressed in _suppressedTableNumbers) {
+        if (_tableKeysMatch(o.number, suppressed)) return false;
+      }
+      return true;
+    }).toList();
+
+    if (replaceList || orders.isEmpty) {
+      // Lightweight list API has no line items — keep any already-loaded detail.
+      final previousById = <int, SessionOrder>{
+        for (final order in orders)
+          if (order.id > 0) order.id: order,
+      };
+      orders.assignAll([
+        for (final order in filtered)
+          _preferDetailedOrder(order, previousById[order.id]),
+      ]);
+    } else {
+      _mergeSessionOrdersStable(filtered);
+    }
+
+    if (retainOrders != null) {
+      for (final order in retainOrders) {
+        _upsertOrderInList(order);
+      }
+    }
+    for (final empty in emptyShellsToKeep) {
+      final stillPresent = orders.any(
+        (o) =>
+            (empty.id > 0 && o.id == empty.id) ||
+            _tableKeysMatch(o.number, empty.number),
+      );
+      if (!stillPresent) {
+        _upsertOrderInList(empty);
+      }
+    }
+    orders.refresh();
+
+    if (clearSuppressedMatches && _suppressedTableNumbers.isNotEmpty) {
+      _suppressedTableNumbers.removeWhere(
+        (suppressed) =>
+            !filtered.any((o) => _tableKeysMatch(o.number, suppressed)) &&
+            !orders.any((o) => _tableKeysMatch(o.number, suppressed)),
+      );
+    }
+
+    if (enrichDetails) {
+      unawaited(_enrichOrdersInBackground(filtered));
+    }
+  }
+
+  /// Updates existing rows in place and appends only new ids (no reshuffle).
+  void _mergeSessionOrdersStable(List<SessionOrder> incoming) {
+    final incomingById = <int, SessionOrder>{
+      for (final order in incoming)
+        if (order.id > 0) order.id: order,
+    };
+
+    for (var i = 0; i < orders.length; i++) {
+      final current = orders[i];
+      if (current.id <= 0) continue;
+      final updated = incomingById[current.id];
+      if (updated == null) continue;
+      orders[i] = _preferDetailedOrder(updated, current);
+    }
+
+    final existingIds = <int>{
+      for (final order in orders)
+        if (order.id > 0) order.id,
+    };
+    for (final order in incoming) {
+      if (order.id <= 0 || existingIds.contains(order.id)) continue;
+      orders.add(order);
+      existingIds.add(order.id);
+    }
+  }
+
+  /// Session list summaries omit products; never wipe lines / totals already loaded.
+  SessionOrder _preferDetailedOrder(
+    SessionOrder incoming,
+    SessionOrder? previous,
+  ) {
+    if (previous == null) return incoming;
+
+    // Lightweight list rows have no lines — keep local products AND total.
+    // (API summaries often still report 0,00 € right after the first add.)
+    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+      return previous.copyWith(
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty ? incoming.couverts : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+        itemCount: previous.itemCount > 0
+            ? previous.itemCount
+            : (incoming.itemCount > 0
+                ? incoming.itemCount
+                : previous.products.length),
+      );
+    }
+
+    // Lightweight row may carry an items_count hint — keep the higher count.
+    if (incoming.products.isEmpty &&
+        previous.itemCount > incoming.itemCount &&
+        previous.itemCount > 0) {
+      return incoming.copyWith(itemCount: previous.itemCount);
+    }
+
+    return incoming;
+  }
+
   /// Reloads open orders for the session screen after create/edit on a table.
+  ///
+  /// When the list is already visible, merges in place so row order does not
+  /// jump (e.g. after returning from table details).
   Future<void> refreshOrderList({
     SessionOrder? pinOrder,
     String? ensureOrderNumber,
     int? ensureOrderId,
     bool background = false,
+    bool preserveSortOrder = true,
   }) async {
     SessionOrder? pinned = pinOrder;
 
@@ -222,41 +473,66 @@ class SessionController extends GetxController {
       }
     }
 
+    final hadRows = orders.isNotEmpty;
     await loadSessionOrders(
       forceRefresh: true,
       retainOrders: pinned != null ? [pinned] : null,
       showLoading: !background,
-      enrichDetails: !background,
+      enrichDetails: false,
+      // Keep current visual order when returning to an already-loaded list.
+      replaceExistingList: !(preserveSortOrder && hadRows),
     );
   }
 
-  Future<List<SessionOrder>> _mergeThinOrderRows(
-    List<SessionOrder> summaries,
-  ) async {
-    final merged = <SessionOrder>[];
+  /// Fills product lines from cache / network without blocking the list UI.
+  Future<void> _enrichOrdersInBackground(List<SessionOrder> summaries) async {
+    final tasks = <Future<void>>[];
 
     for (final summary in summaries) {
-      if (summary.id <= 0) {
-        merged.add(summary);
-        continue;
-      }
+      if (summary.id <= 0) continue;
 
-      try {
-        final detail = await _orderRepository.getOrderDetail(summary.id);
-        merged.add(detail);
-      } catch (_) {
-        merged.add(summary);
-      }
+      tasks.add(() async {
+        try {
+          final cached = _orderRepository.cachedOrderDetail(summary.id);
+          if (cached != null) {
+            final detail = OrderMapper.fromOrderDetail(cached).copyWith(
+              id: summary.id,
+            );
+            if (_stillInList(summary.id)) {
+              _upsertOrderInList(detail);
+            }
+            return;
+          }
+
+          final detail = await _orderRepository.getOrderDetail(summary.id);
+          if (_stillInList(summary.id)) {
+            _upsertOrderInList(detail);
+          }
+        } catch (_) {}
+      }());
     }
 
-    return merged;
+    if (tasks.isNotEmpty) {
+      await Future.wait(tasks);
+    }
   }
+
+  bool _stillInList(int orderId) =>
+      orders.any((order) => order.id == orderId);
 
   bool _isOrderSuppressed(String orderNumber) {
     for (final suppressed in _suppressedTableNumbers) {
       if (_tableKeysMatch(orderNumber, suppressed)) return true;
     }
     return false;
+  }
+
+  /// After delete we suppress that table briefly; recreating must clear it
+  /// or the new order never appears in the list (and row sync is dropped).
+  void _clearSuppressedTable(String tableNumber) {
+    _suppressedTableNumbers.removeWhere(
+      (suppressed) => _tableKeysMatch(suppressed, tableNumber),
+    );
   }
 
   void _upsertOrderInList(SessionOrder order) {
@@ -271,7 +547,7 @@ class SessionController extends GetxController {
         (item) => _tableKeysMatch(item.number, order.number),
       );
       if (byNumber >= 0) {
-        orders[byNumber] = order;
+        orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
         orders.refresh();
         return;
       }
@@ -282,7 +558,7 @@ class SessionController extends GetxController {
 
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
-      orders[idx] = order;
+      orders[idx] = _preferDetailedOrder(order, orders[idx]);
       orders.refresh();
       return;
     }
@@ -291,7 +567,7 @@ class SessionController extends GetxController {
       (item) => _tableKeysMatch(item.number, order.number),
     );
     if (byNumber >= 0) {
-      orders[byNumber] = order;
+      orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
       orders.refresh();
       return;
     }
@@ -442,16 +718,26 @@ class SessionController extends GetxController {
     );
   }
 
-  void openTableDetails(String orderNumber, {int? orderId}) {
+  void openTableDetails(
+    String orderNumber, {
+    int? orderId,
+    bool deferDetailFetch = false,
+    SessionOrder? seedOrder,
+  }) {
     logOrderFlow(
-      'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'}',
+      'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
+      'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',
     );
-    final resolvedId = orderId != null && orderId > 0 ? orderId : null;
+    final resolvedId = orderId != null && orderId > 0
+        ? orderId
+        : (seedOrder != null && seedOrder.id > 0 ? seedOrder.id : null);
     Get.toNamed(
       AppRoutes.tableDetails,
       arguments: {
         'orderNumber': orderNumber,
         if (resolvedId != null) 'orderId': resolvedId,
+        'deferDetailFetch': deferDetailFetch,
+        if (seedOrder != null) 'seedOrder': seedOrder,
       },
     );
   }
@@ -462,6 +748,7 @@ class SessionController extends GetxController {
       title: 'NOMBRE DE COUVERTS',
       integerOnly: true,
       maxDigits: 3,
+      minValue: 1,
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
           context: context,
@@ -478,7 +765,15 @@ class SessionController extends GetxController {
     required String couverts,
   }) async {
     logOrderFlow('_createTableAndOpenDetails START table=$tableNumber couverts=$couverts');
-    final guests = int.tryParse(couverts.trim()) ?? 1;
+    final guests = int.tryParse(couverts.trim()) ?? 0;
+    if (guests < 1) {
+      logOrderFlow('_createTableAndOpenDetails ABORT guests must be > 0');
+      _showSnack(
+        'Couverts',
+        'Le nombre de couverts doit être supérieur à 0.',
+      );
+      return;
+    }
     final waiterId = _currentWaiterId;
     if (waiterId <= 0) {
       logOrderFlow('_createTableAndOpenDetails ABORT not logged in');
@@ -499,9 +794,12 @@ class SessionController extends GetxController {
     isCreatingOrder.value = true;
     SessionOrder? created;
     var attemptedCreate = false;
+    var blockRecovery = false;
 
     try {
-      final tables = await _sessionRepository.getTablesList();
+      // Fresh tables list — stale cache can block create (false "already active")
+      // or skip the occupied dialog incorrectly after a recent delete/close.
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
@@ -514,17 +812,39 @@ class SessionController extends GetxController {
         _showSnack('Erreur', 'Table $tableNumber introuvable.');
         return;
       }
-      if (OrderMapper.isTableInUse(tables, tableNumber)) {
-        // Table in use by another waiter / session — not in our list.
-        logOrderFlow('_createTableAndOpenDetails ABORT table occupied (other)');
+      final reclaimOwnOrphan = OrderMapper.canReclaimOrphanTableSession(
+        tables,
+        tableNumber,
+        waiterId: waiterId,
+      );
+
+      // Other waiter's table → Skip dialog (do not create / release).
+      if (OrderMapper.shouldShowSkipDialogForCreate(
+        tables,
+        tableNumber,
+        waiterId: waiterId,
+      )) {
+        logOrderFlow(
+          '_createTableAndOpenDetails ABORT skip dialog '
+          'table=$tableNumber '
+          'owner=${OrderMapper.activeOrderOwnerId(tables, tableNumber)} '
+          'status=${OrderMapper.activeOrderStatus(tables, tableNumber)}',
+        );
+        blockRecovery = true;
         if (context.mounted) {
-          TableOccupiedDialog.show(
+          await TableOccupiedDialog.show(
             context: context,
             userName: _currentUserDisplayName,
             tableNumber: tableNumber,
           );
         }
         return;
+      }
+      if (reclaimOwnOrphan) {
+        logOrderFlow(
+          '_createTableAndOpenDetails reclaim orphan session '
+          'table=$tableNumber tableId=${target.id}',
+        );
       }
 
       final salesZoneId = OrderMapper.inferSalesZoneId(
@@ -543,65 +863,112 @@ class SessionController extends GetxController {
           salesZoneId: salesZoneId,
         );
         created = result.order;
-      } on ApiException {
+        final createdWaiter = created.waiterId;
+        if (createdWaiter != null &&
+            createdWaiter > 0 &&
+            createdWaiter != waiterId) {
+          created = null;
+          blockRecovery = true;
+          if (context.mounted) {
+            await TableOccupiedDialog.show(
+              context: context,
+              userName: _currentUserDisplayName,
+              tableNumber: tableNumber,
+            );
+          }
+          return;
+        }
+      } on ApiException catch (e) {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: tableNumber,
         );
         created = recovered?.order;
+        if (created != null) {
+          final recoveredWaiter = created.waiterId;
+          if (recoveredWaiter != null &&
+              recoveredWaiter > 0 &&
+              recoveredWaiter != waiterId) {
+            created = null;
+            blockRecovery = true;
+            if (context.mounted) {
+              await TableOccupiedDialog.show(
+                context: context,
+                userName: _currentUserDisplayName,
+                tableNumber: tableNumber,
+              );
+            }
+            return;
+          }
+        } else {
+          if (OrderMapper.isTableOwnershipDeniedMessage(e.message)) {
+            blockRecovery = true;
+            if (context.mounted) {
+              await TableOccupiedDialog.show(
+                context: context,
+                userName: _currentUserDisplayName,
+                tableNumber: tableNumber,
+              );
+            }
+          } else {
+            _showSnack('Erreur', e.message);
+          }
+        }
       }
     } catch (_) {
       // Background refresh may still surface the order if the backend created it.
     } finally {
       isCreatingOrder.value = false;
-      if (attemptedCreate) {
-        if (created != null && created.id <= 0) {
-          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
-            tableNumber,
-          );
-          if (resolved != null && resolved > 0) {
-            try {
-              final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.id > 0
-                  ? detail
-                  : detail.copyWith(id: resolved);
-            } catch (_) {
-              // Keep session placeholder — order will be POSTed on first item.
-            }
-          }
-        }
-
+      if (attemptedCreate && !blockRecovery) {
         if (created == null) {
           final resolved = await _orderRepository.resolveOrderIdForTableNumber(
             tableNumber,
           );
           if (resolved != null && resolved > 0) {
             try {
-              final detail = await _orderRepository.getOrderDetail(resolved);
-              created = detail.id > 0
-                  ? detail
-                  : detail.copyWith(id: resolved);
-            } catch (_) {}
+              created = await _orderRepository.openAsEmptyTableOrder(resolved);
+            } catch (_) {
+              created = null;
+            }
           }
         }
 
-        if (created != null) {
-          if (created.id > 0) {
-            _upsertOrderInList(created);
-          }
+        final usable = created;
+        if (usable != null &&
+            usable.id > 0 &&
+            (usable.waiterId == null ||
+                usable.waiterId == 0 ||
+                usable.waiterId == waiterId)) {
+          // Delete suppress is keyed by table number — clear so recreate shows.
+          _clearSuppressedTable(tableNumber);
+          _clearSuppressedTable(usable.number);
+          _upsertOrderInList(usable);
           logOrderFlow(
-            '_createTableAndOpenDetails OPEN table=${created.number} orderId=${created.id}',
+            '_createTableAndOpenDetails OPEN table=${usable.number} orderId=${usable.id}',
           );
           openTableDetails(
-            created.number,
-            orderId: created.id > 0 ? created.id : null,
+            usable.number,
+            orderId: usable.id,
+            deferDetailFetch: true,
+            seedOrder: usable,
           );
+          // Keep empty shell pinned if list soft-refresh races ahead of API.
+          unawaited(
+            refreshOrderList(
+              pinOrder: usable,
+              background: true,
+            ),
+          );
+        } else if (usable != null &&
+            usable.waiterId != null &&
+            usable.waiterId != waiterId) {
+          if (context.mounted) {
+            await TableOccupiedDialog.show(
+              context: context,
+              userName: _currentUserDisplayName,
+              tableNumber: tableNumber,
+            );
+          }
         }
-        unawaited(
-          refreshOrderList(
-            pinOrder: created != null && created.id > 0 ? created : null,
-            background: true,
-          ),
-        );
       }
     }
   }
@@ -657,15 +1024,24 @@ class SessionController extends GetxController {
       _upsertOrderInList(target);
     }
 
+    // List rows are lightweight (total only). Load full seat_orders before
+    // opening table details so items are visible (same as tapping the list).
+    if (target.id > 0 && target.products.isEmpty) {
+      isCreatingOrder.value = true;
+      try {
+        target = await _orderRepository.getOrderDetail(target.id);
+        _upsertOrderInList(target);
+      } catch (_) {
+        // Table details bootstrap will retry loadOrderDetails.
+      } finally {
+        isCreatingOrder.value = false;
+      }
+    }
+
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
-    );
-    unawaited(
-      refreshOrderList(
-        pinOrder: target.id > 0 ? target : null,
-        background: true,
-      ),
+      seedOrder: target,
     );
   }
 
@@ -676,14 +1052,12 @@ class SessionController extends GetxController {
     // Own list order is reopened via nouvelle commande — not "occupied" for this waiter.
     if (_findOwnOpenOrderForTable(normalized) != null) return false;
 
-    if (OrderMapper.isTableInUse(
+    // Own orphan session (locked, no active_order) is reclaimable — not blocked.
+    return OrderMapper.isTableOccupied(
       _sessionRepository.cachedTables,
       normalized,
-    )) {
-      return true;
-    }
-
-    return false;
+      forWaiterId: _currentWaiterId,
+    );
   }
 
   String get _currentUserDisplayName {
@@ -800,7 +1174,11 @@ class SessionController extends GetxController {
       if (order.isLocalOnly) {
         final tableId = -order.id;
         if (tableId > 0) {
-          await _orderRepository.endTableSession(tableId);
+          try {
+            await _orderRepository.endTableSession(tableId);
+          } on ApiException {
+            // Order is local-only; still remove from the list even if release fails.
+          }
         }
       } else {
         await _orderRepository.closeOrder(
@@ -809,17 +1187,13 @@ class SessionController extends GetxController {
         );
       }
 
+      // Remove in place — do not reload / reshuffle the whole session list.
       orders.removeWhere((o) => _tableKeysMatch(o.number, order.number));
+      orders.refresh();
       _clearUiStateForOrder(order.number);
 
+      // Occupancy cache only; keep session row order stable.
       unawaited(_sessionRepository.getTablesList(forceRefresh: true));
-      // Reload without showing loading indicator; the suppression filter
-      // prevents the deleted order from reappearing during eventual
-      // consistency window.
-      unawaited(loadSessionOrders(
-        forceRefresh: true,
-        showLoading: false,
-      ));
     } on ApiException catch (e) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),

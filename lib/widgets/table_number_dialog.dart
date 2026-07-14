@@ -12,6 +12,7 @@ class TableNumberDialog extends StatefulWidget {
     this.initialValue,
     this.integerOnly = false,
     this.maxDigits,
+    this.minValue,
     this.onConfirm,
   });
 
@@ -19,6 +20,9 @@ class TableNumberDialog extends StatefulWidget {
   final String? initialValue;
   final bool integerOnly;
   final int? maxDigits;
+
+  /// When set with [integerOnly], confirm requires the value to be ≥ this.
+  final int? minValue;
   final ValueChanged<String>? onConfirm;
 
   static Future<void> show({
@@ -26,6 +30,7 @@ class TableNumberDialog extends StatefulWidget {
     String? initialValue,
     bool integerOnly = false,
     int? maxDigits,
+    int? minValue,
     ValueChanged<String>? onConfirm,
     BuildContext? context,
   }) {
@@ -44,6 +49,7 @@ class TableNumberDialog extends StatefulWidget {
         initialValue: initialValue,
         integerOnly: integerOnly,
         maxDigits: maxDigits,
+        minValue: minValue,
         onConfirm: onConfirm,
       ),
     );
@@ -69,6 +75,17 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
   String get _mainDisplay =>
       _tableInput.isEmpty ? _emptyPlaceholder : _tableInput;
 
+  bool get _canConfirm {
+    final raw = _tableInput.isEmpty && widget.integerOnly ? '0' : _tableInput;
+    if (raw.isEmpty) return false;
+    if (!widget.integerOnly) return true;
+
+    final parsed = int.tryParse(raw);
+    if (parsed == null) return false;
+    if (widget.minValue != null && parsed < widget.minValue!) return false;
+    return true;
+  }
+
   void _appendDigit(String value) {
     if (widget.integerOnly && value == '.') return;
     if (widget.maxDigits != null &&
@@ -90,11 +107,10 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
   }
 
   void _confirm() {
+    if (!_canConfirm) return;
     final value = _tableInput.isEmpty && widget.integerOnly
         ? '0'
         : _tableInput;
-    if (value.isEmpty) return;
-    if (widget.integerOnly && int.tryParse(value) == null) return;
     Navigator.of(context, rootNavigator: true).pop();
     Future.microtask(() => widget.onConfirm?.call(value));
   }
@@ -326,9 +342,7 @@ class _TableNumberDialogState extends State<TableNumberDialog> {
                         width: cellWidth,
                         height: keyHeight,
                         keyRadius: keyRadius,
-                        onTap: _tableInput.isEmpty && !widget.integerOnly
-                            ? null
-                            : _confirm,
+                        onTap: _canConfirm ? _confirm : null,
                       ),
                     ],
                   ),

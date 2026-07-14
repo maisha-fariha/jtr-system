@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:get/get.dart';
 
 import '../data/repositories/auth_repository.dart';
+import '../routes/app_pages.dart';
 
 class ConnectController extends GetxController {
   ConnectController({required AuthRepository authRepository})
@@ -17,6 +18,7 @@ class ConnectController extends GetxController {
 
   Timer? _timer;
   bool _syncStarted = false;
+  bool _navigated = false;
 
   @override
   void onInit() {
@@ -45,10 +47,18 @@ class ConnectController extends GetxController {
         progress.value = 1.0;
         timer.cancel();
         isConnected.value = true;
+        _goNext();
         return;
       }
       progress.value += 0.01;
     });
+  }
+
+  void _goNext() {
+    if (_navigated) return;
+    _navigated = true;
+    final isReturningUser = _authRepository.isAuthenticated;
+    Get.offNamed(isReturningUser ? AppRoutes.session : AppRoutes.login);
   }
 
   @override

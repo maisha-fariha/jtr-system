@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
@@ -77,9 +79,12 @@ class OrderMapper {
   }
 
   /// Builds session rows from [GET /api/orders] (active-day open orders).
+  ///
+  /// [lightweight] skips product/seat parsing — use for the session list.
   static List<SessionOrder> sessionOrdersFromOrdersList(
     List<Map<String, dynamic>> orders, {
     int? waiterId,
+    bool lightweight = false,
   }) {
     final sortMillisById = <int, int>{};
     final rows = <SessionOrder>[];
@@ -97,7 +102,11 @@ class OrderMapper {
       if (orderId <= 0 || seenOrderIds.contains(orderId)) continue;
       seenOrderIds.add(orderId);
 
-      rows.add(fromOrderDetail(order));
+      rows.add(
+        lightweight
+            ? sessionOrderSummaryFromListMap(order)
+            : fromOrderDetail(order),
+      );
       sortMillisById[orderId] = _orderSortMillis(order);
     }
 
@@ -108,10 +117,139 @@ class OrderMapper {
     return rows;
   }
 
+  /// Fast list-row mapping — header fields only (no seat/product tree).
+  static SessionOrder sessionOrderSummaryFromListMap(
+    Map<String, dynamic> data,
+  ) {
+    final tableNumber = tableNumberFromDetail(data);
+    final orderId = orderIdFromDetail(data);
+    final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
+
+    final salesZone = data['sales_zone'];
+    final zoneName = salesZone is Map<String, dynamic>
+        ? (salesZone['name'] as String? ?? 'SUR PLACE')
+        : (data['sales_zone_name'] as String? ?? 'SUR PLACE');
+
+    final waiter = data['waiter'];
+    final waiterName = waiter is Map<String, dynamic>
+        ? (waiter['name'] as String? ?? '—')
+        : (data['waiter_name'] as String? ?? '—');
+
+    final products = data.containsKey('seat_orders')
+        ? extractProducts(data)
+        : const <OrderProduct>[];
+
+    return SessionOrder(
+      id: orderId,
+      number: displayKey(orderId: orderId, tableNumber: tableNumber),
+      numberColor: AppTheme.primary,
+      group: '1',
+      poste: _shortPoste(waiterName),
+      profitCenter: zoneName.toUpperCase(),
+      couverts: '${data['number_of_guests'] ?? data['guests'] ?? 0}',
+      impressionCount: printCount,
+      impressionColor: impressionColorFor(printCount),
+      total: formatPrice(
+        '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
+      ),
+      products: products,
+      itemCount: _itemCountFromListMap(data, products.length),
+      displayEntries: const [],
+      waiterId: waiterIdFromOrderMap(data),
+    );
+  }
+
+  static int _itemCountFromListMap(
+    Map<String, dynamic> data,
+    int productsLength,
+  ) {
+    for (final key in [
+      'items_count',
+      'itemsCount',
+      'products_count',
+      'productsCount',
+      'line_items_count',
+      'visible_items_count',
+      'items_qty',
+    ]) {
+      final raw = data[key];
+      if (raw is num && raw >= 0) return raw.toInt();
+      if (raw is String) {
+        final parsed = int.tryParse(raw);
+        if (parsed != null && parsed >= 0) return parsed;
+      }
+    }
+    if (data.containsKey('seat_orders')) {
+      return countVisibleLineItems(data);
+    }
+    return productsLength;
+  }
+
   /// Keeps only open orders for the active business day list.
   static bool isActiveDayOpenOrder(Map<String, dynamic> order) {
     final status = order['status']?.toString().toLowerCase();
     return status != 'closed' && status != 'cancelled';
+  }
+
+  /// True when the order has no non-cancelled line items.
+  static bool orderDetailHasNoVisibleItems(Map<String, dynamic> orderDetail) {
+    return countVisibleLineItems(orderDetail) == 0;
+  }
+
+  static int countVisibleLineItems(Map<String, dynamic> orderDetail) {
+    return extractProducts(orderDetail).length;
+  }
+
+  static bool isOrderClosedOrCancelled(Map<String, dynamic> orderDetail) {
+    final status = orderDetail['status']?.toString().toLowerCase();
+    return status == 'closed' || status == 'cancelled';
+  }
+
+  static bool isOrderFullyPaid(Map<String, dynamic> orderDetail) {
+    final detailed =
+        orderDetail['payment_status_detailed']?.toString().toLowerCase();
+    if (detailed == 'fully_paid' || detailed == 'paid') return true;
+
+    final payment = orderDetail['payment_status']?.toString().toLowerCase();
+    return payment == 'fully_paid' ||
+        payment == 'paid' ||
+        payment == 'completed';
+  }
+
+  /// Empty shells that the backend already closed/paid cannot accept new lines.
+  /// The first new item must open a fresh order for the same table.
+  static bool shouldRecreateOrderForAdd(Map<String, dynamic> orderDetail) {
+    if (!orderDetailHasNoVisibleItems(orderDetail)) return false;
+    return isOrderClosedOrCancelled(orderDetail) ||
+        isOrderFullyPaid(orderDetail);
+  }
+
+  /// Status to keep an emptied order open (delete icon is the only closer).
+  static String preserveOpenOrderStatus(Map<String, dynamic> orderDetail) {
+    final status = orderDetail['status']?.toString();
+    if (status != null &&
+        status.isNotEmpty &&
+        status.toLowerCase() != 'closed' &&
+        status.toLowerCase() != 'cancelled') {
+      return status;
+    }
+    return 'open';
+  }
+
+  /// Local cache copy that stays visible in the session list after all items
+  /// were cancelled (backend may mark the order closed automatically).
+  static Map<String, dynamic> asOpenEmptyOrderShell(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final copy = Map<String, dynamic>.from(orderDetail);
+    if (isOrderClosedOrCancelled(copy) || isOrderFullyPaid(copy)) {
+      copy['status'] = preserveOpenOrderStatus(orderDetail);
+      copy['payment_status'] = 'unpaid';
+      copy['payment_status_detailed'] = 'unpaid';
+    }
+    copy['total_price'] = copy['total_price'] ?? '0';
+    copy['remaining_amount'] = copy['remaining_amount'] ?? '0';
+    return copy;
   }
 
   /// Union of [GET /api/orders] pages/lists by id (later list wins on duplicate).
@@ -149,10 +287,190 @@ class OrderMapper {
     return false;
   }
 
-  static bool isTableOccupied(
+  /// Waiter that owns the table lock / session (no active order required).
+  static int? tableSessionOwnerId(Map<String, dynamic> table) {
+    final lockedBy = table['locked_by'];
+    if (lockedBy is num && lockedBy.toInt() > 0) return lockedBy.toInt();
+    return waiterIdFromOrderMap(table);
+  }
+
+  /// Waiter assigned to the table's active order (if any).
+  static int? activeOrderOwnerId(
     List<Map<String, dynamic>> tables,
     String tableNumber,
   ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final active = table['active_order'];
+      if (active is Map<String, dynamic>) {
+        final fromOrder = waiterIdFromOrderMap(active);
+        if (fromOrder != null && fromOrder > 0) return fromOrder;
+      }
+      if (_activeOrderId(table) != null) {
+        final fromTable = waiterIdFromOrderMap(table);
+        if (fromTable != null && fromTable > 0) return fromTable;
+      }
+    }
+    return null;
+  }
+
+  /// Status of the table's active order (`pending`, `open`, …), if any.
+  static String? activeOrderStatus(
+    List<Map<String, dynamic>> tables,
+    String tableNumber,
+  ) {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final active = table['active_order'];
+      if (active is Map<String, dynamic>) {
+        final status = active['status']?.toString().trim();
+        if (status != null && status.isNotEmpty) return status.toLowerCase();
+      }
+    }
+    return null;
+  }
+
+  /// True when another waiter owns this table's order/session.
+  static bool isAssignedToOtherWaiter(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+
+    final orderOwner = activeOrderOwnerId(tables, tableNumber);
+    if (orderOwner != null && orderOwner > 0 && orderOwner != waiterId) {
+      return true;
+    }
+
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      final sessionOwner = tableSessionOwnerId(table);
+      if (sessionOwner != null &&
+          sessionOwner > 0 &&
+          sessionOwner != waiterId) {
+        // Other waiter holds lock/session or is listed on the table row.
+        if (_activeOrderId(table) != null ||
+            hasOrphanSessionWithoutOrder(table) ||
+            table['is_locked'] == true ||
+            table['status'] == 'open') {
+          return true;
+        }
+      }
+
+      // active_order present without our waiter id → treat as foreign.
+      if (_activeOrderId(table) != null) {
+        final active = table['active_order'];
+        if (active is Map<String, dynamic>) {
+          final activeWaiter = waiterIdFromOrderMap(active);
+          if (activeWaiter != null &&
+              activeWaiter > 0 &&
+              activeWaiter != waiterId) {
+            return true;
+          }
+          // Has active order but waiter unknown and not reclaimable by us.
+          if (activeWaiter == null || activeWaiter <= 0) {
+            final lockedBy = table['locked_by'];
+            if (lockedBy is num &&
+                lockedBy.toInt() > 0 &&
+                lockedBy.toInt() != waiterId) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Skip dialog whenever another waiter owns the table (order or session lock).
+  /// Own reclaimable orphan sessions never skip.
+  static bool shouldShowSkipDialogForCreate(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+    if (canReclaimOrphanTableSession(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      return false;
+    }
+
+    if (isAssignedToOtherWaiter(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      return true;
+    }
+
+    // Table already in use (order/session) and not reclaimable by this waiter.
+    return isTableInUse(tables, tableNumber);
+  }
+
+  /// API messages that mean this waiter cannot take over the table.
+  static bool isTableOwnershipDeniedMessage(String message) {
+    final msg = message.toLowerCase();
+    return msg.contains('not allowed to release') ||
+        msg.contains('not allowed') ||
+        msg.contains('release this table') ||
+        msg.contains('n\'est pas autoris') ||
+        msg.contains('pas autoris') ||
+        msg.contains('occup') ||
+        msg.contains('already') ||
+        msg.contains('lock') ||
+        (msg.contains('waiter') && msg.contains('table')) ||
+        msg.contains('session');
+  }
+
+  /// Open/locked session with no [active_order] (orphan after session-only create).
+  static bool hasOrphanSessionWithoutOrder(Map<String, dynamic> table) {
+    if (_activeOrderId(table) != null) return false;
+    return _hasOpenSession(table);
+  }
+
+  /// Same waiter left a session with no order — safe to end and reopen.
+  static bool canReclaimOrphanTableSession(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+    if (hasExistingActiveOrder(tables, tableNumber)) return false;
+
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return false;
+
+    for (final table in _tablesMatchingNumber(tables, normalized)) {
+      if (!hasOrphanSessionWithoutOrder(table)) continue;
+      final owner = tableSessionOwnerId(table);
+      if (owner != null && owner == waiterId) return true;
+    }
+    return false;
+  }
+
+  static bool isTableOccupied(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    int? forWaiterId,
+  }) {
+    if (forWaiterId != null &&
+        canReclaimOrphanTableSession(
+          tables,
+          tableNumber,
+          waiterId: forWaiterId,
+        )) {
+      return false;
+    }
     return isTableInUse(tables, tableNumber);
   }
 
@@ -332,6 +650,7 @@ class OrderMapper {
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
       products: products,
+      itemCount: products.length,
       displayEntries: displayEntries.isNotEmpty
           ? displayEntries
           : [
@@ -1154,7 +1473,7 @@ class OrderMapper {
     return payload;
   }
 
-  /// POST /api/orders with seat/course shell and one default line item.
+  /// POST /api/orders with seat/course shell and one selected line item.
   static Map<String, dynamic> buildCreateOrderSeatCoursePayload({
     required int waiterId,
     required int numberOfGuests,
@@ -1197,7 +1516,8 @@ class OrderMapper {
     return payload;
   }
 
-  /// Payload candidates for POST /api/orders when opening a table.
+  /// Payload candidates for POST /api/orders when the waiter selected a product
+  /// (first article on a new/local order). Never used for empty table open.
   static List<Map<String, dynamic>> createOrderPayloadCandidates({
     required int waiterId,
     required int numberOfGuests,
@@ -1223,22 +1543,18 @@ class OrderMapper {
         unitPrice: unitPrice,
         salesZoneId: salesZoneId,
       ),
-      buildCreateOrderHeaderPayload(
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        tableId: tableId,
-        salesZoneId: salesZoneId,
-      ),
     ];
   }
 
-  /// Session-only placeholder until POST /api/orders succeeds.
+  /// Session-only placeholder until the first selected article POSTs /api/orders.
+  /// [id] is `-tableId` so delete can end the table session while local-only.
   static SessionOrder buildSessionPlaceholderOrder({
     required int tableNumber,
     required int numberOfGuests,
+    int? tableId,
   }) {
     return SessionOrder(
-      id: 0,
+      id: tableId != null && tableId > 0 ? -tableId : 0,
       number: displayKey(orderId: 0, tableNumber: tableNumber),
       numberColor: AppTheme.primary,
       group: '1',
@@ -1252,7 +1568,10 @@ class OrderMapper {
     );
   }
 
-  /// Valid POST /api/orders body per Orders API spec (requires ≥1 item).
+  /// Valid POST /api/orders body per Orders API spec.
+  ///
+  /// All nested ids are `0`; new items carry a client [uid]. Matches:
+  /// waiter_id, number_of_guests, sales_zone_id, seat_orders → courses/items.
   static Map<String, dynamic> buildCreateOrderWithItemPayload({
     required int waiterId,
     required int numberOfGuests,
@@ -1262,6 +1581,7 @@ class OrderMapper {
     int? salesZoneId,
     int qty = 1,
     String comment = '',
+    String status = 'to_be_continued',
     List<Map<String, dynamic>> menuSelections = const [],
     bool isStillMenuMissing = false,
   }) {
@@ -1272,7 +1592,7 @@ class OrderMapper {
       productId: productId,
       qty: qty,
       subTotal: unitPrice * qty,
-      status: 'to_be_continued',
+      status: status,
       comment: comment,
       menuSelections: menuSelections,
       isStillMenuMissing: isStillMenuMissing,
@@ -1297,8 +1617,9 @@ class OrderMapper {
       ],
     };
 
-    if (tableId != null) payload['table_id'] = tableId;
     if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    // Optional: some backends also accept table_id; session start usually binds it.
+    if (tableId != null) payload['table_id'] = tableId;
 
     return payload;
   }
@@ -1670,34 +1991,10 @@ class OrderMapper {
 
       for (final course in courses) {
         if (course is! Map<String, dynamic>) continue;
-        final courseId = course['id'];
-        final courseIdInt = courseId is int
-            ? courseId
-            : (courseId is num ? courseId.toInt() : null);
-        if (courseIdInt == null) continue;
+        if (!_courseNeedsKitchenSend(course)) continue;
 
-        final status = course['status'] as String?;
-        if (status == 'in_progress' ||
-            status == 'to_be_continued' ||
-            status == 'pending') {
-          ids.add(courseIdInt);
-          continue;
-        }
-
-        final items = course['items'];
-        if (items is! List) continue;
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-          final itemStatus = item['status'] as String?;
-          if (itemStatus == null ||
-              itemStatus == 'in_progress' ||
-              itemStatus == 'pending' ||
-              itemStatus == 'to_be_continued') {
-            ids.add(courseIdInt);
-            break;
-          }
-        }
+        final courseIdInt = _courseRecordId(course);
+        if (courseIdInt != null) ids.add(courseIdInt);
       }
     }
 
@@ -1707,10 +2004,13 @@ class OrderMapper {
   }
 
   /// Courses that must be sent to the kitchen before POST /api/orders/:id/pay.
+  ///
+  /// Includes courses that were already demanded but later received new lines
+  /// (common after DEMANDÉE when waiter adds more items).
   static List<int> extractCourseIdsPendingKitchenSendBeforePayment(
     Map<String, dynamic> data,
   ) {
-    final ids = <int>{...extractKitchenSendCourseIds(data)};
+    final ids = <int>{};
 
     final seatOrders = data['seat_orders'];
     if (seatOrders is List) {
@@ -1721,19 +2021,114 @@ class OrderMapper {
 
         for (final course in courses) {
           if (course is! Map<String, dynamic>) continue;
-          if (_visibleItemCountInCourse(course) <= 0) continue;
-          if (_courseWasRequestedToKitchen(course)) continue;
-
-          final courseId = course['id'];
-          final courseIdInt = courseId is int
-              ? courseId
-              : (courseId is num ? courseId.toInt() : null);
+          if (!_courseNeedsKitchenSend(course)) continue;
+          final courseIdInt = _courseRecordId(course);
           if (courseIdInt != null) ids.add(courseIdInt);
         }
       }
     }
 
+    if (ids.isNotEmpty) return ids.toList();
+    return extractRequestableCourseIds(data);
+  }
+
+  /// Every course with visible items — last-resort fire before payment.
+  static List<int> extractAllVisibleCourseIds(Map<String, dynamic> data) {
+    final ids = <int>{};
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return const [];
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        final id = _courseRecordId(course);
+        if (id != null) ids.add(id);
+      }
+    }
     return ids.toList();
+  }
+
+  static int? _courseRecordId(Map<String, dynamic> course) {
+    final courseId = course['id'];
+    final courseIdInt = courseId is int
+        ? courseId
+        : (courseId is num ? courseId.toInt() : null);
+    if (courseIdInt == null || courseIdInt <= 0) return null;
+    return courseIdInt;
+  }
+
+  /// Whether this course still has lines the kitchen has not been asked for.
+  static bool _courseNeedsKitchenSend(Map<String, dynamic> course) {
+    if (_visibleItemCountInCourse(course) <= 0) return false;
+
+    if (!_courseWasRequestedToKitchen(course)) return true;
+
+    // Course was demanded earlier, but new items may have been added after.
+    final requestedAt = DateTime.tryParse(
+      course['requested_at']?.toString() ?? '',
+    );
+    final items = course['items'];
+    if (items is! List) return false;
+    for (final item in items) {
+      if (item is! Map<String, dynamic>) continue;
+      if (_itemNeedsKitchenSend(item, courseRequestedAt: requestedAt)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static bool _itemNeedsKitchenSend(
+    Map<String, dynamic> item, {
+    DateTime? courseRequestedAt,
+  }) {
+    final status = item['status']?.toString().toLowerCase();
+    if (status == 'cancelled') return false;
+
+    final sentAt = item['requested_at'] ??
+        item['sent_at'] ??
+        item['fired_at'] ??
+        item['printed_at'];
+    if (sentAt != null && sentAt.toString().trim().isNotEmpty) return false;
+
+    const alreadySent = {
+      'sent',
+      'requested',
+      'preparing',
+      'prepared',
+      'ready',
+      'served',
+      'completed',
+      'done',
+      'delivered',
+    };
+    if (status != null && alreadySent.contains(status)) return false;
+
+    const unsent = {
+      'pending',
+      'in_progress',
+      'to_be_continued',
+      'draft',
+      'open',
+      'new',
+      'created',
+    };
+    if (status != null && unsent.contains(status)) return true;
+
+    // Item added after the course was demanded → must be re-fired.
+    if (courseRequestedAt != null) {
+      final created = DateTime.tryParse(item['created_at']?.toString() ?? '');
+      if (created != null && created.isAfter(courseRequestedAt)) return true;
+      // Present at demande time with no unsent marker → treat as already sent.
+      return false;
+    }
+
+    // Course never demanded: any visible line still needs a send.
+    return true;
   }
 
   static bool requiresKitchenSendBeforePayment(Map<String, dynamic> data) {
@@ -1742,8 +2137,9 @@ class OrderMapper {
 
   static bool isSendBeforePaymentError(ApiException error) {
     final message = error.message.toLowerCase();
-    return message.contains('envoyer') &&
-        (message.contains('payer') || message.contains('paiement'));
+    return (message.contains('envoyer') &&
+            (message.contains('payer') || message.contains('paiement'))) ||
+        (message.contains('send') && message.contains('before') && message.contains('pay'));
   }
 
   static int? resolveTableId(
@@ -2062,10 +2458,11 @@ class OrderMapper {
 
   /// PUT /api/orders/:id writable body.
   static Map<String, dynamic> buildOrderUpdatePayload(
-    Map<String, dynamic> orderDetail,
-  ) {
+    Map<String, dynamic> orderDetail, {
+    bool keepOpenWhenEmpty = false,
+  }) {
     final seatOrders = orderDetail['seat_orders'];
-    return {
+    final payload = <String, dynamic>{
       'waiter_id': orderDetail['waiter_id'],
       'number_of_guests': orderDetail['number_of_guests'],
       if (orderDetail['sales_zone_id'] != null)
@@ -2080,6 +2477,14 @@ class OrderMapper {
               .toList()
           : <dynamic>[],
     };
+
+    // Cancelling the last item must not close the order — only the delete icon
+    // should. Ask the API to keep the shell open when nothing visible remains.
+    if (keepOpenWhenEmpty && orderDetailHasNoVisibleItems(orderDetail)) {
+      payload['status'] = preserveOpenOrderStatus(orderDetail);
+    }
+
+    return payload;
   }
 
   /// PUT payload that only changes couverts / number_of_guests.
@@ -2180,7 +2585,7 @@ class OrderMapper {
       item['qty'] = qty;
       item['sub_total'] = unitPrice * qty;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustSimpleProductQuantity({
@@ -2329,6 +2734,208 @@ class OrderMapper {
     return _rebuildEntriesWithSuivreSplits(flatProducts, validSplits);
   }
 
+  /// Cancels every visible line (used to clear auto-added create defaults).
+  static const emptyCreateSeedCancelReason =
+      'Commande vide — article automatique annulé';
+
+  /// True when the ticket still has ONLY the empty-create seed line(s).
+  static bool hasOnlyEmptyCreateSeed(
+    Map<String, dynamic> orderDetail, {
+    int? seedProductId,
+  }) {
+    if (orderDetailHasNoVisibleItems(orderDetail)) return false;
+
+    if (seedProductId != null && seedProductId > 0) {
+      final seatOrders = orderDetail['seat_orders'];
+      if (seatOrders is! List) return false;
+      var sawSeed = false;
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          final items = course['items'];
+          if (items is! List) continue;
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            if (item['status'] == 'cancelled') continue;
+            if (_itemProductId(item) != seedProductId) return false;
+            sawSeed = true;
+          }
+        }
+      }
+      return sawSeed;
+    }
+
+    // Fallback: single free simple line left from create seed.
+    if (countVisibleLineItems(orderDetail) != 1) return false;
+    final item = firstVisibleItem(orderDetail);
+    if (item == null) return false;
+    if (!_isSimpleLineItem(item)) return false;
+    return _parseMoney(item['sub_total']) <= 0.0001;
+  }
+
+  /// True when a leftover create-seed line is still present (possibly with others).
+  static bool hasLeftoverEmptyCreateSeed(
+    Map<String, dynamic> orderDetail, {
+    int? seedProductId,
+  }) {
+    if (seedProductId != null && seedProductId > 0) {
+      return containsVisibleProductId(orderDetail, seedProductId);
+    }
+    return hasOnlyEmptyCreateSeed(orderDetail);
+  }
+
+  static bool containsVisibleProductId(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          if (_itemProductId(item) == productId) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static Map<String, dynamic>? firstVisibleItem(Map<String, dynamic> orderDetail) {
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          return item;
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Deep copy with every course `items` cleared (keeps course/seat ids for PUT).
+  static Map<String, dynamic> withAllCourseItemsCleared(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) return working;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        course['items'] = <dynamic>[];
+      }
+    }
+    return working;
+  }
+
+  /// Removes visible lines for [productId] (create-seed cleanup).
+  static Map<String, dynamic> withoutVisibleProduct(
+    Map<String, dynamic> orderDetail,
+    int productId,
+  ) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) return working;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        course['items'] = items.where((item) {
+          if (item is! Map<String, dynamic>) return true;
+          if (item['status'] == 'cancelled') return true;
+          return _itemProductId(item) != productId;
+        }).toList();
+      }
+    }
+    return working;
+  }
+
+  static Map<String, dynamic> cancelAllVisibleItems(
+    Map<String, dynamic> orderDetail, {
+    String cancelReason = emptyCreateSeedCancelReason,
+  }) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) {
+      return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    }
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          item['status'] = 'cancelled';
+          item['cancel_reason'] = cancelReason;
+          item['canceled_datetime'] = now;
+          item['cancelled_at'] = now;
+        }
+      }
+    }
+
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
+    return payload;
+  }
+
+  /// Removes all line items from seat courses (stronger empty-order clear).
+  static Map<String, dynamic> stripAllVisibleItems(
+    Map<String, dynamic> orderDetail,
+  ) {
+    final working = withAllCourseItemsCleared(orderDetail);
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
+    return payload;
+  }
+
+  static Map<String, dynamic> _deepCopyOrderMap(Map<String, dynamic> source) {
+    return jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
+  }
+
   static Map<String, dynamic> cancelOrderLinesAtIndices({
     required Map<String, dynamic> orderDetail,
     required Set<int> lineIndices,
@@ -2365,7 +2972,7 @@ class OrderMapper {
       }
     }
 
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> cancelOrderLineAtIndex({
@@ -2405,7 +3012,7 @@ class OrderMapper {
       if (cancelled) break;
     }
 
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustLineQuantityAtIndex({
@@ -2425,7 +3032,7 @@ class OrderMapper {
       item['qty'] = newQty;
       item['sub_total'] = unitPrice * newQty;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> applyOfferAtLineIndex({
@@ -2438,6 +3045,20 @@ class OrderMapper {
       item['offer_reason'] = 'Article offert';
       item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
       item['sub_total'] = '0.00';
+    });
+    return buildOrderUpdatePayload(working);
+  }
+
+  /// Sets the API `comment` field on a visible line (message / pencil).
+  static Map<String, dynamic> updateLineCommentAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required String comment,
+  }) {
+    final working = _deepCopyOrderMap(orderDetail);
+    final trimmed = comment.trim();
+    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+      item['comment'] = trimmed;
     });
     return buildOrderUpdatePayload(working);
   }
@@ -2485,7 +3106,52 @@ class OrderMapper {
       if (parsed != null && parsed > 0) return parsed;
     }
 
-    return parseOrderTotalAmount(data);
+    final total = parseOrderTotalAmount(data);
+    if (total > 0) return total;
+
+    // Fallback: sum visible line totals when header amounts are missing/zero.
+    return _sumVisibleLineAmounts(order);
+  }
+
+  static double _sumVisibleLineAmounts(Map<String, dynamic> order) {
+    var sum = 0.0;
+    final seatOrders = order['seat_orders'];
+    if (seatOrders is! List) return 0;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map) continue;
+          if (item['status']?.toString().toLowerCase() == 'cancelled') continue;
+          if (item['is_offered'] == true || item['offered'] == true) continue;
+          final raw = item['total_price'] ??
+              item['total'] ??
+              item['price'] ??
+              item['unit_price'];
+          if (raw is num) {
+            final qty = (item['quantity'] as num?)?.toDouble() ?? 1;
+            // total_price is usually already qty * unit; unit_price needs qty.
+            if (item['total_price'] != null || item['total'] != null) {
+              sum += raw.toDouble();
+            } else {
+              sum += raw.toDouble() * qty;
+            }
+          } else if (raw is String) {
+            final parsed = double.tryParse(
+              raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+            );
+            if (parsed != null) sum += parsed;
+          }
+        }
+      }
+    }
+    return sum;
   }
 
   static double formatPaymentAmount(double amount) =>
@@ -2765,7 +3431,7 @@ class OrderMapper {
         item['status'] = 'cancelled';
       },
     );
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static void _mutateSimpleProductLines(
@@ -3199,6 +3865,11 @@ class OrderMapper {
     Map<String, dynamic> course,
   ) {
     final copy = Map<String, dynamic>.from(course);
+    final courseId = (course['id'] as num?)?.toInt();
+    // New courses use id: 0 (PUT full state).
+    if (courseId == null || courseId <= 0) {
+      copy['id'] = 0;
+    }
     final items = course['items'];
     copy['items'] = items is List
         ? items
@@ -3252,7 +3923,6 @@ class OrderMapper {
     String? uid,
   }) {
     final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
-    final hasMenus = sanitizedMenus.isNotEmpty;
 
     return {
       'id': 0,
@@ -3262,11 +3932,11 @@ class OrderMapper {
       'product': {'id': productId},
       'sub_total': subTotal,
       'qty': qty,
-      'status': status,
       'comment': comment,
+      'status': status,
       'is_loss': false,
+      'menu_selections': sanitizedMenus,
       'is_still_menu_missing': isStillMenuMissing,
-      if (hasMenus) 'menu_selections': sanitizedMenus,
     };
   }
 

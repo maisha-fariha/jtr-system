@@ -1,3 +1,4 @@
+import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
 import '../data/models/device_activation_models.dart';
@@ -18,7 +19,12 @@ class DeviceGateController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    _runGate();
+    // Wait for first frame — Get.offAllNamed in onInit blanks the navigator.
+    SchedulerBinding.instance.addPostFrameCallback((_) => _runGate());
+  }
+
+  void _go(String route, {Object? arguments}) {
+    Get.offAllNamed(route, arguments: arguments);
   }
 
   Future<void> _runGate() async {
@@ -30,22 +36,16 @@ class DeviceGateController extends GetxController {
       final outcome = await _deviceRepository.resolveStartupGate();
       switch (outcome) {
         case DeviceGateOutcome.needsActivation:
-          Get.offAllNamed(AppRoutes.activation);
+          _go(AppRoutes.activation);
           return;
         case DeviceGateOutcome.deactivated:
-          Get.offAllNamed(
-            AppRoutes.deviceBlocked,
-            arguments: {'reason': 'deactivated'},
-          );
+          _go(AppRoutes.deviceBlocked, arguments: {'reason': 'deactivated'});
           return;
         case DeviceGateOutcome.licenseBlocked:
-          Get.offAllNamed(
-            AppRoutes.deviceBlocked,
-            arguments: {'reason': 'license'},
-          );
+          _go(AppRoutes.deviceBlocked, arguments: {'reason': 'license'});
           return;
         case DeviceGateOutcome.active:
-          Get.offAllNamed(AppRoutes.connect);
+          _go(AppRoutes.connect);
           return;
       }
     } catch (e) {

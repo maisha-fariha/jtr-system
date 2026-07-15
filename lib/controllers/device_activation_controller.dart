@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -9,6 +10,9 @@ import '../core/network/api_exception.dart';
 import '../data/mappers/device_activation_mapper.dart';
 import '../data/repositories/device_repository.dart';
 import '../routes/app_pages.dart';
+
+/// TODO: set to `false` when `/api/devices/*` is deployed.
+const bool kBypassDeviceActivation = true;
 
 class DeviceActivationController extends GetxController {
   DeviceActivationController({required DeviceRepository deviceRepository})
@@ -70,6 +74,16 @@ class DeviceActivationController extends GetxController {
 
   Future<void> activate() async {
     errorMessage.value = null;
+
+    // Temporary: device activate API is not deployed yet.
+    if (kBypassDeviceActivation) {
+      debugPrint(
+        '════════ DEVICE ACTIVATE BYPASS → ${AppRoutes.connect} ════════',
+      );
+      Get.offAllNamed(AppRoutes.connect);
+      return;
+    }
+
     final code = DeviceActivationMapper.normalizeCode(codeController.text);
     final tenant =
         DeviceActivationMapper.normalizeTenantSchema(tenantController.text);

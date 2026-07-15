@@ -415,6 +415,9 @@ class SessionController extends GetxController {
   }
 
   /// Session list summaries omit products; never wipe lines / totals already loaded.
+  ///
+  /// Table-details mutations must call [updateOrderRow] with
+  /// `replaceDetail: true` so emptying the last line is not discarded here.
   SessionOrder _preferDetailedOrder(
     SessionOrder incoming,
     SessionOrder? previous,
@@ -429,7 +432,9 @@ class SessionController extends GetxController {
         impressionColor: incoming.impressionColor,
         poste: incoming.poste,
         profitCenter: incoming.profitCenter,
-        couverts: incoming.couverts.isNotEmpty ? incoming.couverts : previous.couverts,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
         waiterId: incoming.waiterId ?? previous.waiterId,
         itemCount: previous.itemCount > 0
             ? previous.itemCount
@@ -495,7 +500,10 @@ class SessionController extends GetxController {
         try {
           final cached = _orderRepository.cachedOrderDetail(summary.id);
           if (cached != null) {
-            final detail = OrderMapper.fromOrderDetail(cached).copyWith(
+            final detail = OrderMapper.sessionOrderHidingCreateSeed(
+              cached,
+              seedProductId: _orderRepository.lastEmptyOrderSeedProductId,
+            ).copyWith(
               id: summary.id,
             );
             if (_stillInList(summary.id)) {
@@ -535,19 +543,25 @@ class SessionController extends GetxController {
     );
   }
 
-  void _upsertOrderInList(SessionOrder order) {
+  void _upsertOrderInList(
+    SessionOrder order, {
+    bool replaceDetail = false,
+  }) {
     if (_isOrderSuppressed(order.number)) {
       orders.removeWhere((item) => _tableKeysMatch(item.number, order.number));
       orders.refresh();
       return;
     }
 
+    SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
+        replaceDetail ? incoming : _preferDetailedOrder(incoming, previous);
+
     if (order.id <= 0) {
       final byNumber = orders.indexWhere(
         (item) => _tableKeysMatch(item.number, order.number),
       );
       if (byNumber >= 0) {
-        orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
+        orders[byNumber] = merged(order, orders[byNumber]);
         orders.refresh();
         return;
       }
@@ -558,7 +572,7 @@ class SessionController extends GetxController {
 
     final idx = orders.indexWhere((item) => item.id == order.id);
     if (idx >= 0) {
-      orders[idx] = _preferDetailedOrder(order, orders[idx]);
+      orders[idx] = merged(order, orders[idx]);
       orders.refresh();
       return;
     }
@@ -567,7 +581,7 @@ class SessionController extends GetxController {
       (item) => _tableKeysMatch(item.number, order.number),
     );
     if (byNumber >= 0) {
-      orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
+      orders[byNumber] = merged(order, orders[byNumber]);
       orders.refresh();
       return;
     }
@@ -576,7 +590,11 @@ class SessionController extends GetxController {
     orders.refresh();
   }
 
-  void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
+  /// Table-details mutations must not be overwritten by [_preferDetailedOrder]
+  /// (that helper keeps previous lines when the incoming ticket is empty —
+  /// which broke deleting the last article).
+  void updateOrderRow(SessionOrder order, {bool replaceDetail = false}) =>
+      _upsertOrderInList(order, replaceDetail: replaceDetail);
 
   static String normalizeTableKey(String value) =>
       OrderMapper.normalizeTableKey(value);

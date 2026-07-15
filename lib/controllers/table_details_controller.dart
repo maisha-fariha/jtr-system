@@ -1517,7 +1517,10 @@ class TableDetailsController extends GetxController {
       seedOrder = synced;
     }
 
-    Get.find<SessionController>().updateOrderRow(synced);
+    Get.find<SessionController>().updateOrderRow(
+      synced,
+      replaceDetail: true,
+    );
     orderUiRevision.value++;
 
     final id = synced.id;

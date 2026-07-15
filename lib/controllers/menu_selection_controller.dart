@@ -351,7 +351,10 @@ class MenuSelectionController extends GetxController {
         try {
           final updated = await _orderRepository.requestNextCourses(id);
           if (Get.isRegistered<SessionController>()) {
-            Get.find<SessionController>().updateOrderRow(updated);
+            Get.find<SessionController>().updateOrderRow(
+              updated,
+              replaceDetail: true,
+            );
           }
           if (context.mounted) {
             _showSnack(
@@ -484,7 +487,10 @@ class MenuSelectionController extends GetxController {
       orderId = updated.id;
 
       if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().updateOrderRow(updated);
+        Get.find<SessionController>().updateOrderRow(
+          updated,
+          replaceDetail: true,
+        );
       }
 
       Get.back(result: true);

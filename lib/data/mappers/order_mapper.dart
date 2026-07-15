@@ -238,18 +238,53 @@ class OrderMapper {
 
   /// Local cache copy that stays visible in the session list after all items
   /// were cancelled (backend may mark the order closed automatically).
+  ///
+  /// Always clears course [items] so a create-seed leftover never reappears in
+  /// UI when this shell is loaded from Hive / enrich.
   static Map<String, dynamic> asOpenEmptyOrderShell(
     Map<String, dynamic> orderDetail,
   ) {
-    final copy = Map<String, dynamic>.from(orderDetail);
-    if (isOrderClosedOrCancelled(copy) || isOrderFullyPaid(copy)) {
-      copy['status'] = preserveOpenOrderStatus(orderDetail);
-      copy['payment_status'] = 'unpaid';
-      copy['payment_status_detailed'] = 'unpaid';
-    }
-    copy['total_price'] = copy['total_price'] ?? '0';
-    copy['remaining_amount'] = copy['remaining_amount'] ?? '0';
+    final copy = withAllCourseItemsCleared(orderDetail);
+    copy['status'] = preserveOpenOrderStatus(orderDetail);
+    copy['payment_status'] = 'not_paid';
+    copy['payment_status_detailed'] = 'not_paid';
+    copy['total_price'] = '0';
+    copy['remaining_amount'] = '0';
+    copy['total_ht'] = copy['total_ht'] ?? '0';
+    copy['total_tva'] = copy['total_tva'] ?? '0';
+    copy['total_paid'] = '0';
     return copy;
+  }
+
+  /// Session / table-details presentation: hide create-seed-only tickets.
+  static SessionOrder sessionOrderHidingCreateSeed(
+    Map<String, dynamic> detail, {
+    int? seedProductId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    List<int> suivreSplitHints = const [],
+    int suivreCountHint = 0,
+  }) {
+    if (hasOnlyEmptyCreateSeed(detail, seedProductId: seedProductId)) {
+      final shell = asOpenEmptyOrderShell(detail);
+      final order = fromOrderDetail(
+        shell,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: suivreSplitHints,
+        suivreCountHint: suivreCountHint,
+      );
+      return order.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: formatPrice('0'),
+      );
+    }
+    return fromOrderDetail(
+      detail,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: suivreSplitHints,
+      suivreCountHint: suivreCountHint,
+    );
   }
 
   /// Union of [GET /api/orders] pages/lists by id (later list wins on duplicate).

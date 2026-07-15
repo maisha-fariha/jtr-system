@@ -6,6 +6,7 @@ import 'bindings/app_binding.dart';
 import 'controllers/theme_controller.dart';
 import 'core/storage/hive_storage.dart';
 import 'data/repositories/auth_repository.dart';
+import 'data/repositories/device_repository.dart';
 import 'routes/app_pages.dart';
 import 'utils/app_theme.dart';
 import 'utils/responsive.dart';
@@ -14,6 +15,8 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppBinding().dependencies();
   await Get.find<HiveStorage>().init();
+  // Restore device headers before any API call (login session restore too).
+  await Get.find<DeviceRepository>().restoreRuntimeFromStorage();
   await Get.find<AuthRepository>().restoreSessionOnAppStart();
   runApp(const JtrSystemApp());
 }
@@ -41,7 +44,7 @@ class JtrSystemApp extends StatelessWidget {
                 ? ThemeMode.dark
                 : ThemeMode.light,
             getPages: AppPages.routes,
-            initialRoute: AppRoutes.home,
+            initialRoute: AppRoutes.deviceGate,
             debugShowCheckedModeBanner: false,
           ),
         );

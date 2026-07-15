@@ -22,9 +22,28 @@ class ApiClient extends GetxService {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
+          options.headers['Accept'] = 'application/json';
+          options.headers['Content-Type'] = 'application/json';
+          options.headers['X-Tenant-Schema'] = ApiConfig.tenantSchema;
+
+          final deviceId = ApiConfig.deviceId;
+          final deviceToken = ApiConfig.deviceToken;
+          if (deviceId != null && deviceId.isNotEmpty) {
+            options.headers['X-Device-Id'] = deviceId;
+          } else {
+            options.headers.remove('X-Device-Id');
+          }
+          if (deviceToken != null && deviceToken.isNotEmpty) {
+            options.headers['X-Device-Token'] = deviceToken;
+          } else {
+            options.headers.remove('X-Device-Token');
+          }
+
           final token = _authToken;
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
+          } else {
+            options.headers.remove('Authorization');
           }
           handler.next(options);
         },
@@ -41,12 +60,23 @@ class ApiClient extends GetxService {
     _authToken = token;
   }
 
+  /// Sync Dio base URL / default tenant after restore or successful activation.
+  void applyRuntimeConfig() {
+    _dio.options.baseUrl = ApiConfig.baseUrl;
+    _dio.options.headers['X-Tenant-Schema'] = ApiConfig.tenantSchema;
+  }
+
   Future<Response<T>> get<T>(
     String path, {
     Map<String, dynamic>? queryParameters,
+    Options? options,
   }) async {
     try {
-      return await _dio.get<T>(path, queryParameters: queryParameters);
+      return await _dio.get<T>(
+        path,
+        queryParameters: queryParameters,
+        options: options,
+      );
     } on DioException catch (error) {
       throw _mapError(error);
     }
@@ -56,12 +86,14 @@ class ApiClient extends GetxService {
     String path, {
     Object? data,
     Map<String, dynamic>? queryParameters,
+    Options? options,
   }) async {
     try {
       return await _dio.post<T>(
         path,
         data: data,
         queryParameters: queryParameters,
+        options: options,
       );
     } on DioException catch (error) {
       throw _mapError(error);

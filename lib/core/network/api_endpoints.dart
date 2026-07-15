@@ -1,6 +1,9 @@
 class ApiEndpoints {
   ApiEndpoints._();
 
+  static const deviceSession = '/api/devices/session';
+  static const deviceActivate = '/api/devices/activate';
+
   static const loginUsers = '/api/auth/login-users';
   static const loginRoles = '/api/auth/login-roles';
   static const login = '/api/auth/login';

@@ -458,81 +458,77 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                                 context,
                                 bottom: 10,
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '1x ${item.name}',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize:
-                                          JtrResponsive.getResponsiveFontSize(
-                                            context,
-                                            12,
-                                          ),
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.darkText,
-                                      height: 1.25,
-                                    ),
+                              child: Text(
+                                '1x ${item.name}',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    12,
                                   ),
-                                  if (selection.messageForCourse(
-                                        item.courseNumber,
-                                      ) !=
-                                      null) ...[
-                                    JtrResponsive.getResponsiveSpacing(
-                                      context,
-                                      2,
-                                    ),
-                                    InkWell(
-                                      onTap: () =>
-                                          controller.editMessageForCourse(
-                                            context: context,
-                                            courseNumber: item.courseNumber,
-                                          ),
-                                      borderRadius: BorderRadius.circular(
-                                        JtrResponsive.getResponsiveRadius(
-                                          context,
-                                          6,
-                                        ),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              selection.messageForCourse(
-                                                item.courseNumber,
-                                              )!,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                fontSize:
-                                                    JtrResponsive.getResponsiveFontSize(
-                                                      context,
-                                                      11,
-                                                    ),
-                                                fontWeight: FontWeight.w600,
-                                                color: AppTheme.primary,
-                                                letterSpacing: 0.3,
-                                              ),
-                                            ),
-                                          ),
-                                          Icon(
-                                            Icons.edit_outlined,
-                                            size:
-                                                JtrResponsive.getResponsiveSize(
-                                                  context,
-                                                  14,
-                                                ),
-                                            color: AppTheme.primary,
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ],
+                                  fontWeight: FontWeight.w700,
+                                  color: AppTheme.darkText,
+                                  height: 1.25,
+                                ),
                               ),
                             ),
+                          if (selection.messageForCourse(
+                                entry.key.number,
+                              ) !=
+                              null) ...[
+                            JtrResponsive.getResponsiveSpacing(context, 2),
+                            Padding(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                bottom: 10,
+                              ),
+                              child: InkWell(
+                                onTap: () => controller.editMessageForCourse(
+                                  context: context,
+                                  courseNumber: entry.key.number,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  JtrResponsive.getResponsiveRadius(
+                                    context,
+                                    6,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        selection.messageForCourse(
+                                          entry.key.number,
+                                        )!,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize:
+                                              JtrResponsive.getResponsiveFontSize(
+                                            context,
+                                            11,
+                                          ),
+                                          fontWeight: FontWeight.w500,
+                                          color: AppTheme.textSecondary,
+                                          letterSpacing: 0.3,
+                                        ),
+                                      ),
+                                    ),
+                                    Icon(
+                                      Icons.edit_outlined,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        14,
+                                      ),
+                                      color: AppTheme.primary,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ],
                     ),

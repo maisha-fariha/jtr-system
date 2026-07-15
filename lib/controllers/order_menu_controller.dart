@@ -5,6 +5,7 @@ import '../models/menu_active_selection.dart';
 import '../models/menu_category.dart';
 import '../models/menu_item.dart';
 import '../models/preset_menu.dart';
+import '../utils/app_snackbar.dart';
 
 class OrderMenuController extends GetxController {
   final currentTable = ''.obs;
@@ -95,7 +96,7 @@ class OrderMenuController extends GetxController {
         .length;
 
     if (currentlySelectedInCourse >= maxAllowed) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Limite atteinte',
         'Vous pouvez sélectionner au maximum $maxAllowed article(s) pour ce choix.',
         snackPosition: SnackPosition.BOTTOM,
@@ -133,7 +134,7 @@ class OrderMenuController extends GetxController {
 
   void confirmOrder() {
     if (selectedCount == 0) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Sélection vide',
         'Veuillez sélectionner au moins un article.',
         snackPosition: SnackPosition.BOTTOM,

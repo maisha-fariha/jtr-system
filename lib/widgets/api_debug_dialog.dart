@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:get/get.dart';
+import '../utils/app_snackbar.dart';
 
 /// User-facing error helper. Logs stay in the console only — no debug popup.
 class ApiDebugDialog {
@@ -11,11 +11,9 @@ class ApiDebugDialog {
   }) {
     debugPrint('[$title]\n$body');
     final message = _userFacingMessage(body);
-    Get.snackbar(
+    AppSnackbar.show(
       title,
       message,
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
       duration: const Duration(seconds: 3),
     );
   }

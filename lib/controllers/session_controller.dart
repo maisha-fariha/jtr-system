@@ -21,6 +21,7 @@ import '../widgets/table_number_dialog.dart';
 import '../widgets/table_occupied_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
+import '../utils/app_snackbar.dart';
 
 enum SessionAction {
   nouvelleCommande,
@@ -1386,24 +1387,6 @@ class SessionController extends GetxController {
     String message, {
     BuildContext? context,
   }) {
-    if (context != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$title — $message'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    Get.snackbar(
-      title,
-      message,
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+    AppSnackbar.show(title, message, context: context);
   }
 }

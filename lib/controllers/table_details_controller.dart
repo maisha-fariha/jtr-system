@@ -18,6 +18,7 @@ import '../models/session_order.dart';
 import '../models/menu_active_selection.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
+import '../utils/app_snackbar.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
@@ -526,7 +527,7 @@ class TableDetailsController extends GetxController {
   void selectOrderLine(int lineIndex, OrderProduct line) {
     final catalog = catalogProductByName(line.name);
     if (catalog == null) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Article non sélectionnable',
         'Cet article ne peut pas être modifié via le clavier.',
         snackPosition: SnackPosition.BOTTOM,
@@ -725,7 +726,7 @@ class TableDetailsController extends GetxController {
     if (line == null) {
       isBottomPanelExpanded.value = true;
       showPaymentOptions.value = false;
-      Get.snackbar(
+      AppSnackbar.show(
         'Sélectionnez une ligne',
         'Touchez une ligne dans la commande avant le clavier.',
         snackPosition: SnackPosition.BOTTOM,
@@ -737,7 +738,7 @@ class TableDetailsController extends GetxController {
 
     final product = catalogProductByName(line.name);
     if (product?.isComposed == true) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Produit composé',
         'Ce produit se configure via le sélecteur de menu.',
         snackPosition: SnackPosition.BOTTOM,
@@ -769,7 +770,7 @@ class TableDetailsController extends GetxController {
   void onToolbarIconTap(IconData icon, {required BuildContext context}) {
     if (!isToolbarIconEnabled(icon)) {
       if (icon == Icons.send_outlined) {
-        Get.snackbar(
+        AppSnackbar.show(
           'Envoi indisponible',
           'Ajoutez des articles à une commande active avant l\'envoi.',
           snackPosition: SnackPosition.BOTTOM,
@@ -841,7 +842,7 @@ class TableDetailsController extends GetxController {
   Future<void> printTicket({required BuildContext context}) async {
     final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -878,19 +879,19 @@ class TableDetailsController extends GetxController {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
       }
-      Get.snackbar('Erreur', e.message);
+      AppSnackbar.show('Erreur', e.message);
     } catch (_) {
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();
       }
-      Get.snackbar('Erreur', 'Impossible d\'imprimer le ticket.');
+      AppSnackbar.show('Erreur', 'Impossible d\'imprimer le ticket.');
     }
   }
 
   Future<void> sendToKitchen({required BuildContext context}) async {
     final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -911,7 +912,7 @@ class TableDetailsController extends GetxController {
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);
           }
-          Get.snackbar(
+          AppSnackbar.show(
             'Envoyé',
             'La commande a été envoyée en cuisine.',
             snackPosition: SnackPosition.BOTTOM,
@@ -924,7 +925,7 @@ class TableDetailsController extends GetxController {
           }
           ApiDebugDialog.show(title: 'Erreur envoi', body: e.message);
         } catch (_) {
-          Get.snackbar(
+          AppSnackbar.show(
             'Erreur',
             'Impossible d\'envoyer la commande en cuisine.',
             snackPosition: SnackPosition.BOTTOM,
@@ -955,13 +956,13 @@ class TableDetailsController extends GetxController {
   Future<void> payOrder({required BuildContext context, required bool isCash}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
     final currentOrder = order;
     if (currentOrder == null || currentOrder.products.isEmpty) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Paiement indisponible',
         'Aucun article à encaisser sur cette commande.',
         snackPosition: SnackPosition.BOTTOM,
@@ -973,7 +974,7 @@ class TableDetailsController extends GetxController {
     if (!paymentModesReady.value) {
       await _loadPaymentModes();
       if (!paymentModesReady.value) {
-        Get.snackbar(
+        AppSnackbar.show(
           'Paiement indisponible',
           paymentModesError.value ??
               'Les modes de paiement ne sont pas chargés.',
@@ -1009,7 +1010,7 @@ class TableDetailsController extends GetxController {
           showPaymentOptions.value = false;
           isBottomPanelExpanded.value = true;
           activeToolbarIcon.value = Icons.grid_view;
-          Get.snackbar(
+          AppSnackbar.show(
             'Paiement enregistré',
             'Le paiement en $label a été enregistré.',
             snackPosition: SnackPosition.BOTTOM,
@@ -1017,7 +1018,7 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } on ApiException catch (e) {
-          Get.snackbar(
+          AppSnackbar.show(
             'Erreur paiement',
             e.message,
             snackPosition: SnackPosition.BOTTOM,
@@ -1026,7 +1027,7 @@ class TableDetailsController extends GetxController {
           );
           debugPrint(_orderRepository.lastPaymentLog);
         } catch (e) {
-          Get.snackbar(
+          AppSnackbar.show(
             'Erreur',
             'Impossible d\'enregistrer le paiement.',
             snackPosition: SnackPosition.BOTTOM,
@@ -1044,12 +1045,12 @@ class TableDetailsController extends GetxController {
   Future<void> addSuivreAfterLatestItems() async {
     final currentOrder = order;
     if (currentOrder == null) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
     if (currentOrder.products.isEmpty) {
-      Get.snackbar(
+      AppSnackbar.show(
         'À SUIVRE',
         'Ajoutez d\'abord un article avant d\'ouvrir la suite.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1066,7 +1067,7 @@ class TableDetailsController extends GetxController {
     final afterCount = OrderMapper.suivreSeparatorCount(displayEntries);
 
     if (afterCount <= beforeCount) {
-      Get.snackbar(
+      AppSnackbar.show(
         'À SUIVRE',
         'La suite est déjà ouverte.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1103,13 +1104,13 @@ class TableDetailsController extends GetxController {
   Future<void> requestNextCourse({BuildContext? context}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
     final sectionIndex = selectedSuivreSection.value;
     if (sectionIndex == null || sectionIndex <= 0) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Sélection requise',
         'Sélectionnez un À SUIVRE avant de demander.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1122,7 +1123,7 @@ class TableDetailsController extends GetxController {
     if (currentOrder != null &&
         !isSelectedSectionRequestable(currentOrder.displayEntries)) {
       selectedSuivreSection.value = null;
-      Get.snackbar(
+      AppSnackbar.show(
         'Sélection invalide',
         'Ce service est déjà demandé. Sélectionnez un À SUIVRE ouvert.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1143,7 +1144,7 @@ class TableDetailsController extends GetxController {
     final demandeCourseNumber = courseNumber != null ? courseNumber + 1 : null;
 
     if (demandeCourseNumber == null || demandeCourseNumber <= 0) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Erreur',
         'Impossible d\'identifier le service à demander.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1171,7 +1172,7 @@ class TableDetailsController extends GetxController {
           if (selectedSuivreSection.value == sectionIndex) {
             selectedSuivreSection.value = null;
           }
-          Get.snackbar(
+          AppSnackbar.show(
             'Demande envoyée',
             'Le service a été envoyé en cuisine.',
             snackPosition: SnackPosition.BOTTOM,
@@ -1184,7 +1185,7 @@ class TableDetailsController extends GetxController {
             body: e.message,
           );
         } catch (_) {
-          Get.snackbar(
+          AppSnackbar.show(
             'Erreur',
             'Impossible d\'envoyer la demande.',
             snackPosition: SnackPosition.BOTTOM,
@@ -1267,7 +1268,7 @@ class TableDetailsController extends GetxController {
       debugPrint(_orderRepository.lastAddItemLog);
       ApiDebugDialog.show(title: 'Erreur ajout article', body: e.message);
     } catch (_) {
-      Get.snackbar('Erreur', 'Impossible d\'ajouter l\'article.');
+      AppSnackbar.show('Erreur', 'Impossible d\'ajouter l\'article.');
     }
   }
 
@@ -1574,7 +1575,7 @@ class TableDetailsController extends GetxController {
   Future<void> offerProduct(int productIndex) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -1592,7 +1593,7 @@ class TableDetailsController extends GetxController {
         lineIndex: productIndex,
       );
       _syncOrderInSession(updated, orderNumber);
-      Get.snackbar(
+      AppSnackbar.show(
         'Offert',
         '${currentOrder.products[productIndex].name} a été offert.',
         snackPosition: SnackPosition.BOTTOM,
@@ -1603,7 +1604,7 @@ class TableDetailsController extends GetxController {
       debugPrint(_orderRepository.lastAddItemLog);
       ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
-      Get.snackbar('Erreur', 'Impossible d\'offrir l\'article.');
+      AppSnackbar.show('Erreur', 'Impossible d\'offrir l\'article.');
     } finally {
       isAddingProduct.value = false;
     }
@@ -1612,7 +1613,7 @@ class TableDetailsController extends GetxController {
   Future<void> _mutateLineQuantity(int productIndex, int delta) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -1643,7 +1644,7 @@ class TableDetailsController extends GetxController {
   Future<void> cancelSuivreSection(int sectionIndex) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -1697,7 +1698,7 @@ class TableDetailsController extends GetxController {
       debugPrint(_orderRepository.lastAddItemLog);
       ApiDebugDialog.show(title: 'Erreur annulation', body: e.message);
     } catch (_) {
-      Get.snackbar('Erreur', 'Impossible d\'annuler cette suite.');
+      AppSnackbar.show('Erreur', 'Impossible d\'annuler cette suite.');
     } finally {
       isAddingProduct.value = false;
     }
@@ -1924,6 +1925,6 @@ class TableDetailsController extends GetxController {
       ApiDebugDialog.show(title: 'Erreur', body: error.message);
       return;
     }
-    Get.snackbar('Erreur', 'Impossible de $action.');
+    AppSnackbar.show('Erreur', 'Impossible de $action.');
   }
 }

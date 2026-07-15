@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../core/config/api_config.dart';
 import '../controllers/theme_controller.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/device_repository.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -100,8 +101,14 @@ class HomePage extends StatelessWidget {
                       width: double.infinity,
                       height: JtrResponsive.getResponsiveHeight(context, 56),
                       child: ElevatedButton(
-                        onPressed: () {
+                        onPressed: () async {
+                          final device = Get.find<DeviceRepository>();
                           final auth = Get.find<AuthRepository>();
+                          final hasDevice = await device.hasStoredCredentials;
+                          if (!hasDevice) {
+                            Get.offNamed(AppRoutes.deviceGate);
+                            return;
+                          }
                           if (auth.isAuthenticated) {
                             Get.offNamed(AppRoutes.session);
                             return;

@@ -2,16 +2,19 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:get/get.dart';
 
 import '../core/network/api_client.dart';
+import '../core/storage/device_secure_storage.dart';
 import '../core/storage/hive_storage.dart';
 import '../data/datasources/auth_local_datasource.dart';
 import '../data/datasources/auth_remote_datasource.dart';
 import '../data/datasources/catalog_local_datasource.dart';
 import '../data/datasources/catalog_remote_datasource.dart';
-import '../data/datasources/order_local_datasource.dart';
-import '../data/datasources/order_remote_datasource.dart';
+import '../data/datasources/device_remote_datasource.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
+import '../data/repositories/device_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/datasources/order_local_datasource.dart';
+import '../data/datasources/order_remote_datasource.dart';
 import '../data/datasources/session_datasource.dart';
 import '../data/repositories/session_repository.dart';
 import '../services/connectivity_service.dart';
@@ -31,6 +34,19 @@ class AppBinding extends Bindings {
     );
     Get.lazyPut<ApiClient>(() => ApiClient(), fenix: true);
     Get.lazyPut<HiveStorage>(() => HiveStorage(), fenix: true);
+    Get.lazyPut<DeviceSecureStorage>(() => DeviceSecureStorage(), fenix: true);
+    Get.lazyPut<DeviceRemoteDataSource>(
+      () => DeviceRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<DeviceRepository>(
+      () => DeviceRepository(
+        remote: Get.find<DeviceRemoteDataSource>(),
+        secureStorage: Get.find<DeviceSecureStorage>(),
+        apiClient: Get.find<ApiClient>(),
+      ),
+      fenix: true,
+    );
     Get.lazyPut<AuthLocalDataSource>(
       () => AuthLocalDataSource(Get.find<HiveStorage>()),
       fenix: true,

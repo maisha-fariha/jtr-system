@@ -43,6 +43,10 @@ dependencies:
   flutter_screenutil: ^5.9.0
   gems_responsive:
     path: flutter_gems/packages/gems_responsive
+  flutter_secure_storage: ^10.3.1
+  image: ^4.8.0
+  zxing2: ^0.2.4
+  file_picker: ^10.1.2
 
 dev_dependencies:
   flutter_test:

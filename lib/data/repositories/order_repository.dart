@@ -107,18 +107,34 @@ class OrderRepository {
       // Create-seed only: keep ticket empty in UI/cache; strip on API best-effort.
       final onlySeed =
           OrderMapper.hasOnlyEmptyCreateSeed(detail, seedProductId: seedId);
-      if (onlySeed) {
+      final markedEmptyShell = _emptyShellDisplayOrderIds.contains(orderId);
+      final hasRealItems = OrderMapper.hasRealNonSeedVisibleItems(
+        detail,
+        seedProductId: seedId,
+      );
+
+      if (markedEmptyShell && !hasRealItems) {
+        // Stay empty until the waiter adds a real product — never flash seed
+        // when background strip has not cleared the API yet.
+        _rememberEmptyShellDisplay(orderId);
+        if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+          final stripLog = StringBuffer(
+            '── getOrderDetail: empty-shell hide+strip order=$orderId ──',
+          );
+          unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+        }
+        detail = OrderMapper.asOpenEmptyOrderShell(detail);
+      } else if (onlySeed) {
         _rememberEmptyShellDisplay(orderId);
         final stripLog = StringBuffer(
           '── getOrderDetail: hide+strip create seed order=$orderId ──',
         );
         unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
         detail = OrderMapper.asOpenEmptyOrderShell(detail);
-      } else if (_emptyShellDisplayOrderIds.contains(orderId) &&
-          OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-        detail = OrderMapper.asOpenEmptyOrderShell(detail);
       } else {
-        _forgetEmptyShellDisplay(orderId);
+        if (markedEmptyShell) {
+          _forgetEmptyShellDisplay(orderId);
+        }
         if (lastEmptyOrderSeedProductId != null &&
             !OrderMapper.containsVisibleProductId(
               detail,
@@ -161,6 +177,10 @@ class OrderRepository {
       message: 'Détails de commande indisponibles hors ligne.',
     );
   }
+
+  /// Fresh creates stay empty in UI until a real (non-seed) line is added.
+  bool shouldDisplayAsEmptyCreateShell(int orderId) =>
+      orderId > 0 && _emptyShellDisplayOrderIds.contains(orderId);
 
   Future<int?> _resolveSeedProductIdForDisplay() async {
     if (lastEmptyOrderSeedProductId != null &&
@@ -372,12 +392,6 @@ class OrderRepository {
       );
     }
 
-    if (table.hasActiveOrder) {
-      throw ApiException(
-        message: 'La table $tableNumber a déjà une commande active.',
-      );
-    }
-
     final resolvedSalesZoneId = OrderMapper.inferSalesZoneId(
       tables,
       preferred: salesZoneId,
@@ -391,14 +405,100 @@ class OrderRepository {
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
 
-    // Session-only create can leave a lock with no active_order. Clear our
-    // own orphan session before starting a fresh one.
-    if (OrderMapper.canReclaimOrphanTableSession(
+    // After cancel, tables/list can still list our active_order briefly.
+    // Reopen that order when still open; if already closed, clear session and
+    // continue with a fresh POST.
+    final ownActiveId = OrderMapper.ownReusableActiveOrderId(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    );
+    if (ownActiveId != null) {
+      apiLog.writeln('── Reclaim own active_order=$ownActiveId ──');
+      try {
+        final detail = await _remote.fetchOrderDetail(ownActiveId);
+        if (!OrderMapper.isOrderClosedOrCancelled(detail)) {
+          final seedId = await _resolveSeedProductIdForDisplay();
+          final onlySeed = OrderMapper.hasOnlyEmptyCreateSeed(
+            detail,
+            seedProductId: seedId,
+          );
+          // Seed-only leftover after cancel/recreate → show empty + strip.
+          if (onlySeed || OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+            _rememberEmptyShellDisplay(ownActiveId);
+            if (onlySeed) {
+              unawaited(
+                _stripCreateSeedInBackground(
+                  ownActiveId,
+                  detail,
+                  apiLog,
+                ),
+              );
+            }
+            final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+            await _local.saveOrderDetail(ownActiveId, shell);
+            await _sessionLocal.upsertOpenOrderInList(shell);
+            final displayNumber = OrderMapper.displayKey(
+              orderId: ownActiveId,
+              tableNumber: table.tableNumber,
+            );
+            final mapped = OrderMapper.fromOrderDetail(shell).copyWith(
+              id: ownActiveId,
+              number: displayNumber,
+              products: const [],
+              displayEntries: const [],
+              itemCount: 0,
+              total: OrderMapper.formatPrice('0'),
+            );
+            lastCreateOrderLog = apiLog.toString();
+            logOrderFlow(
+              'createTableOrder RECLAIM empty shell orderId=$ownActiveId '
+              'table=$tableNumber',
+            );
+            return CreateTableOrderResult(
+              order: mapped,
+              apiLog: apiLog.toString(),
+            );
+          }
+
+          // Still open with real articles — reopen as-is.
+          await _local.saveOrderDetail(ownActiveId, detail);
+          await _sessionLocal.upsertOpenOrderInList(detail);
+          final displayNumber = OrderMapper.displayKey(
+            orderId: ownActiveId,
+            tableNumber: table.tableNumber,
+          );
+          final mapped = OrderMapper.fromOrderDetail(detail).copyWith(
+            id: ownActiveId,
+            number: displayNumber,
+          );
+          lastCreateOrderLog = apiLog.toString();
+          logOrderFlow(
+            'createTableOrder RECLAIM own orderId=$ownActiveId table=$tableNumber',
+          );
+          return CreateTableOrderResult(
+            order: mapped,
+            apiLog: apiLog.toString(),
+          );
+        }
+        await _local.removeOrderDetail(ownActiveId);
+        await _sessionLocal.removeOpenOrderFromList(ownActiveId);
+      } catch (e) {
+        apiLog.writeln('── Reclaim active_order failed: $e ──');
+      }
+      await _clearOrphanTableSession(table.id, apiLog: apiLog);
+    } else if (OrderMapper.canReclaimOrphanTableSession(
       tables,
       tableNumber,
       waiterId: waiterId,
     )) {
+      // Session-only create can leave a lock with no active_order. Clear our
+      // own orphan session before starting a fresh one.
       await _clearOrphanTableSession(table.id, apiLog: apiLog);
+    } else if (table.hasActiveOrder) {
+      throw ApiException(
+        message: 'La table $tableNumber a déjà une commande active.',
+      );
     }
 
     await _tryStartTableSession(

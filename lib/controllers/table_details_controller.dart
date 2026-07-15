@@ -321,12 +321,30 @@ class TableDetailsController extends GetxController {
   }
 
   SessionOrder? get order {
-    if (!Get.isRegistered<SessionController>()) return seedOrder;
-    return Get.find<SessionController>().findOrder(
-          orderNumber: orderNumber,
-          orderId: orderId,
-        ) ??
-        seedOrder;
+    SessionOrder? raw;
+    if (Get.isRegistered<SessionController>()) {
+      raw = Get.find<SessionController>().findOrder(
+        orderNumber: orderNumber,
+        orderId: orderId,
+      );
+    }
+    raw ??= seedOrder;
+    if (raw == null) return null;
+
+    // New creates keep an empty shell while the API still has the required
+    // seed line — never flash DIVER BOISSON / 0€ in table details.
+    if (raw.id > 0 &&
+        Get.isRegistered<OrderRepository>() &&
+        Get.find<OrderRepository>().shouldDisplayAsEmptyCreateShell(raw.id)) {
+      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
+      return raw.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+    }
+    return raw;
   }
 
   int? get resolvedOrderId {

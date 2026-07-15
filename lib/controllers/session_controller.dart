@@ -500,12 +500,21 @@ class SessionController extends GetxController {
         try {
           final cached = _orderRepository.cachedOrderDetail(summary.id);
           if (cached != null) {
-            final detail = OrderMapper.sessionOrderHidingCreateSeed(
+            final seedId = _orderRepository.lastEmptyOrderSeedProductId;
+            var detail = OrderMapper.sessionOrderHidingCreateSeed(
               cached,
-              seedProductId: _orderRepository.lastEmptyOrderSeedProductId,
+              seedProductId: seedId,
             ).copyWith(
               id: summary.id,
             );
+            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
+              detail = detail.copyWith(
+                products: const [],
+                displayEntries: const [],
+                itemCount: 0,
+                total: OrderMapper.formatPrice('0'),
+              );
+            }
             if (_stillInList(summary.id)) {
               _upsertOrderInList(detail);
             }
@@ -535,6 +544,10 @@ class SessionController extends GetxController {
     return false;
   }
 
+  bool _ordersContainTable(String tableNumber) {
+    return orders.any((o) => _tableKeysMatch(o.number, tableNumber));
+  }
+
   /// After delete we suppress that table briefly; recreating must clear it
   /// or the new order never appears in the list (and row sync is dropped).
   void _clearSuppressedTable(String tableNumber) {
@@ -553,40 +566,53 @@ class SessionController extends GetxController {
       return;
     }
 
+    // Never let create-seed flash into the session list / table details.
+    var safeOrder = order;
+    if (order.id > 0 &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id) &&
+        (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+      safeOrder = order.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+    }
+
     SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
         replaceDetail ? incoming : _preferDetailedOrder(incoming, previous);
 
-    if (order.id <= 0) {
+    if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(
-        (item) => _tableKeysMatch(item.number, order.number),
+        (item) => _tableKeysMatch(item.number, safeOrder.number),
       );
       if (byNumber >= 0) {
-        orders[byNumber] = merged(order, orders[byNumber]);
+        orders[byNumber] = merged(safeOrder, orders[byNumber]);
         orders.refresh();
         return;
       }
-      orders.insert(0, order);
+      orders.insert(0, safeOrder);
       orders.refresh();
       return;
     }
 
-    final idx = orders.indexWhere((item) => item.id == order.id);
+    final idx = orders.indexWhere((item) => item.id == safeOrder.id);
     if (idx >= 0) {
-      orders[idx] = merged(order, orders[idx]);
+      orders[idx] = merged(safeOrder, orders[idx]);
       orders.refresh();
       return;
     }
 
     final byNumber = orders.indexWhere(
-      (item) => _tableKeysMatch(item.number, order.number),
+      (item) => _tableKeysMatch(item.number, safeOrder.number),
     );
     if (byNumber >= 0) {
-      orders[byNumber] = merged(order, orders[byNumber]);
+      orders[byNumber] = merged(safeOrder, orders[byNumber]);
       orders.refresh();
       return;
     }
 
-    orders.insert(0, order);
+    orders.insert(0, safeOrder);
     orders.refresh();
   }
 
@@ -808,6 +834,9 @@ class SessionController extends GetxController {
       );
       return;
     }
+
+    // Delete suppress must not block the recreate upsert / details open.
+    _clearSuppressedTable(tableNumber);
 
     isCreatingOrder.value = true;
     SessionOrder? created;
@@ -1210,8 +1239,16 @@ class SessionController extends GetxController {
       orders.refresh();
       _clearUiStateForOrder(order.number);
 
-      // Occupancy cache only; keep session row order stable.
-      unawaited(_sessionRepository.getTablesList(forceRefresh: true));
+      // Occupancy cache only; keep session row order stable. Clear suppress once
+      // tables refresh so immediate recreate is not filtered out of the list.
+      unawaited(() async {
+        try {
+          await _sessionRepository.getTablesList(forceRefresh: true);
+        } catch (_) {}
+        if (!_ordersContainTable(order.number)) {
+          _clearSuppressedTable(order.number);
+        }
+      }());
     } on ApiException catch (e) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),

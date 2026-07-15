@@ -28,19 +28,12 @@ class TableDetailsPage extends GetView<TableDetailsController> {
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Obx(() {
-          final sessionRegistered = Get.isRegistered<SessionController>();
-          final session =
-              sessionRegistered ? Get.find<SessionController>() : null;
-          if (session != null) {
-            session.orders.length;
+          if (Get.isRegistered<SessionController>()) {
+            Get.find<SessionController>().orders.length;
           }
+          controller.orderUiRevision.value;
 
-          final order = session?.findOrder(
-                orderNumber: controller.orderNumber,
-                orderId: controller.orderId,
-              ) ??
-              controller.seedOrder ??
-              controller.order;
+          final order = controller.order;
 
           if (order == null) {
             return const ColoredBox(
@@ -59,11 +52,7 @@ class TableDetailsPage extends GetView<TableDetailsController> {
                 child: Obx(() {
                   final expanded = controller.isBottomPanelExpanded.value;
                   final showPayment = controller.showPaymentOptions.value;
-                  SessionOrder? currentOrder = session?.findOrder(
-                    orderNumber: controller.orderNumber,
-                    orderId: controller.orderId,
-                  );
-                  currentOrder ??= order;
+                  controller.orderUiRevision.value;
 
                   final showCatalog =
                       showPayment || expanded;
@@ -294,30 +283,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
     attemptScroll(0);
   }
 
-  SessionOrder? _resolveOrder() {
-    if (!Get.isRegistered<SessionController>()) return null;
-    return Get.find<SessionController>().findOrder(
-      orderNumber: orderNumber,
-      orderId: controller.orderId,
-    );
-  }
-
-  SessionOrder? _resolveOrderFromSession(SessionController session) {
-    final targetId = controller.resolvedOrderId;
-    for (final candidate in session.orders) {
-      if (targetId != null && targetId > 0 && candidate.id == targetId) {
-        return candidate;
-      }
-    }
-    for (final candidate in session.orders) {
-      if (candidate.number == orderNumber ||
-          SessionController.normalizeTableKey(candidate.number) ==
-              SessionController.normalizeTableKey(orderNumber)) {
-        return candidate;
-      }
-    }
-    return _resolveOrder();
-  }
+  SessionOrder? _resolveOrder() => controller.order;
 
   TextStyle _headerStyle(BuildContext context) => TextStyle(
         fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
@@ -399,16 +365,14 @@ class _OrderSummaryState extends State<_OrderSummary> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (!Get.isRegistered<SessionController>()) {
-        return const SizedBox.shrink();
+      if (Get.isRegistered<SessionController>()) {
+        Get.find<SessionController>().orders.length;
       }
-
-      final session = Get.find<SessionController>();
-      session.orders.length;
+      controller.orderUiRevision.value;
       controller.suivreUiRevision.value;
       controller.selectedSuivreSection.value;
 
-      final resolvedOrder = _resolveOrderFromSession(session);
+      final resolvedOrder = _resolveOrder();
       if (resolvedOrder == null) {
         return const SizedBox.shrink();
       }
@@ -1381,13 +1345,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
         );
       }
 
-      SessionOrder? currentOrder;
-      if (Get.isRegistered<SessionController>()) {
-        currentOrder = Get.find<SessionController>().findOrder(
-          orderNumber: controller.orderNumber,
-          orderId: controller.orderId,
-        );
-      }
+      final currentOrder = controller.order;
 
       final isCompact = JtrResponsive.isCompactSquare(context);
       final isLarge = JtrResponsive.isLargeDevice(context);

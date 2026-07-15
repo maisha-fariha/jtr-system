@@ -320,6 +320,22 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  /// Presentation-only: hide create-seed while the API still requires it.
+  SessionOrder forDisplay(SessionOrder raw) {
+    if (raw.id > 0 &&
+        Get.isRegistered<OrderRepository>() &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
+      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
+      return raw.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+    }
+    return raw;
+  }
+
   SessionOrder? get order {
     SessionOrder? raw;
     if (Get.isRegistered<SessionController>()) {
@@ -330,21 +346,7 @@ class TableDetailsController extends GetxController {
     }
     raw ??= seedOrder;
     if (raw == null) return null;
-
-    // New creates keep an empty shell while the API still has the required
-    // seed line — never flash DIVER BOISSON / 0€ in table details.
-    if (raw.id > 0 &&
-        Get.isRegistered<OrderRepository>() &&
-        Get.find<OrderRepository>().shouldDisplayAsEmptyCreateShell(raw.id)) {
-      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
-      return raw.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
-    }
-    return raw;
+    return forDisplay(raw);
   }
 
   int? get resolvedOrderId {
@@ -1523,8 +1525,10 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
-    final synced = updated.copyWith(
-      displayEntries: displayEntries,
+    final synced = forDisplay(
+      updated.copyWith(
+        displayEntries: displayEntries,
+      ),
     );
 
     // Keep seed in sync so back-navigation always has the latest total.

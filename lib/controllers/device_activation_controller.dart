@@ -1,24 +1,29 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/config/api_config.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/device_activation_mapper.dart';
+import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
+import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
 
 /// TODO: set to `false` when `/api/devices/*` is deployed.
 const bool kBypassDeviceActivation = true;
 
 class DeviceActivationController extends GetxController {
-  DeviceActivationController({required DeviceRepository deviceRepository})
-      : _deviceRepository = deviceRepository;
+  DeviceActivationController({
+    required DeviceRepository deviceRepository,
+    required AuthRepository authRepository,
+  })  : _deviceRepository = deviceRepository,
+        _authRepository = authRepository;
 
   final DeviceRepository _deviceRepository;
+  final AuthRepository _authRepository;
 
   final codeController = TextEditingController();
   final tenantController = TextEditingController();
@@ -80,7 +85,7 @@ class DeviceActivationController extends GetxController {
       debugPrint(
         '════════ DEVICE ACTIVATE BYPASS → ${AppRoutes.connect} ════════',
       );
-      Get.offAllNamed(AppRoutes.connect);
+      await _goToConnectRequiringLogin();
       return;
     }
 
@@ -105,7 +110,7 @@ class DeviceActivationController extends GetxController {
         apiBaseUrl: importedApiBaseUrl.value ??
             '${ApiConfig.normalizeOriginBaseUrl(ApiConfig.defaultBaseUrl)}/api',
       );
-      Get.offAllNamed(AppRoutes.connect);
+      await _goToConnectRequiringLogin();
     } on ApiException catch (e) {
       errorMessage.value = e.message;
     } on FormatException catch (e) {
@@ -115,5 +120,15 @@ class DeviceActivationController extends GetxController {
     } finally {
       isSubmitting.value = false;
     }
+  }
+
+  /// After device activation, never skip login because of a restored Hive token
+  /// (Android backup / reinstall often keeps the previous auth session).
+  Future<void> _goToConnectRequiringLogin() async {
+    await _authRepository.logout();
+    if (Get.isRegistered<SessionRepository>()) {
+      await Get.find<SessionRepository>().clearOpenOrdersCache();
+    }
+    Get.offAllNamed(AppRoutes.connect);
   }
 }

@@ -74,6 +74,7 @@ class AppPages {
         Get.put(
           DeviceActivationController(
             deviceRepository: Get.find<DeviceRepository>(),
+            authRepository: Get.find<AuthRepository>(),
           ),
         );
       }),

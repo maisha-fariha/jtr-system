@@ -109,6 +109,8 @@ class TableDetailsController extends GetxController {
     int lineIndex, {
     BuildContext? context,
   }) async {
+    if (_blockIfOrderOffered()) return;
+
     final current = order;
     if (current == null ||
         lineIndex < 0 ||
@@ -582,6 +584,8 @@ class TableDetailsController extends GetxController {
 
   /// Category hierarchy first; only leaves the table when already at root.
   Future<void> openMenuSelection() async {
+    if (_blockIfOrderOffered()) return;
+
     showPaymentOptions.value = false;
     final layoutBeforeNav = order?.displayEntries == null
         ? null
@@ -705,9 +709,36 @@ class TableDetailsController extends GetxController {
       !isPaying &&
       !paymentModesLoading.value;
 
+  /// True when cached API detail has `status: "offered"`.
+  bool get isOrderOffered {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) return false;
+    final status = _orderRepository
+        .cachedOrderDetail(id)?['status']
+        ?.toString()
+        .trim()
+        .toLowerCase();
+    return status == 'offered';
+  }
+
+  bool get canModifyOrder => !isOrderOffered;
+
+  bool _blockIfOrderOffered() {
+    if (!isOrderOffered) return false;
+    AppSnackbar.show(
+      'Table offerte',
+      'Modification impossible sur une commande offerte.',
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 2),
+      margin: const EdgeInsets.all(16),
+    );
+    return true;
+  }
+
   bool get canSendToKitchen {
     final currentOrder = order;
     if (currentOrder == null) return false;
+    if (isOrderOffered) return false;
     if (currentOrder.products.isEmpty) return false;
     if (resolvedOrderId == null || resolvedOrderId! <= 0) return false;
     if (isAddingProduct.value) return false;
@@ -723,6 +754,8 @@ class TableDetailsController extends GetxController {
   }
 
   void showQuantityDialog({required BuildContext context}) {
+    if (_blockIfOrderOffered()) return;
+
     final line = selectedOrderLine;
     if (line == null) {
       isBottomPanelExpanded.value = true;
@@ -834,6 +867,14 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
   bool isToolbarIconEnabled(IconData icon) {
+    if (isOrderOffered &&
+        (icon == Icons.grid_view ||
+            icon == Icons.menu_book ||
+            icon == Icons.restaurant ||
+            icon == Icons.restaurant_menu ||
+            icon == Icons.send_outlined)) {
+      return false;
+    }
     if (icon == Icons.send_outlined) {
       return canSendToKitchen;
     }
@@ -1044,6 +1085,8 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> addSuivreAfterLatestItems() async {
+    if (_blockIfOrderOffered()) return;
+
     final currentOrder = order;
     if (currentOrder == null) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1103,6 +1146,8 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> requestNextCourse({BuildContext? context}) async {
+    if (_blockIfOrderOffered()) return;
+
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1200,6 +1245,8 @@ class TableDetailsController extends GetxController {
   }
 
   void onProductTap(CatalogProductModel product) {
+    if (_blockIfOrderOffered()) return;
+
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
@@ -1568,14 +1615,18 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> incrementProduct(int productIndex) async {
+    if (_blockIfOrderOffered()) return;
     await _mutateLineQuantity(productIndex, 1);
   }
 
   Future<void> decrementProduct(int productIndex) async {
+    if (_blockIfOrderOffered()) return;
     await _mutateLineQuantity(productIndex, -1);
   }
 
   Future<void> offerProduct(int productIndex) async {
+    if (_blockIfOrderOffered()) return;
+
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1645,6 +1696,8 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> cancelSuivreSection(int sectionIndex) async {
+    if (_blockIfOrderOffered()) return;
+
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1708,6 +1761,7 @@ class TableDetailsController extends GetxController {
   }
 
   void cancelOrderLine(int productIndex) {
+    if (_blockIfOrderOffered()) return;
     unawaited(_cancelOrderLine(productIndex));
   }
 

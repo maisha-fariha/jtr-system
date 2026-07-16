@@ -638,6 +638,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
         groupTag: groupTag,
+        enabled: controller.canModifyOrder,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -683,6 +684,7 @@ class _ProductLine extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
+        enabled: controller.canModifyOrder,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,

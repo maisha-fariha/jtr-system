@@ -2415,48 +2415,6 @@ class OrderMapper {
     return (id: null, number: courseNumber);
   }
 
-  /// True when [productIndex] sits in a section that was already sent (DEMANDÉE).
-  static bool _productIsInDemandedSection(
-    List<OrderDisplayEntry> entries,
-    int productIndex,
-  ) {
-    for (var i = productIndex; i >= 0; i--) {
-      final entry = entries[i];
-      if (entry.type == OrderDisplayEntryType.suivreSeparator) return false;
-      if (entry.type == OrderDisplayEntryType.demandeSeparator) return true;
-    }
-    return false;
-  }
-
-  /// Opens an À SUIVRE row when the waiter adds after a DEMANDÉE block that has
-  /// no open follow-up section yet — new lines must not land inside the demanded
-  /// course visually or in the API target course.
-  static bool shouldAutoAppendSuivreBeforeAdd(List<OrderDisplayEntry> entries) {
-    if (entries.isEmpty) return false;
-    if (entries.last.type == OrderDisplayEntryType.suivreSeparator) {
-      return false;
-    }
-
-    for (var i = entries.length - 1; i >= 0; i--) {
-      final entry = entries[i];
-      if (entry.type != OrderDisplayEntryType.product) continue;
-      return _productIsInDemandedSection(entries, i);
-    }
-
-    return false;
-  }
-
-  /// Ensures layout hints include a trailing À SUIVRE when adding after DEMANDÉE.
-  static ({List<OrderDisplayEntry> layout, int suivreCount})
-      prepareLayoutHintsForNextAppend(List<OrderDisplayEntry> entries) {
-    if (!shouldAutoAppendSuivreBeforeAdd(entries)) {
-      return (layout: entries, suivreCount: suivreSeparatorCount(entries));
-    }
-
-    final layout = appendSuivreSeparatorAfterRequest(entries, force: true);
-    return (layout: layout, suivreCount: suivreSeparatorCount(layout));
-  }
-
   /// Course number for the next item from the current display layout.
   static int? resolveAppendCourseNumberFromLayout(
     List<OrderDisplayEntry> layoutHints,
@@ -2478,12 +2436,7 @@ class OrderMapper {
 
       if (entry.type == OrderDisplayEntryType.product) {
         final number = entry.courseNumber;
-        if (number != null && number > 0) {
-          if (_productIsInDemandedSection(layoutHints, i)) {
-            return number + 1;
-          }
-          return number;
-        }
+        if (number != null && number > 0) return number;
         return null;
       }
     }

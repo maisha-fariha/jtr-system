@@ -2310,8 +2310,9 @@ class OrderRepository {
     int orderId, {
     List<OrderDisplayEntry>? layoutHints,
   }) {
-    if (layoutHints != null &&
-        OrderMapper.suivreSeparatorCount(layoutHints) > 0) {
+    // When the UI passes layout hints, trust them even if count is 0 — otherwise
+    // a stale local suivre_count hint resurrects a fake À SUIVRE after menu add.
+    if (layoutHints != null) {
       return (
         splits: OrderMapper.suivreSplitPositions(layoutHints),
         count: OrderMapper.suivreSeparatorCount(layoutHints),

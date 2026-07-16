@@ -10,6 +10,7 @@ class OrderDisplayEntry {
     this.sectionIndex,
     this.courseNumber,
     this.demandeTimeLabel,
+    this.itemId,
   });
 
   const OrderDisplayEntry.product({
@@ -17,12 +18,14 @@ class OrderDisplayEntry {
     required int lineIndex,
     int sectionIndex = 0,
     int? courseNumber,
+    int? itemId,
   }) : this._(
           type: OrderDisplayEntryType.product,
           product: product,
           lineIndex: lineIndex,
           sectionIndex: sectionIndex,
           courseNumber: courseNumber,
+          itemId: itemId,
         );
 
   const OrderDisplayEntry.suivre({
@@ -57,6 +60,9 @@ class OrderDisplayEntry {
 
   /// Formatted local time for a kitchen demande, e.g. `13:30:33`.
   final String? demandeTimeLabel;
+
+  /// Backend order-item id (0 while optimistic). Used to keep add order stable.
+  final int? itemId;
 
   bool get isSectionDivider =>
       type == OrderDisplayEntryType.suivreSeparator ||

@@ -156,6 +156,7 @@ class TableDetailsController extends GetxController {
             lineIndex: lineIndex,
             sectionIndex: entry.sectionIndex ?? 0,
             courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
           )
         else
           entry,
@@ -1363,6 +1364,8 @@ class TableDetailsController extends GetxController {
       },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
+        // Live optimistic layout keeps add order when the API reshuffles items[].
+        final hints = order?.displayEntries ?? effectiveLayoutHints;
         if (id == null || id <= 0) {
           final created =
               await _orderRepository.createOrderWithFirstComposedProduct(
@@ -1383,7 +1386,7 @@ class TableDetailsController extends GetxController {
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
-          layoutHints: effectiveLayoutHints,
+          layoutHints: hints,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
           expectEmptyShell: snapshot.products.isEmpty,
@@ -1396,7 +1399,7 @@ class TableDetailsController extends GetxController {
         if (id != null && id > 0) {
           return _orderRepository.getOrderDetail(
             id,
-            previousDisplayEntries: snap.displayEntries,
+            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
           );
         }
         return snap;
@@ -1426,9 +1429,9 @@ class TableDetailsController extends GetxController {
       },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
-        // Keep the tap-time layout as source of truth so open À SUIVRE sections
-        // don't get lost when background responses arrive out of order.
-        final layoutHints = snapshot.displayEntries;
+        // Prefer the live optimistic ticket (menu then soft add order) so API
+        // reshuffles don't reorder lines after sync.
+        final layoutHints = order?.displayEntries ?? snapshot.displayEntries;
 
         if (id == null || id <= 0) {
           final created =
@@ -1465,7 +1468,7 @@ class TableDetailsController extends GetxController {
         if (id != null && id > 0) {
           return _orderRepository.getOrderDetail(
             id,
-            previousDisplayEntries: snap.displayEntries,
+            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
           );
         }
         return snap;

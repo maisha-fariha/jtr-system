@@ -40,6 +40,9 @@ class OrderRepository {
   /// Last empty-create seed product id (stripped on first real add if leftover).
   int? lastEmptyOrderSeedProductId;
 
+  /// Orders opened as empty tables — UI must not flash API create-seed lines.
+  final Set<int> _emptyShellDisplayOrderIds = <int>{};
+
   /// In-flight seed strips after create — first add must wait so PUT strip
   /// does not race with PUT revive/add and wipe the waiter's item.
   final Map<int, Future<void>> _pendingCreateSeedStrips = <int, Future<void>>{};
@@ -77,6 +80,7 @@ class OrderRepository {
     if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
       detail = await _clearVisibleItemsKeepOpen(orderId, detail, apiLog);
     }
+    _rememberEmptyShellDisplay(orderId);
     final shell = OrderMapper.asOpenEmptyOrderShell(detail);
     await _local.saveOrderDetail(orderId, shell);
     await _sessionLocal.upsertOpenOrderInList(shell);
@@ -85,6 +89,7 @@ class OrderRepository {
       id: orderId,
       products: const [],
       displayEntries: const [],
+      itemCount: 0,
       total: OrderMapper.formatPrice('0'),
     );
   }
@@ -94,9 +99,51 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final online = await _connectivity.isOnline;
+    final seedId = await _resolveSeedProductIdForDisplay();
 
     if (online) {
-      final detail = await _remote.fetchOrderDetail(orderId);
+      var detail = await _remote.fetchOrderDetail(orderId);
+
+      // Create-seed only: keep ticket empty in UI/cache; strip on API best-effort.
+      final onlySeed =
+          OrderMapper.hasOnlyEmptyCreateSeed(detail, seedProductId: seedId);
+      final markedEmptyShell = _emptyShellDisplayOrderIds.contains(orderId);
+      final hasRealItems = OrderMapper.hasRealNonSeedVisibleItems(
+        detail,
+        seedProductId: seedId,
+      );
+
+      if (markedEmptyShell && !hasRealItems) {
+        // Stay empty until the waiter adds a real product — never flash seed
+        // when background strip has not cleared the API yet.
+        _rememberEmptyShellDisplay(orderId);
+        if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+          final stripLog = StringBuffer(
+            '── getOrderDetail: empty-shell hide+strip order=$orderId ──',
+          );
+          unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+        }
+        detail = OrderMapper.asOpenEmptyOrderShell(detail);
+      } else if (onlySeed) {
+        _rememberEmptyShellDisplay(orderId);
+        final stripLog = StringBuffer(
+          '── getOrderDetail: hide+strip create seed order=$orderId ──',
+        );
+        unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+        detail = OrderMapper.asOpenEmptyOrderShell(detail);
+      } else {
+        if (markedEmptyShell) {
+          _forgetEmptyShellDisplay(orderId);
+        }
+        if (lastEmptyOrderSeedProductId != null &&
+            !OrderMapper.containsVisibleProductId(
+              detail,
+              lastEmptyOrderSeedProductId!,
+            )) {
+          lastEmptyOrderSeedProductId = null;
+        }
+      }
+
       await _local.saveOrderDetail(orderId, detail);
 
       final splitHint = previousDisplayEntries == null
@@ -106,8 +153,9 @@ class OrderRepository {
           ? _local.readSuivreCountHint(orderId)
           : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
 
-      final order = OrderMapper.fromOrderDetail(
+      final order = OrderMapper.sessionOrderHidingCreateSeed(
         detail,
+        seedProductId: seedId,
         previousDisplayEntries: previousDisplayEntries,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
@@ -119,12 +167,39 @@ class OrderRepository {
 
     final cached = _local.readOrderDetail(orderId);
     if (cached != null) {
-      return OrderMapper.fromOrderDetail(cached);
+      return OrderMapper.sessionOrderHidingCreateSeed(
+        cached,
+        seedProductId: seedId,
+      );
     }
 
     throw ApiException(
       message: 'Détails de commande indisponibles hors ligne.',
     );
+  }
+
+  /// Fresh creates stay empty in UI until a real (non-seed) line is added.
+  bool shouldDisplayAsEmptyCreateShell(int orderId) =>
+      orderId > 0 && _emptyShellDisplayOrderIds.contains(orderId);
+
+  Future<int?> _resolveSeedProductIdForDisplay() async {
+    if (lastEmptyOrderSeedProductId != null &&
+        lastEmptyOrderSeedProductId! > 0) {
+      return lastEmptyOrderSeedProductId;
+    }
+    try {
+      return (await _catalog.resolveSeedProductForEmptyOrder())?.id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _rememberEmptyShellDisplay(int orderId) {
+    if (orderId > 0) _emptyShellDisplayOrderIds.add(orderId);
+  }
+
+  void _forgetEmptyShellDisplay(int orderId) {
+    _emptyShellDisplayOrderIds.remove(orderId);
   }
 
   Future<void> persistSuivreSplitHint(int orderId, List<int> splitPositions) async {
@@ -317,12 +392,6 @@ class OrderRepository {
       );
     }
 
-    if (table.hasActiveOrder) {
-      throw ApiException(
-        message: 'La table $tableNumber a déjà une commande active.',
-      );
-    }
-
     final resolvedSalesZoneId = OrderMapper.inferSalesZoneId(
       tables,
       preferred: salesZoneId,
@@ -336,14 +405,100 @@ class OrderRepository {
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
 
-    // Session-only create can leave a lock with no active_order. Clear our
-    // own orphan session before starting a fresh one.
-    if (OrderMapper.canReclaimOrphanTableSession(
+    // After cancel, tables/list can still list our active_order briefly.
+    // Reopen that order when still open; if already closed, clear session and
+    // continue with a fresh POST.
+    final ownActiveId = OrderMapper.ownReusableActiveOrderId(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    );
+    if (ownActiveId != null) {
+      apiLog.writeln('── Reclaim own active_order=$ownActiveId ──');
+      try {
+        final detail = await _remote.fetchOrderDetail(ownActiveId);
+        if (!OrderMapper.isOrderClosedOrCancelled(detail)) {
+          final seedId = await _resolveSeedProductIdForDisplay();
+          final onlySeed = OrderMapper.hasOnlyEmptyCreateSeed(
+            detail,
+            seedProductId: seedId,
+          );
+          // Seed-only leftover after cancel/recreate → show empty + strip.
+          if (onlySeed || OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+            _rememberEmptyShellDisplay(ownActiveId);
+            if (onlySeed) {
+              unawaited(
+                _stripCreateSeedInBackground(
+                  ownActiveId,
+                  detail,
+                  apiLog,
+                ),
+              );
+            }
+            final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+            await _local.saveOrderDetail(ownActiveId, shell);
+            await _sessionLocal.upsertOpenOrderInList(shell);
+            final displayNumber = OrderMapper.displayKey(
+              orderId: ownActiveId,
+              tableNumber: table.tableNumber,
+            );
+            final mapped = OrderMapper.fromOrderDetail(shell).copyWith(
+              id: ownActiveId,
+              number: displayNumber,
+              products: const [],
+              displayEntries: const [],
+              itemCount: 0,
+              total: OrderMapper.formatPrice('0'),
+            );
+            lastCreateOrderLog = apiLog.toString();
+            logOrderFlow(
+              'createTableOrder RECLAIM empty shell orderId=$ownActiveId '
+              'table=$tableNumber',
+            );
+            return CreateTableOrderResult(
+              order: mapped,
+              apiLog: apiLog.toString(),
+            );
+          }
+
+          // Still open with real articles — reopen as-is.
+          await _local.saveOrderDetail(ownActiveId, detail);
+          await _sessionLocal.upsertOpenOrderInList(detail);
+          final displayNumber = OrderMapper.displayKey(
+            orderId: ownActiveId,
+            tableNumber: table.tableNumber,
+          );
+          final mapped = OrderMapper.fromOrderDetail(detail).copyWith(
+            id: ownActiveId,
+            number: displayNumber,
+          );
+          lastCreateOrderLog = apiLog.toString();
+          logOrderFlow(
+            'createTableOrder RECLAIM own orderId=$ownActiveId table=$tableNumber',
+          );
+          return CreateTableOrderResult(
+            order: mapped,
+            apiLog: apiLog.toString(),
+          );
+        }
+        await _local.removeOrderDetail(ownActiveId);
+        await _sessionLocal.removeOpenOrderFromList(ownActiveId);
+      } catch (e) {
+        apiLog.writeln('── Reclaim active_order failed: $e ──');
+      }
+      await _clearOrphanTableSession(table.id, apiLog: apiLog);
+    } else if (OrderMapper.canReclaimOrphanTableSession(
       tables,
       tableNumber,
       waiterId: waiterId,
     )) {
+      // Session-only create can leave a lock with no active_order. Clear our
+      // own orphan session before starting a fresh one.
       await _clearOrphanTableSession(table.id, apiLog: apiLog);
+    } else if (table.hasActiveOrder) {
+      throw ApiException(
+        message: 'La table $tableNumber a déjà une commande active.',
+      );
     }
 
     await _tryStartTableSession(
@@ -383,6 +538,7 @@ class OrderRepository {
     };
 
     final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+    _rememberEmptyShellDisplay(orderId);
     await _local.saveOrderDetail(orderId, shell);
     await _sessionLocal.upsertOpenOrderInList(shell);
 
@@ -395,6 +551,7 @@ class OrderRepository {
       number: displayNumber,
       products: const [],
       displayEntries: const [],
+      itemCount: 0,
       total: OrderMapper.formatPrice('0'),
     );
 
@@ -427,25 +584,47 @@ class OrderRepository {
     Map<String, dynamic> detail,
     StringBuffer apiLog,
   ) async {
+    _rememberEmptyShellDisplay(orderId);
     try {
       var working = detail;
       if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
         lastEmptyOrderSeedProductId = null;
+        final shell = OrderMapper.asOpenEmptyOrderShell(working);
+        await _local.saveOrderDetail(orderId, shell);
+        await _sessionLocal.upsertOpenOrderInList(shell);
         return;
       }
+
+      // 1) Prefer emptying course items via PUT (no cancel — cancel can close order).
       working = await _clearVisibleItemsKeepOpen(orderId, working, apiLog);
-      if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
+
+      // 2) If API still has the seed, keep going UI-side only (no side effects).
+      if (!OrderMapper.orderDetailHasNoVisibleItems(working)) {
+        apiLog.writeln(
+          '── Seed still on API after strip; UI stays empty (no cancel) ──',
+        );
+      } else {
         lastEmptyOrderSeedProductId = null;
       }
+
       if (OrderMapper.isOrderClosedOrCancelled(working)) {
+        // Do not reopen here — would surprise the floor. Keep display empty mark.
+        apiLog.writeln('── WARNING: order closed during seed strip ──');
         return;
       }
+
       final shell = OrderMapper.asOpenEmptyOrderShell(working);
       await _local.saveOrderDetail(orderId, shell);
       await _sessionLocal.upsertOpenOrderInList(shell);
       lastCreateOrderLog = apiLog.toString();
     } catch (e) {
       apiLog.writeln('── Background seed strip failed: $e ──');
+      // Still persist an empty local shell so enrich / reopen never flash the seed.
+      try {
+        final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+        await _local.saveOrderDetail(orderId, shell);
+        await _sessionLocal.upsertOpenOrderInList(shell);
+      } catch (_) {}
       lastCreateOrderLog = apiLog.toString();
     }
   }
@@ -1140,6 +1319,7 @@ class OrderRepository {
           apiLog: apiLog,
         );
         lastEmptyOrderSeedProductId = null;
+        _forgetEmptyShellDisplay(orderId);
         await _local.saveOrderDetail(orderId, updated);
         lastAddItemLog = apiLog.toString();
         return _fetchAndMapOrder(
@@ -1410,6 +1590,7 @@ class OrderRepository {
       apiLog: apiLog,
     );
     lastEmptyOrderSeedProductId = null;
+    _forgetEmptyShellDisplay(orderId);
     await _local.saveOrderDetail(orderId, updated);
     await _sessionLocal.upsertOpenOrderInList(updated);
     return _fetchAndMapOrder(
@@ -1768,6 +1949,7 @@ class OrderRepository {
       apiLog: apiLog,
     );
     lastEmptyOrderSeedProductId = null;
+    _forgetEmptyShellDisplay(orderId);
     await _local.saveOrderDetail(orderId, updated);
     await _sessionLocal.upsertOpenOrderInList(updated);
     return _fetchAndMapOrder(

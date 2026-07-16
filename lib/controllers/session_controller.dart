@@ -21,6 +21,7 @@ import '../widgets/table_number_dialog.dart';
 import '../widgets/table_occupied_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
+import '../utils/app_snackbar.dart';
 
 enum SessionAction {
   nouvelleCommande,
@@ -415,6 +416,9 @@ class SessionController extends GetxController {
   }
 
   /// Session list summaries omit products; never wipe lines / totals already loaded.
+  ///
+  /// Table-details mutations must call [updateOrderRow] with
+  /// `replaceDetail: true` so emptying the last line is not discarded here.
   SessionOrder _preferDetailedOrder(
     SessionOrder incoming,
     SessionOrder? previous,
@@ -429,7 +433,9 @@ class SessionController extends GetxController {
         impressionColor: incoming.impressionColor,
         poste: incoming.poste,
         profitCenter: incoming.profitCenter,
-        couverts: incoming.couverts.isNotEmpty ? incoming.couverts : previous.couverts,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
         waiterId: incoming.waiterId ?? previous.waiterId,
         itemCount: previous.itemCount > 0
             ? previous.itemCount
@@ -495,9 +501,21 @@ class SessionController extends GetxController {
         try {
           final cached = _orderRepository.cachedOrderDetail(summary.id);
           if (cached != null) {
-            final detail = OrderMapper.fromOrderDetail(cached).copyWith(
+            final seedId = _orderRepository.lastEmptyOrderSeedProductId;
+            var detail = OrderMapper.sessionOrderHidingCreateSeed(
+              cached,
+              seedProductId: seedId,
+            ).copyWith(
               id: summary.id,
             );
+            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
+              detail = detail.copyWith(
+                products: const [],
+                displayEntries: const [],
+                itemCount: 0,
+                total: OrderMapper.formatPrice('0'),
+              );
+            }
             if (_stillInList(summary.id)) {
               _upsertOrderInList(detail);
             }
@@ -527,6 +545,10 @@ class SessionController extends GetxController {
     return false;
   }
 
+  bool _ordersContainTable(String tableNumber) {
+    return orders.any((o) => _tableKeysMatch(o.number, tableNumber));
+  }
+
   /// After delete we suppress that table briefly; recreating must clear it
   /// or the new order never appears in the list (and row sync is dropped).
   void _clearSuppressedTable(String tableNumber) {
@@ -535,48 +557,71 @@ class SessionController extends GetxController {
     );
   }
 
-  void _upsertOrderInList(SessionOrder order) {
+  void _upsertOrderInList(
+    SessionOrder order, {
+    bool replaceDetail = false,
+  }) {
     if (_isOrderSuppressed(order.number)) {
       orders.removeWhere((item) => _tableKeysMatch(item.number, order.number));
       orders.refresh();
       return;
     }
 
-    if (order.id <= 0) {
+    // Never let create-seed flash into the session list / table details.
+    var safeOrder = order;
+    if (order.id > 0 &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id) &&
+        (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+      safeOrder = order.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+    }
+
+    SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
+        replaceDetail ? incoming : _preferDetailedOrder(incoming, previous);
+
+    if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(
-        (item) => _tableKeysMatch(item.number, order.number),
+        (item) => _tableKeysMatch(item.number, safeOrder.number),
       );
       if (byNumber >= 0) {
-        orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
+        orders[byNumber] = merged(safeOrder, orders[byNumber]);
         orders.refresh();
         return;
       }
-      orders.insert(0, order);
+      orders.insert(0, safeOrder);
       orders.refresh();
       return;
     }
 
-    final idx = orders.indexWhere((item) => item.id == order.id);
+    final idx = orders.indexWhere((item) => item.id == safeOrder.id);
     if (idx >= 0) {
-      orders[idx] = _preferDetailedOrder(order, orders[idx]);
+      orders[idx] = merged(safeOrder, orders[idx]);
       orders.refresh();
       return;
     }
 
     final byNumber = orders.indexWhere(
-      (item) => _tableKeysMatch(item.number, order.number),
+      (item) => _tableKeysMatch(item.number, safeOrder.number),
     );
     if (byNumber >= 0) {
-      orders[byNumber] = _preferDetailedOrder(order, orders[byNumber]);
+      orders[byNumber] = merged(safeOrder, orders[byNumber]);
       orders.refresh();
       return;
     }
 
-    orders.insert(0, order);
+    orders.insert(0, safeOrder);
     orders.refresh();
   }
 
-  void updateOrderRow(SessionOrder order) => _upsertOrderInList(order);
+  /// Table-details mutations must not be overwritten by [_preferDetailedOrder]
+  /// (that helper keeps previous lines when the incoming ticket is empty —
+  /// which broke deleting the last article).
+  void updateOrderRow(SessionOrder order, {bool replaceDetail = false}) =>
+      _upsertOrderInList(order, replaceDetail: replaceDetail);
 
   static String normalizeTableKey(String value) =>
       OrderMapper.normalizeTableKey(value);
@@ -790,6 +835,9 @@ class SessionController extends GetxController {
       );
       return;
     }
+
+    // Delete suppress must not block the recreate upsert / details open.
+    _clearSuppressedTable(tableNumber);
 
     isCreatingOrder.value = true;
     SessionOrder? created;
@@ -1192,8 +1240,16 @@ class SessionController extends GetxController {
       orders.refresh();
       _clearUiStateForOrder(order.number);
 
-      // Occupancy cache only; keep session row order stable.
-      unawaited(_sessionRepository.getTablesList(forceRefresh: true));
+      // Occupancy cache only; keep session row order stable. Clear suppress once
+      // tables refresh so immediate recreate is not filtered out of the list.
+      unawaited(() async {
+        try {
+          await _sessionRepository.getTablesList(forceRefresh: true);
+        } catch (_) {}
+        if (!_ordersContainTable(order.number)) {
+          _clearSuppressedTable(order.number);
+        }
+      }());
     } on ApiException catch (e) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),
@@ -1331,24 +1387,6 @@ class SessionController extends GetxController {
     String message, {
     BuildContext? context,
   }) {
-    if (context != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$title — $message'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    Get.snackbar(
-      title,
-      message,
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+    AppSnackbar.show(title, message, context: context);
   }
 }

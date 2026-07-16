@@ -238,18 +238,53 @@ class OrderMapper {
 
   /// Local cache copy that stays visible in the session list after all items
   /// were cancelled (backend may mark the order closed automatically).
+  ///
+  /// Always clears course [items] so a create-seed leftover never reappears in
+  /// UI when this shell is loaded from Hive / enrich.
   static Map<String, dynamic> asOpenEmptyOrderShell(
     Map<String, dynamic> orderDetail,
   ) {
-    final copy = Map<String, dynamic>.from(orderDetail);
-    if (isOrderClosedOrCancelled(copy) || isOrderFullyPaid(copy)) {
-      copy['status'] = preserveOpenOrderStatus(orderDetail);
-      copy['payment_status'] = 'unpaid';
-      copy['payment_status_detailed'] = 'unpaid';
-    }
-    copy['total_price'] = copy['total_price'] ?? '0';
-    copy['remaining_amount'] = copy['remaining_amount'] ?? '0';
+    final copy = withAllCourseItemsCleared(orderDetail);
+    copy['status'] = preserveOpenOrderStatus(orderDetail);
+    copy['payment_status'] = 'not_paid';
+    copy['payment_status_detailed'] = 'not_paid';
+    copy['total_price'] = '0';
+    copy['remaining_amount'] = '0';
+    copy['total_ht'] = copy['total_ht'] ?? '0';
+    copy['total_tva'] = copy['total_tva'] ?? '0';
+    copy['total_paid'] = '0';
     return copy;
+  }
+
+  /// Session / table-details presentation: hide create-seed-only tickets.
+  static SessionOrder sessionOrderHidingCreateSeed(
+    Map<String, dynamic> detail, {
+    int? seedProductId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    List<int> suivreSplitHints = const [],
+    int suivreCountHint = 0,
+  }) {
+    if (hasOnlyEmptyCreateSeed(detail, seedProductId: seedProductId)) {
+      final shell = asOpenEmptyOrderShell(detail);
+      final order = fromOrderDetail(
+        shell,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: suivreSplitHints,
+        suivreCountHint: suivreCountHint,
+      );
+      return order.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: formatPrice('0'),
+      );
+    }
+    return fromOrderDetail(
+      detail,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: suivreSplitHints,
+      suivreCountHint: suivreCountHint,
+    );
   }
 
   /// Union of [GET /api/orders] pages/lists by id (later list wins on duplicate).
@@ -389,8 +424,10 @@ class OrderMapper {
     return false;
   }
 
-  /// Skip dialog whenever another waiter owns the table (order or session lock).
-  /// Own reclaimable orphan sessions never skip.
+  /// Skip dialog only when another waiter owns the table (order or session lock).
+  ///
+  /// Own active order / orphan session must never skip — after cancel the tables
+  /// list can still show in-use briefly; the create path reclaims or reopens it.
   static bool shouldShowSkipDialogForCreate(
     List<Map<String, dynamic>> tables,
     String tableNumber, {
@@ -405,16 +442,43 @@ class OrderMapper {
       return false;
     }
 
+    // Own leftover active_order after delete/close — do not Skip; reclaim below.
+    final orderOwner = activeOrderOwnerId(tables, tableNumber);
+    if (orderOwner != null && orderOwner == waiterId) {
+      return false;
+    }
+
+    return isAssignedToOtherWaiter(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    );
+  }
+
+  /// Active order id on [tableNumber] when owned by [waiterId] (or owner unknown).
+  static int? ownReusableActiveOrderId(
+    List<Map<String, dynamic>> tables,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return null;
     if (isAssignedToOtherWaiter(
       tables,
       tableNumber,
       waiterId: waiterId,
     )) {
-      return true;
+      return null;
     }
 
-    // Table already in use (order/session) and not reclaimable by this waiter.
-    return isTableInUse(tables, tableNumber);
+    final owner = activeOrderOwnerId(tables, tableNumber);
+    if (owner != null && owner > 0 && owner != waiterId) return null;
+
+    final resolved = resolveTableForNewOrder(tables, tableNumber);
+    final id = resolved?.existingOrderId;
+    if (id == null || id <= 0) return null;
+    // Known other owner already excluded; null owner + not assigned elsewhere → reuse.
+    if (owner == null || owner == waiterId) return id;
+    return null;
   }
 
   /// API messages that mean this waiter cannot take over the table.
@@ -2747,25 +2811,32 @@ class OrderMapper {
 
     if (seedProductId != null && seedProductId > 0) {
       final seatOrders = orderDetail['seat_orders'];
-      if (seatOrders is! List) return false;
-      var sawSeed = false;
-      for (final seat in seatOrders) {
-        if (seat is! Map<String, dynamic>) continue;
-        final courses = seat['courses'];
-        if (courses is! List) continue;
-        for (final course in courses) {
-          if (course is! Map<String, dynamic>) continue;
-          final items = course['items'];
-          if (items is! List) continue;
-          for (final item in items) {
-            if (item is! Map<String, dynamic>) continue;
-            if (item['status'] == 'cancelled') continue;
-            if (_itemProductId(item) != seedProductId) return false;
-            sawSeed = true;
+      if (seatOrders is List) {
+        var sawSeed = false;
+        var sawOther = false;
+        for (final seat in seatOrders) {
+          if (seat is! Map<String, dynamic>) continue;
+          final courses = seat['courses'];
+          if (courses is! List) continue;
+          for (final course in courses) {
+            if (course is! Map<String, dynamic>) continue;
+            final items = course['items'];
+            if (items is! List) continue;
+            for (final item in items) {
+              if (item is! Map<String, dynamic>) continue;
+              if (item['status'] == 'cancelled') continue;
+              if (_itemProductId(item) == seedProductId) {
+                sawSeed = true;
+              } else {
+                sawOther = true;
+              }
+            }
           }
         }
+        if (sawSeed && !sawOther) return true;
       }
-      return sawSeed;
+      // Known seed id was planted but the API may use a different product —
+      // fall through to the free single-line heuristic.
     }
 
     // Fallback: single free simple line left from create seed.
@@ -2774,6 +2845,18 @@ class OrderMapper {
     if (item == null) return false;
     if (!_isSimpleLineItem(item)) return false;
     return _parseMoney(item['sub_total']) <= 0.0001;
+  }
+
+  /// True when the ticket has a non-cancelled line that is not create-seed.
+  static bool hasRealNonSeedVisibleItems(
+    Map<String, dynamic> orderDetail, {
+    int? seedProductId,
+  }) {
+    if (orderDetailHasNoVisibleItems(orderDetail)) return false;
+    if (hasOnlyEmptyCreateSeed(orderDetail, seedProductId: seedProductId)) {
+      return false;
+    }
+    return true;
   }
 
   /// True when a leftover create-seed line is still present (possibly with others).

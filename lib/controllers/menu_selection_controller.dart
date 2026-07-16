@@ -19,6 +19,7 @@ import '../widgets/menu_choice_number_dialog.dart';
 import '../widgets/menu_message_picker_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
 import 'session_controller.dart';
+import '../utils/app_snackbar.dart';
 
 class MenuSelectionController extends GetxController {
   MenuSelectionController({
@@ -133,10 +134,10 @@ class MenuSelectionController extends GetxController {
         );
         menus[index] = menu;
       } on ApiException catch (error) {
-        Get.snackbar('Erreur', error.message);
+        AppSnackbar.show('Erreur', error.message);
         return;
       } catch (_) {
-        Get.snackbar('Erreur', 'Impossible de charger le menu.');
+        AppSnackbar.show('Erreur', 'Impossible de charger le menu.');
         return;
       } finally {
         isLoadingMenuDetail.value = false;
@@ -149,7 +150,7 @@ class MenuSelectionController extends GetxController {
   void confirmSelection() {
     final menu = selectedMenu;
     if (menu == null) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Sélection vide',
         'Veuillez sélectionner un menu.',
         snackPosition: SnackPosition.BOTTOM,
@@ -351,7 +352,10 @@ class MenuSelectionController extends GetxController {
         try {
           final updated = await _orderRepository.requestNextCourses(id);
           if (Get.isRegistered<SessionController>()) {
-            Get.find<SessionController>().updateOrderRow(updated);
+            Get.find<SessionController>().updateOrderRow(
+              updated,
+              replaceDetail: true,
+            );
           }
           if (context.mounted) {
             _showSnack(
@@ -388,25 +392,7 @@ class MenuSelectionController extends GetxController {
     required String title,
     required String message,
   }) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('$title — $message'),
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(16),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    Get.snackbar(
-      title,
-      message,
-      snackPosition: SnackPosition.BOTTOM,
-      duration: const Duration(seconds: 2),
-      margin: const EdgeInsets.all(16),
-    );
+    AppSnackbar.show(title, message, context: context);
   }
 
   Future<void> finalizeActiveSelection() async {
@@ -424,7 +410,7 @@ class MenuSelectionController extends GetxController {
         ..writeln()
         ..writeln('Aucune commande active trouvée pour cette table.');
       debugPrint(diagnostic.toString());
-      Get.snackbar('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
 
@@ -441,7 +427,7 @@ class MenuSelectionController extends GetxController {
           selection.selectedItemsByCourse[category.number]?.length ?? 0;
 
       if (selectedCount != required) {
-        Get.snackbar(
+        AppSnackbar.show(
           'Sélection incomplète',
           'Choisissez $required article(s) pour CHOIX ${category.number}.',
           snackPosition: SnackPosition.BOTTOM,
@@ -455,7 +441,7 @@ class MenuSelectionController extends GetxController {
       selection.allSelectedItems,
     );
     if (menuSelections.isEmpty) {
-      Get.snackbar('Erreur', 'Aucune sélection menu valide.');
+      AppSnackbar.show('Erreur', 'Aucune sélection menu valide.');
       return;
     }
 
@@ -484,7 +470,10 @@ class MenuSelectionController extends GetxController {
       orderId = updated.id;
 
       if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().updateOrderRow(updated);
+        Get.find<SessionController>().updateOrderRow(
+          updated,
+          replaceDetail: true,
+        );
       }
 
       Get.back(result: true);
@@ -493,7 +482,7 @@ class MenuSelectionController extends GetxController {
       ApiDebugDialog.show(title: 'Erreur ajout menu', body: error.message);
     } catch (error) {
       debugPrint(_orderRepository.lastAddItemLog ?? '$error');
-      Get.snackbar('Erreur', 'Impossible d\'ajouter le menu à la commande.');
+      AppSnackbar.show('Erreur', 'Impossible d\'ajouter le menu à la commande.');
     } finally {
       isSaving.value = false;
     }

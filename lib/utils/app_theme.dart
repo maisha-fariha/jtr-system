@@ -201,6 +201,16 @@ class AppTheme {
         ),
         dividerColor: const Color(0xFFE8E8E8),
         cardColor: Colors.white,
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          elevation: 0,
+          backgroundColor: Colors.white,
+          contentTextStyle: TextStyle(
+            color: Color(0xFF5A5A5A),
+            fontSize: 13.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         fontFamily: 'Roboto',
       );
 
@@ -229,6 +239,16 @@ class AppTheme {
         ),
         dividerColor: const Color(0xFF2A2A2A),
         cardColor: const Color(0xFF1E1E1E),
+        snackBarTheme: const SnackBarThemeData(
+          behavior: SnackBarBehavior.floating,
+          elevation: 0,
+          backgroundColor: Color(0xFF212031),
+          contentTextStyle: TextStyle(
+            color: Color(0xFF9E9E9E),
+            fontSize: 13.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         fontFamily: 'Roboto',
       );
 }

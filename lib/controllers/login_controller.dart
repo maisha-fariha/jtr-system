@@ -7,6 +7,7 @@ import '../data/repositories/session_repository.dart';
 import '../models/user_suggestion.dart';
 import '../routes/app_pages.dart';
 import '../widgets/user_identifiant_field_controller.dart';
+import '../utils/app_snackbar.dart';
 
 class LoginController extends GetxController {
   LoginController({required AuthRepository authRepository})
@@ -52,7 +53,7 @@ class LoginController extends GetxController {
         users.assignAll(cached);
         identifiantFieldController.updateUsers(cached);
       } else {
-        Get.snackbar(
+        AppSnackbar.show(
           'Erreur',
           error.message,
           snackPosition: SnackPosition.BOTTOM,
@@ -86,7 +87,7 @@ class LoginController extends GetxController {
 
     final user = selectedUser.value ?? _resolveUserFromText();
     if (user == null) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Identifiant requis',
         'Veuillez sélectionner un utilisateur.',
         snackPosition: SnackPosition.BOTTOM,
@@ -97,7 +98,7 @@ class LoginController extends GetxController {
 
     final passcode = passwordController.text.trim();
     if (passcode.isEmpty) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Code requis',
         'Veuillez saisir votre mot de passe.',
         snackPosition: SnackPosition.BOTTOM,
@@ -117,7 +118,7 @@ class LoginController extends GetxController {
       }
       Get.offNamed(AppRoutes.session);
     } on ApiException catch (error) {
-      Get.snackbar(
+      AppSnackbar.show(
         'Connexion échouée',
         error.message,
         snackPosition: SnackPosition.BOTTOM,

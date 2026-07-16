@@ -116,7 +116,9 @@ class LoginController extends GetxController {
       if (Get.isRegistered<SessionRepository>()) {
         await Get.find<SessionRepository>().clearOpenOrdersCache();
       }
-      Get.offNamed(AppRoutes.session);
+      // Auth succeeded — reuse the existing "Chargement base de données"
+      // screen to preload session data before the session page mounts.
+      Get.offNamed(AppRoutes.connect);
     } on ApiException catch (error) {
       AppSnackbar.show(
         'Connexion échouée',

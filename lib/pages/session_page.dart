@@ -68,6 +68,7 @@ class SessionPage extends GetView<SessionController> {
                       color: AppTheme.primary,
                       onRefresh: () => controller.loadSessionOrders(
                         forceRefresh: true,
+                        replaceExistingList: false,
                       ),
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -98,6 +99,7 @@ class SessionPage extends GetView<SessionController> {
                     color: AppTheme.primary,
                     onRefresh: () => controller.loadSessionOrders(
                       forceRefresh: true,
+                      replaceExistingList: false,
                     ),
                     child: Obx(() {
                       // toList() so in-place total/product updates rebuild rows

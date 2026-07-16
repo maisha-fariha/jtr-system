@@ -409,6 +409,25 @@ class SessionController extends GetxController {
   ) {
     if (previous == null) return incoming;
 
+    // Brand-new empty table: never keep a leaked API seed in memory.
+    if (previous.id > 0 &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(previous.id)) {
+      return previous.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+      );
+    }
+
     final incomingLines = incoming.products.length;
     final previousLines = previous.products.length;
     final incomingDisplay = incoming.displayEntries.length;
@@ -510,15 +529,15 @@ class SessionController extends GetxController {
             ).copyWith(
               id: summary.id,
             );
-            // Empty-shell is for brand-new tables only. Never blank a cache
-            // that already has lines (stale flag after qty / background GET).
-            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
-                detail.products.isEmpty &&
-                detail.displayEntries.isEmpty) {
-              // keep empty
-            } else if (_orderRepository
-                .shouldDisplayAsEmptyCreateShell(summary.id)) {
-              _orderRepository.clearEmptyShellDisplay(summary.id);
+            // Keep brand-new tables empty until a real line is added — do not
+            // clear the lock just because cache still holds the API seed.
+            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
+              detail = detail.copyWith(
+                products: const [],
+                displayEntries: const [],
+                itemCount: 0,
+                total: OrderMapper.formatPrice('0'),
+              );
             }
           } else {
             detail = await _orderRepository.getOrderDetail(summary.id);
@@ -529,7 +548,14 @@ class SessionController extends GetxController {
               _orderRepository.detailRevision(summary.id)) {
             return;
           }
-          if (_wouldDowngradeDetail(detail, previous)) return;
+          // Allow empty-shell to replace a brief seed flash already in memory.
+          final emptyShellOverride =
+              _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
+                  detail.products.isEmpty;
+          if (!emptyShellOverride &&
+              _wouldDowngradeDetail(detail, previous)) {
+            return;
+          }
 
           _upsertOrderInList(detail);
         } catch (_) {}
@@ -592,17 +618,25 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Empty-shell lock is only for brand-new empty tables. If detail already
-    // has lines, clear the flag — never strip (background refresh race).
+    // Never let create-seed flash into the session list / table details.
     var safeOrder = order;
+    var forceReplace = replaceDetail;
     if (order.id > 0 &&
-        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id) &&
-        (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
-      _orderRepository.clearEmptyShellDisplay(order.id);
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
+      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
+        safeOrder = order.copyWith(
+          products: const [],
+          displayEntries: const [],
+          itemCount: 0,
+          total: OrderMapper.formatPrice('0'),
+        );
+      }
+      // PreferDetailed would otherwise keep a seed that already leaked in.
+      forceReplace = true;
     }
 
     SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
-        replaceDetail ? incoming : _preferDetailedOrder(incoming, previous);
+        forceReplace ? incoming : _preferDetailedOrder(incoming, previous);
 
     if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(

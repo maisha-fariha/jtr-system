@@ -326,16 +326,20 @@ class TableDetailsController extends GetxController {
 
   /// Presentation-only: hide create-seed while the ticket is still empty.
   ///
-  /// Never strip lines that are already on [raw] — background refresh can
-  /// re-set the empty-shell flag incorrectly after qty/add; trust local detail.
+  /// While the empty-shell lock is set, always hide lines — the API seed must
+  /// not flash (and must not mark a menu product as selected). The lock is
+  /// cleared only when a real item is added / line-edited.
   SessionOrder forDisplay(SessionOrder raw) {
     if (raw.id > 0 &&
         Get.isRegistered<OrderRepository>() &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
-      if (raw.products.isNotEmpty || raw.displayEntries.isNotEmpty) {
-        _orderRepository.clearEmptyShellDisplay(raw.id);
-        return raw;
-      }
+      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
+      return raw.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
     }
     return raw;
   }

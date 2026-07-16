@@ -1234,10 +1234,10 @@ class _CategoryTabs extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      // While catalog loads, keep tab height but no spinner — grid shows one.
       if (controller.isCatalogLoading.value && controller.categoryRoots.isEmpty) {
-        return const SizedBox(
-          height: 44,
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        return SizedBox(
+          height: JtrResponsive.adaptiveHeight(context, 44, compact: 36),
         );
       }
 

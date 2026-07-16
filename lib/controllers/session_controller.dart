@@ -80,8 +80,6 @@ class SessionController extends GetxController {
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
   final isLoadingOrders = false.obs;
-  /// True while pages 2..N are loading after page 1 is already on screen.
-  final isLoadingMoreOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
   final activeDay = ActiveDayInfo.fallback().obs;
@@ -179,7 +177,7 @@ class SessionController extends GetxController {
     try {
       // Don't re-fetch active day here — onInit already loads it.
       // Stale-while-revalidate: paint cache instantly, then refresh UI when
-      // the first network page returns (no spinner if rows already visible).
+      // the full network fetch returns (no spinner if rows already visible).
       if (!forceRefresh) {
         final cached = _sessionRepository.getCachedSessionOrders(
           waiterId: _currentWaiterId,
@@ -202,33 +200,17 @@ class SessionController extends GetxController {
         }
       }
 
-      void onMorePages(List<SessionOrder> more) {
-        _applySessionOrderSummaries(
-          more,
-          retainOrders: retainOrders,
-          enrichDetails: enrichDetails,
-          replaceList: false,
-        );
-      }
-
+      // Every page is fetched before this returns — the list is applied once,
+      // fully loaded, instead of appearing row-by-row.
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
               waiterId: _currentWaiterId,
-              onLoadingMoreChanged: (loading) {
-                isLoadingMoreOrders.value = loading;
-              },
-              onMorePagesLoaded: onMorePages,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
               waiterId: _currentWaiterId,
-              onLoadingMoreChanged: (loading) {
-                isLoadingMoreOrders.value = loading;
-              },
-              onMorePagesLoaded: onMorePages,
             );
 
-      // Page 1: replace only when allowed (pull-to-refresh / first paint).
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
@@ -261,17 +243,6 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onLoadingMoreChanged: (loading) {
-          isLoadingMoreOrders.value = loading;
-        },
-        onMorePagesLoaded: (more) {
-          _applySessionOrderSummaries(
-            more,
-            retainOrders: retainOrders,
-            enrichDetails: enrichDetails,
-            replaceList: false,
-          );
-        },
       );
       // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
@@ -296,17 +267,6 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onLoadingMoreChanged: (loading) {
-          isLoadingMoreOrders.value = loading;
-        },
-        onMorePagesLoaded: (more) {
-          _applySessionOrderSummaries(
-            more,
-            retainOrders: retainOrders,
-            enrichDetails: false,
-            replaceList: false,
-          );
-        },
       );
       _applySessionOrderSummaries(
         summaries,

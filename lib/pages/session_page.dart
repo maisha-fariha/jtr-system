@@ -35,8 +35,31 @@ class SessionPage extends GetView<SessionController> {
                 child: Obx(() {
                   if (controller.isLoadingOrders.value &&
                       controller.orders.isEmpty) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: AppTheme.primary),
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppTheme.primary,
+                            ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 12),
+                          Text(
+                            'Chargement…',
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                13,
+                              ),
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   }
 
@@ -77,12 +100,9 @@ class SessionPage extends GetView<SessionController> {
                       forceRefresh: true,
                     ),
                     child: Obx(() {
-                      final loadingMore = controller.isLoadingMoreOrders.value;
                       // toList() so in-place total/product updates rebuild rows
                       // (length alone does not always notify Obx).
                       final visibleOrders = controller.orders.toList();
-                      final count =
-                          visibleOrders.length + (loadingMore ? 1 : 0);
                       return ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: JtrResponsive.getResponsivePadding(
@@ -90,29 +110,10 @@ class SessionPage extends GetView<SessionController> {
                           top: 8,
                           bottom: 8,
                         ),
-                        itemCount: count,
+                        itemCount: visibleOrders.length,
                         separatorBuilder: (context, index) =>
                             JtrResponsive.getResponsiveSpacing(context, 8),
                         itemBuilder: (context, index) {
-                          if (loadingMore &&
-                              index == visibleOrders.length) {
-                            return Padding(
-                              padding: JtrResponsive.getResponsivePadding(
-                                context,
-                                vertical: 16,
-                              ),
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 28,
-                                  height: 28,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: AppTheme.primary,
-                                  ),
-                                ),
-                              ),
-                            );
-                          }
                           return _OrderRow(
                             order: visibleOrders[index],
                           );

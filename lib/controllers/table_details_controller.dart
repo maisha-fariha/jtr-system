@@ -1281,15 +1281,18 @@ class TableDetailsController extends GetxController {
       );
     }
 
-    final layoutHints = current.displayEntries;
-    final suivreCount = OrderMapper.suivreSeparatorCount(layoutHints);
+    final prepared = OrderMapper.prepareLayoutHintsForNextAppend(
+      current.displayEntries,
+    );
+    final layoutHints = prepared.layout;
+    final suivreCount = prepared.suivreCount;
     final suivreSplits = OrderMapper.suivreSplitPositions(layoutHints);
     final fastId = _fastResolvedOrderId;
     final cached =
         fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
 
     final predicted = OrderMapper.predictAfterAppendSimpleProduct(
-      current: current,
+      current: current.copyWith(displayEntries: layoutHints),
       cachedDetail: cached,
       productId: product.id,
       productName: product.name,
@@ -1313,8 +1316,11 @@ class TableDetailsController extends GetxController {
       );
     }
 
-    final hints = layoutHints ?? current.displayEntries;
-    final suivreCount = OrderMapper.suivreSeparatorCount(hints);
+    final prepared = OrderMapper.prepareLayoutHintsForNextAppend(
+      layoutHints ?? current.displayEntries,
+    );
+    final hints = prepared.layout;
+    final suivreCount = prepared.suivreCount;
     final suivreSplits = OrderMapper.suivreSplitPositions(hints);
     final fastId = _fastResolvedOrderId;
     final cached =
@@ -1378,12 +1384,13 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
+        final hints = order?.displayEntries ?? effectiveLayoutHints;
         final updated = await _orderRepository.addComposedProductToOrder(
           orderId: id,
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
-          layoutHints: effectiveLayoutHints,
+          layoutHints: hints,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
           expectEmptyShell: snapshot.products.isEmpty,
@@ -1426,9 +1433,9 @@ class TableDetailsController extends GetxController {
       },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
-        // Keep the tap-time layout as source of truth so open À SUIVRE sections
-        // don't get lost when background responses arrive out of order.
-        final layoutHints = snapshot.displayEntries;
+        // Use the optimistic layout (may include auto-opened À SUIVRE after
+        // DEMANDÉE) so the API targets the next course, not the sealed one.
+        final layoutHints = order?.displayEntries ?? snapshot.displayEntries;
 
         if (id == null || id <= 0) {
           final created =

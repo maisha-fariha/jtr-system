@@ -2927,11 +2927,23 @@ class OrderMapper {
     }
 
     // Fallback: single free simple line left from create seed.
+    // Offered lines also have sub_total 0 — they are NOT create-seed.
     if (countVisibleLineItems(orderDetail) != 1) return false;
     final item = firstVisibleItem(orderDetail);
     if (item == null) return false;
+    if (_isOfferedLineItem(item)) return false;
     if (!_isSimpleLineItem(item)) return false;
     return _parseMoney(item['sub_total']) <= 0.0001;
+  }
+
+  static bool _isOfferedLineItem(Map<String, dynamic> item) {
+    if (item['is_offer'] == true ||
+        item['is_offered'] == true ||
+        item['offered'] == true) {
+      return true;
+    }
+    final reason = item['offer_reason']?.toString().trim() ?? '';
+    return reason.isNotEmpty;
   }
 
   /// True when the ticket has a non-cancelled line that is not create-seed.

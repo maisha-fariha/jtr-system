@@ -163,22 +163,32 @@ class SessionRepository {
   /// Loads every page (page 1 + remaining, remaining fetched in parallel
   /// batches) before returning, so the caller shows one loader and then
   /// paints the complete list at once — no row-by-row drip-feed.
+  ///
+  /// [onProgress] reports 0.0–1.0 for this fetch only (page batches).
   Future<List<SessionOrder>> getSessionOrders({
     bool forceRefresh = false,
     int? waiterId,
+    void Function(double fraction)? onProgress,
   }) async {
     if (!forceRefresh) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
         return cached;
       }
     }
 
     try {
-      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+      return await _fetchSessionOrdersFromNetwork(
+        waiterId: waiterId,
+        onProgress: onProgress,
+      );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
-      if (cached.isNotEmpty) return cached;
+      if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
+        return cached;
+      }
       rethrow;
     }
   }
@@ -186,21 +196,30 @@ class SessionRepository {
   /// Network refresh: fetches every page before returning (see [getSessionOrders]).
   Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
     int? waiterId,
+    void Function(double fraction)? onProgress,
   }) async {
     try {
-      return await _fetchSessionOrdersFromNetwork(waiterId: waiterId);
+      return await _fetchSessionOrdersFromNetwork(
+        waiterId: waiterId,
+        onProgress: onProgress,
+      );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
-      if (cached.isNotEmpty) return cached;
+      if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
+        return cached;
+      }
       rethrow;
     }
   }
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
+    void Function(double fraction)? onProgress,
   }) async {
     final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
 
+    onProgress?.call(0.02);
     final first = await _remote.fetchOrdersFirstPage(waiterId: scopedId);
     var pageMaps = first.orders;
     var lastPage = first.lastPage;
@@ -214,14 +233,26 @@ class SessionRepository {
       effectiveWaiterId = null;
     }
 
+    void reportPages(int loaded, int total) {
+      if (total <= 0) {
+        onProgress?.call(1.0);
+        return;
+      }
+      onProgress?.call((loaded / total).clamp(0.0, 1.0));
+    }
+
+    reportPages(1, lastPage < 1 ? 1 : lastPage);
+
     if (lastPage > 1) {
       final extraMaps = await _remote.fetchOrdersRemainingPages(
         lastPage: lastPage,
         waiterId: effectiveWaiterId,
+        onPagesLoaded: reportPages,
       );
       pageMaps = [...pageMaps, ...extraMaps];
     }
 
+    onProgress?.call(0.95);
     _openOrdersMemory = pageMaps;
     await _local.saveOpenOrdersList(pageMaps);
     final mapped = OrderMapper.sessionOrdersFromOrdersList(
@@ -230,6 +261,7 @@ class SessionRepository {
       lightweight: true,
     );
     _rememberPreloadedOrders(mapped);
+    onProgress?.call(1.0);
     return mapped;
   }
 }

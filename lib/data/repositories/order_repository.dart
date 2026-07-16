@@ -3332,6 +3332,7 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final beforeCount = OrderMapper.countVisibleLineItems(detail);
       final localMutated = OrderMapper.copyOrderDetail(detail);
       final payload = mutate(localMutated);
 
@@ -3341,12 +3342,13 @@ class OrderRepository {
         apiLog: apiLog,
       );
       lastAddItemLog = apiLog.toString();
-      return _persistOrderAfterItemMutation(
+      // Offer / comment must not use the empty-shell recreate path — a free
+      // offered line looks empty to that flow and wipes the ticket on reopen.
+      return _persistOrderAfterLineEdit(
         orderId: orderId,
-        detail: updated,
-        keepLinesIfApiEmpty: OrderMapper.orderDetailHasNoVisibleItems(localMutated)
-            ? null
-            : localMutated,
+        putResponse: updated,
+        localMutated: localMutated,
+        beforeVisibleCount: beforeCount,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');

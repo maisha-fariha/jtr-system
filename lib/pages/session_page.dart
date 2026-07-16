@@ -7,6 +7,7 @@ import '../controllers/session_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
@@ -156,6 +157,10 @@ class _SessionHeader extends GetView<SessionController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final day = controller.activeDay.value;
+      final auth = Get.find<AuthRepository>();
+      final userName = auth.cachedSession?.user.name?.trim() ?? '';
+      final headerLabel =
+          userName.isNotEmpty ? userName.toUpperCase() : 'SESSION ACTIVE';
 
       return Padding(
         padding: JtrResponsive.getResponsivePadding(
@@ -190,7 +195,7 @@ class _SessionHeader extends GetView<SessionController> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'SESSION ACTIVE',
+                    headerLabel,
                     style: TextStyle(
                       fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                       fontWeight: FontWeight.w500,

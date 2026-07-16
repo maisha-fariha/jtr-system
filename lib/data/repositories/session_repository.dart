@@ -21,13 +21,17 @@ class SessionRepository {
   final SessionLocalDataSource _local;
   final ConnectivityService _connectivity;
 
+  /// Last successful network fetch — lets the session screen paint instantly
+  /// right after the post-login sync screen, without waiting on Hive I/O.
+  List<Map<String, dynamic>>? _openOrdersMemory;
+
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
   List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
 
-  /// Instant session-list paint from Hive (no network).
+  /// Instant session-list paint from memory or Hive (no network).
   List<SessionOrder> getCachedSessionOrders({int? waiterId}) {
-    final cached = _local.readOpenOrdersList();
+    final cached = _openOrdersMemory ?? _local.readOpenOrdersList();
     if (cached.isEmpty) return const [];
     return OrderMapper.sessionOrdersFromOrdersList(
       cached,
@@ -135,6 +139,7 @@ class SessionRepository {
   }
 
   Future<void> clearOpenOrdersCache() async {
+    _openOrdersMemory = null;
     await _local.clearOpenOrdersList();
   }
 
@@ -202,7 +207,8 @@ class SessionRepository {
       pageMaps = [...pageMaps, ...extraMaps];
     }
 
-    unawaited(_local.saveOpenOrdersList(pageMaps));
+    _openOrdersMemory = pageMaps;
+    await _local.saveOpenOrdersList(pageMaps);
     return OrderMapper.sessionOrdersFromOrdersList(
       pageMaps,
       waiterId: scopedId,

@@ -84,12 +84,12 @@ class ConnectController extends GetxController {
 
     progress.value = 1.0;
     isConnected.value = true;
-    _goNext(AppRoutes.session);
+    _goNext(AppRoutes.session, arguments: const {'preloaded': true});
   }
 
-  void _goNext(String route) {
+  void _goNext(String route, {Map<String, dynamic>? arguments}) {
     if (_navigated) return;
     _navigated = true;
-    Get.offNamed(route);
+    Get.offNamed(route, arguments: arguments);
   }
 }

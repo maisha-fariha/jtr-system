@@ -98,19 +98,35 @@ class SessionController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    final args = Get.arguments;
+    final justPreloaded = args is Map && args['preloaded'] == true;
+
     // Paint cached rows immediately so the session screen is not blank.
     _hydrateOrdersFromCache();
-    unawaited(loadActiveDay());
-    // Cache-first: if Hive had rows, soft-refresh in background.
-    // Cold start (empty cache) still awaits the fast first-page network fetch.
-    unawaited(
-      loadSessionOrders(
-        forceRefresh: orders.isEmpty,
-        showLoading: orders.isEmpty,
-        enrichDetails: false,
-      ),
-    );
-    unawaited(_prefetchTables());
+    unawaited(loadActiveDay(forceRefresh: !justPreloaded));
+
+    if (justPreloaded) {
+      // Sync screen already fetched fresh data — paint instantly, no spinner.
+      if (orders.isEmpty) {
+        // Preload failed or timed out — retry quietly in the background.
+        unawaited(
+          loadSessionOrders(
+            forceRefresh: true,
+            showLoading: false,
+            enrichDetails: false,
+          ),
+        );
+      }
+    } else {
+      unawaited(
+        loadSessionOrders(
+          forceRefresh: orders.isEmpty,
+          showLoading: orders.isEmpty,
+          enrichDetails: false,
+        ),
+      );
+      unawaited(_prefetchTables());
+    }
   }
 
   void _hydrateOrdersFromCache() {
@@ -687,8 +703,16 @@ class SessionController extends GetxController {
         existing.id,
         previousDisplayEntries: layoutHints,
       );
-      orders[idx] = detail;
-      orders.refresh();
+      // Re-resolve the row by id — a background list refresh may have
+      // mutated `orders` while this request was in flight, so the index
+      // captured before the `await` can no longer be trusted (writing to
+      // a stale index silently drops the fetched detail on the floor,
+      // leaving the row showing its lightweight total with no items).
+      final freshIdx = orders.indexWhere((order) => order.id == existing.id);
+      if (freshIdx >= 0) {
+        orders[freshIdx] = detail;
+        orders.refresh();
+      }
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
     } catch (_) {

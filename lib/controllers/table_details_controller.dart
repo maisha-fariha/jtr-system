@@ -324,18 +324,18 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  /// Presentation-only: hide create-seed while the API still requires it.
+  /// Presentation-only: hide create-seed while the ticket is still empty.
+  ///
+  /// Never strip lines that are already on [raw] — background refresh can
+  /// re-set the empty-shell flag incorrectly after qty/add; trust local detail.
   SessionOrder forDisplay(SessionOrder raw) {
     if (raw.id > 0 &&
         Get.isRegistered<OrderRepository>() &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
-      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
-      return raw.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
+      if (raw.products.isNotEmpty || raw.displayEntries.isNotEmpty) {
+        _orderRepository.clearEmptyShellDisplay(raw.id);
+        return raw;
+      }
     }
     return raw;
   }
@@ -1576,6 +1576,13 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
+    // Qty/add syncs must not stay trapped behind the empty-create-shell flag.
+    if (updated.id > 0 &&
+        (updated.products.isNotEmpty || displayEntries.isNotEmpty)) {
+      _orderRepository.bumpDetailRevision(updated.id);
+      _orderRepository.clearEmptyShellDisplay(updated.id);
+    }
+
     final synced = forDisplay(
       updated.copyWith(
         displayEntries: displayEntries,
@@ -1917,23 +1924,45 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: (updated) {
+        // Never adopt an empty / replacement shell after a qty tweak.
+        if (updated.products.isEmpty && snapshot.products.isNotEmpty) {
+          return;
+        }
         if (updated.id > 0) this.orderId = updated.id;
-        _syncOrderInSession(updated, orderNumber);
+        _syncOrderInSession(
+          updated,
+          orderNumber,
+          displayEntriesOverride: updated.displayEntries.isNotEmpty
+              ? updated.displayEntries
+              : predicted.displayEntries,
+        );
       },
       sync: () async {
         final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
           orderId: orderId,
           lineIndex: lineIndex,
           delta: delta,
+          previousDisplayEntries: predicted.displayEntries,
         );
         if (updated.id > 0) this.orderId = updated.id;
         return updated;
       },
-      recover: (snap) => _orderRepository.getOrderDetail(
-        this.orderId ?? orderId,
-        previousDisplayEntries: snap.displayEntries,
-      ),
-      onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
+      recover: (snap) async {
+        try {
+          final recovered = await _orderRepository.getOrderDetail(
+            this.orderId ?? orderId,
+            previousDisplayEntries: snap.displayEntries,
+          );
+          if (recovered.products.isEmpty && snap.products.isNotEmpty) {
+            return snap;
+          }
+          return recovered;
+        } catch (_) {
+          return snap;
+        }
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('modifier la quantité', error),
     );
   }
 
@@ -1956,8 +1985,17 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: (updated) {
+        if (updated.products.isEmpty && snapshot.products.isNotEmpty) {
+          return;
+        }
         if (updated.id > 0) this.orderId = updated.id;
-        _syncOrderInSession(updated, orderNumber);
+        _syncOrderInSession(
+          updated,
+          orderNumber,
+          displayEntriesOverride: updated.displayEntries.isNotEmpty
+              ? updated.displayEntries
+              : predicted.displayEntries,
+        );
       },
       sync: () async {
         final updated = await _orderRepository.setOrderLineQuantityAtIndex(
@@ -1968,11 +2006,22 @@ class TableDetailsController extends GetxController {
         if (updated.id > 0) this.orderId = updated.id;
         return updated;
       },
-      recover: (snap) => _orderRepository.getOrderDetail(
-        this.orderId ?? orderId,
-        previousDisplayEntries: snap.displayEntries,
-      ),
-      onError: (error) => _showOptimisticMutationError('modifier la quantité', error),
+      recover: (snap) async {
+        try {
+          final recovered = await _orderRepository.getOrderDetail(
+            this.orderId ?? orderId,
+            previousDisplayEntries: snap.displayEntries,
+          );
+          if (recovered.products.isEmpty && snap.products.isNotEmpty) {
+            return snap;
+          }
+          return recovered;
+        } catch (_) {
+          return snap;
+        }
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('modifier la quantité', error),
     );
   }
 

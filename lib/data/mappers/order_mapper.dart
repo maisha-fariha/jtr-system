@@ -2725,8 +2725,8 @@ class OrderMapper {
     required int lineIndex,
     required int qty,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       if (qty <= 0) {
         item['status'] = 'cancelled';
         return;
@@ -2736,7 +2736,7 @@ class OrderMapper {
       item['qty'] = qty;
       item['sub_total'] = unitPrice * qty;
     });
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustSimpleProductQuantity({
@@ -3114,12 +3114,11 @@ class OrderMapper {
       return buildOrderUpdatePayload(orderDetail);
     }
 
-    final working = Map<String, dynamic>.from(orderDetail);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
     var currentIndex = 0;
-
-    final seatOrders = working['seat_orders'];
+    final seatOrders = orderDetail['seat_orders'];
     if (seatOrders is! List) {
-      return buildOrderUpdatePayload(working);
+      return buildOrderUpdatePayload(orderDetail);
     }
 
     for (final seat in seatOrders) {
@@ -3127,13 +3126,7 @@ class OrderMapper {
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
           if (lineIndices.contains(currentIndex)) {
             item['status'] = 'cancelled';
           }
@@ -3142,47 +3135,18 @@ class OrderMapper {
       }
     }
 
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> cancelOrderLineAtIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    var currentIndex = 0;
-    var cancelled = false;
-
-    final seatOrders = working['seat_orders'];
-    if (seatOrders is! List) {
-      return buildOrderUpdatePayload(working);
-    }
-
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = _sortedCoursesList(seat['courses']);
-
-      for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
-          if (currentIndex == lineIndex) {
-            item['status'] = 'cancelled';
-            cancelled = true;
-            break;
-          }
-          currentIndex++;
-        }
-        if (cancelled) break;
-      }
-      if (cancelled) break;
-    }
-
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
+      item['status'] = 'cancelled';
+    });
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustLineQuantityAtIndex({
@@ -3190,8 +3154,8 @@ class OrderMapper {
     required int lineIndex,
     required int delta,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       final currentQty = (item['qty'] as num?)?.toInt() ?? 1;
       final newQty = currentQty + delta;
       if (newQty <= 0) {
@@ -3202,21 +3166,30 @@ class OrderMapper {
       item['qty'] = newQty;
       item['sub_total'] = unitPrice * newQty;
     });
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> applyOfferAtLineIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       item['is_offer'] = true;
       item['offer_reason'] = 'Article offert';
       item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
       item['sub_total'] = '0.00';
     });
-    return buildOrderUpdatePayload(working);
+    final payload = buildOrderUpdatePayload(orderDetail);
+    final status = orderDetail['status']?.toString().trim().toLowerCase();
+    payload['status'] = (status == null ||
+            status.isEmpty ||
+            status == 'offered' ||
+            status == 'closed' ||
+            status == 'cancelled')
+        ? 'open'
+        : orderDetail['status'];
+    return payload;
   }
 
   /// Sets the API `comment` field on a visible line (message / pencil).
@@ -3225,12 +3198,12 @@ class OrderMapper {
     required int lineIndex,
     required String comment,
   }) {
-    final working = _deepCopyOrderMap(orderDetail);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
     final trimmed = comment.trim();
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       item['comment'] = trimmed;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(orderDetail);
   }
 
   static bool _mutateVisibleLineAtIndex(
@@ -3247,13 +3220,8 @@ class OrderMapper {
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
+        // Must match extractProducts / UI lineIndex (created_at, then id).
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
           if (currentIndex == lineIndex) {
             mutate(item);
             return true;
@@ -3265,6 +3233,10 @@ class OrderMapper {
 
     return false;
   }
+
+  /// Deep copy of an order detail map (mutation fallback / safe edits).
+  static Map<String, dynamic> copyOrderDetail(Map<String, dynamic> source) =>
+      _deepCopyOrderMap(source);
 
   static double parseOrderPayableAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);

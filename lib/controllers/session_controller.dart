@@ -409,9 +409,19 @@ class SessionController extends GetxController {
   ) {
     if (previous == null) return incoming;
 
-    // Lightweight list rows have no lines — keep local products AND total.
-    // (API summaries often still report 0,00 € right after the first add.)
-    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+    final incomingLines = incoming.products.length;
+    final previousLines = previous.products.length;
+    final incomingDisplay = incoming.displayEntries.length;
+    final previousDisplay = previous.displayEntries.length;
+
+    // Lightweight / stale background rows must not demote a richer ticket.
+    final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
+        (incomingLines > 0 &&
+            previousLines > 0 &&
+            incomingLines < previousLines) ||
+        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0);
+
+    if (incomingThinner) {
       return previous.copyWith(
         impressionCount: incoming.impressionCount,
         impressionColor: incoming.impressionColor,
@@ -475,6 +485,9 @@ class SessionController extends GetxController {
   }
 
   /// Fills product lines from cache / network without blocking the list UI.
+  ///
+  /// Uses a detail-revision guard so a slow GET cannot overwrite a ticket the
+  /// waiter just mutated (qty +/− / add) in table details.
   Future<void> _enrichOrdersInBackground(List<SessionOrder> summaries) async {
     final tasks = <Future<void>>[];
 
@@ -483,33 +496,42 @@ class SessionController extends GetxController {
 
       tasks.add(() async {
         try {
+          final revisionAtStart =
+              _orderRepository.detailRevision(summary.id);
+          final previous = findOrder(orderId: summary.id);
+
           final cached = _orderRepository.cachedOrderDetail(summary.id);
+          SessionOrder detail;
           if (cached != null) {
             final seedId = _orderRepository.lastEmptyOrderSeedProductId;
-            var detail = OrderMapper.sessionOrderHidingCreateSeed(
+            detail = OrderMapper.sessionOrderHidingCreateSeed(
               cached,
               seedProductId: seedId,
             ).copyWith(
               id: summary.id,
             );
-            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
-              detail = detail.copyWith(
-                products: const [],
-                displayEntries: const [],
-                itemCount: 0,
-                total: OrderMapper.formatPrice('0'),
-              );
+            // Empty-shell is for brand-new tables only. Never blank a cache
+            // that already has lines (stale flag after qty / background GET).
+            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
+                detail.products.isEmpty &&
+                detail.displayEntries.isEmpty) {
+              // keep empty
+            } else if (_orderRepository
+                .shouldDisplayAsEmptyCreateShell(summary.id)) {
+              _orderRepository.clearEmptyShellDisplay(summary.id);
             }
-            if (_stillInList(summary.id)) {
-              _upsertOrderInList(detail);
-            }
-            return;
+          } else {
+            detail = await _orderRepository.getOrderDetail(summary.id);
           }
 
-          final detail = await _orderRepository.getOrderDetail(summary.id);
-          if (_stillInList(summary.id)) {
-            _upsertOrderInList(detail);
+          if (!_stillInList(summary.id)) return;
+          if (revisionAtStart !=
+              _orderRepository.detailRevision(summary.id)) {
+            return;
           }
+          if (_wouldDowngradeDetail(detail, previous)) return;
+
+          _upsertOrderInList(detail);
         } catch (_) {}
       }());
     }
@@ -521,6 +543,25 @@ class SessionController extends GetxController {
 
   bool _stillInList(int orderId) =>
       orders.any((order) => order.id == orderId);
+
+  /// True when applying [incoming] would erase lines the UI already shows.
+  bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
+    if (previous == null) return false;
+    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+      return true;
+    }
+    if (previous.products.isNotEmpty &&
+        incoming.products.isNotEmpty &&
+        incoming.products.length < previous.products.length) {
+      return true;
+    }
+    if (incoming.displayEntries.isEmpty &&
+        previous.displayEntries.isNotEmpty &&
+        previous.products.isNotEmpty) {
+      return true;
+    }
+    return false;
+  }
 
   bool _isOrderSuppressed(String orderNumber) {
     for (final suppressed in _suppressedTableNumbers) {
@@ -551,17 +592,13 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Never let create-seed flash into the session list / table details.
+    // Empty-shell lock is only for brand-new empty tables. If detail already
+    // has lines, clear the flag — never strip (background refresh race).
     var safeOrder = order;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id) &&
         (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
-      safeOrder = order.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
+      _orderRepository.clearEmptyShellDisplay(order.id);
     }
 
     SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>

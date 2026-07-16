@@ -43,6 +43,10 @@ class OrderRepository {
   /// Orders opened as empty tables — UI must not flash API create-seed lines.
   final Set<int> _emptyShellDisplayOrderIds = <int>{};
 
+  /// Monotonic local detail revision. Background enrich that started before a
+  /// qty/add mutation must discard its result when this bumps mid-flight.
+  final Map<int, int> _detailRevisionByOrderId = <int, int>{};
+
   /// In-flight seed strips after create — first add must wait so PUT strip
   /// does not race with PUT revive/add and wipe the waiter's item.
   final Map<int, Future<void>> _pendingCreateSeedStrips = <int, Future<void>>{};
@@ -112,25 +116,45 @@ class OrderRepository {
         detail,
         seedProductId: seedId,
       );
+      final cachedDetail = _local.readOrderDetail(orderId);
+      final cachedHasRealItems = cachedDetail != null &&
+          OrderMapper.hasRealNonSeedVisibleItems(
+            cachedDetail,
+            seedProductId: seedId,
+          );
 
       if (markedEmptyShell && !hasRealItems) {
-        // Stay empty until the waiter adds a real product — never flash seed
-        // when background strip has not cleared the API yet.
-        _rememberEmptyShellDisplay(orderId);
-        if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+        // Background GET can briefly look seed-only after qty edits. Never
+        // demote a ticket that already has real lines in local cache.
+        final keepCached = cachedHasRealItems ? cachedDetail : null;
+        if (keepCached != null) {
+          detail = keepCached;
+          _forgetEmptyShellDisplay(orderId);
+        } else {
+          // Stay empty until the waiter adds a real product — never flash seed
+          // when background strip has not cleared the API yet.
+          _rememberEmptyShellDisplay(orderId);
+          if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+            final stripLog = StringBuffer(
+              '── getOrderDetail: empty-shell hide+strip order=$orderId ──',
+            );
+            unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+          }
+          detail = OrderMapper.asOpenEmptyOrderShell(detail);
+        }
+      } else if (onlySeed) {
+        final keepCached = cachedHasRealItems ? cachedDetail : null;
+        if (keepCached != null) {
+          detail = keepCached;
+          _forgetEmptyShellDisplay(orderId);
+        } else {
+          _rememberEmptyShellDisplay(orderId);
           final stripLog = StringBuffer(
-            '── getOrderDetail: empty-shell hide+strip order=$orderId ──',
+            '── getOrderDetail: hide+strip create seed order=$orderId ──',
           );
           unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+          detail = OrderMapper.asOpenEmptyOrderShell(detail);
         }
-        detail = OrderMapper.asOpenEmptyOrderShell(detail);
-      } else if (onlySeed) {
-        _rememberEmptyShellDisplay(orderId);
-        final stripLog = StringBuffer(
-          '── getOrderDetail: hide+strip create seed order=$orderId ──',
-        );
-        unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
-        detail = OrderMapper.asOpenEmptyOrderShell(detail);
       } else {
         if (markedEmptyShell) {
           _forgetEmptyShellDisplay(orderId);
@@ -181,6 +205,21 @@ class OrderRepository {
   /// Fresh creates stay empty in UI until a real (non-seed) line is added.
   bool shouldDisplayAsEmptyCreateShell(int orderId) =>
       orderId > 0 && _emptyShellDisplayOrderIds.contains(orderId);
+
+  /// Clear empty-shell UI lock once the ticket has real lines again.
+  void clearEmptyShellDisplay(int orderId) => _forgetEmptyShellDisplay(orderId);
+
+  /// Current local detail revision for [orderId] (0 if never bumped).
+  int detailRevision(int orderId) =>
+      orderId > 0 ? (_detailRevisionByOrderId[orderId] ?? 0) : 0;
+
+  /// Call before/after local ticket mutations so stale background GETs drop.
+  int bumpDetailRevision(int orderId) {
+    if (orderId <= 0) return 0;
+    final next = detailRevision(orderId) + 1;
+    _detailRevisionByOrderId[orderId] = next;
+    return next;
+  }
 
   Future<int?> _resolveSeedProductIdForDisplay() async {
     if (lastEmptyOrderSeedProductId != null &&
@@ -2112,9 +2151,11 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final beforeCount = OrderMapper.countVisibleLineItems(detail);
+      final localMutated = OrderMapper.copyOrderDetail(detail);
 
       final payload = OrderMapper.setLineQuantityAtIndex(
-        orderDetail: detail,
+        orderDetail: localMutated,
         lineIndex: lineIndex,
         qty: qty,
       );
@@ -2125,9 +2166,11 @@ class OrderRepository {
         apiLog: apiLog,
       );
       lastAddItemLog = apiLog.toString();
-      return _persistOrderAfterItemMutation(
+      return _persistOrderAfterLineEdit(
         orderId: orderId,
-        detail: updated,
+        putResponse: updated,
+        localMutated: localMutated,
+        beforeVisibleCount: beforeCount,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
@@ -2243,9 +2286,10 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final localMutated = OrderMapper.copyOrderDetail(detail);
 
       final payload = OrderMapper.cancelOrderLinesAtIndices(
-        orderDetail: detail,
+        orderDetail: localMutated,
         lineIndices: lineIndices.toSet(),
       );
 
@@ -2260,6 +2304,9 @@ class OrderRepository {
         orderId: orderId,
         detail: updated,
         previousDisplayEntries: previousDisplayEntries,
+        keepLinesIfApiEmpty: OrderMapper.orderDetailHasNoVisibleItems(localMutated)
+            ? null
+            : localMutated,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
@@ -2291,9 +2338,10 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
+      final localMutated = OrderMapper.copyOrderDetail(detail);
 
       final payload = OrderMapper.cancelOrderLineAtIndex(
-        orderDetail: detail,
+        orderDetail: localMutated,
         lineIndex: lineIndex,
       );
 
@@ -2307,6 +2355,9 @@ class OrderRepository {
       return _persistOrderAfterItemMutation(
         orderId: orderId,
         detail: updated,
+        keepLinesIfApiEmpty: OrderMapper.orderDetailHasNoVisibleItems(localMutated)
+            ? null
+            : localMutated,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
@@ -2456,6 +2507,7 @@ class OrderRepository {
     required int orderId,
     required Map<String, dynamic> detail,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    Map<String, dynamic>? keepLinesIfApiEmpty,
   }) async {
     var working = detail;
 
@@ -2464,7 +2516,13 @@ class OrderRepository {
       working = await _remote.fetchOrderDetail(orderId);
     } catch (_) {}
 
-    if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
+    // Incomplete PUT/GET (or offered lock) can look empty while lines still exist.
+    // Keep the locally mutated detail so the ticket does not flash blank.
+    if (OrderMapper.orderDetailHasNoVisibleItems(working) &&
+        keepLinesIfApiEmpty != null &&
+        !OrderMapper.orderDetailHasNoVisibleItems(keepLinesIfApiEmpty)) {
+      working = keepLinesIfApiEmpty;
+    } else if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
       // Backend often marks emptied orders closed/fully_paid — that removes
       // them from the remote list. Replace with a real empty open order.
       if (OrderMapper.shouldRecreateOrderForAdd(working) ||
@@ -2696,20 +2754,118 @@ class OrderRepository {
     return OrderMapper.asOpenEmptyOrderShell(working);
   }
 
+  /// After qty/offer-style mutations: refresh from API but never empty-shell /
+  /// recreate the order when lines were only adjusted.
+  Future<SessionOrder> _persistOrderAfterLineEdit({
+    required int orderId,
+    required Map<String, dynamic> putResponse,
+    required Map<String, dynamic> localMutated,
+    required int beforeVisibleCount,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    var working = putResponse;
+    try {
+      working = await _remote.fetchOrderDetail(orderId);
+    } catch (_) {}
+
+    final localCount = OrderMapper.countVisibleLineItems(localMutated);
+    final apiCount = OrderMapper.countVisibleLineItems(working);
+
+    // Qty edits must not wipe the ticket. If API looks empty/partial vs local,
+    // keep the locally mutated detail (items still exist — reopen proves it).
+    if (beforeVisibleCount > 0 &&
+        localCount > 0 &&
+        (apiCount == 0 || apiCount < localCount)) {
+      working = localMutated;
+    }
+
+    bumpDetailRevision(orderId);
+    _forgetEmptyShellDisplay(orderId);
+    await _local.saveOrderDetail(orderId, working);
+    await _sessionLocal.upsertOpenOrderInList(working);
+
+    final splitHint = previousDisplayEntries == null
+        ? _local.readSuivreSplitHint(orderId)
+        : OrderMapper.suivreSplitPositions(previousDisplayEntries);
+    final countHint = previousDisplayEntries == null
+        ? _local.readSuivreCountHint(orderId)
+        : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+
+    final order = OrderMapper.fromOrderDetail(
+      working,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: splitHint,
+      suivreCountHint: countHint,
+    );
+
+    // Last resort: never return an empty SessionOrder when we still have lines.
+    if (order.products.isEmpty && localCount > 0) {
+      final fallback = OrderMapper.fromOrderDetail(
+        localMutated,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
+      );
+      await _persistSuivreLayoutHints(orderId, fallback.displayEntries);
+      return fallback;
+    }
+
+    await _persistSuivreLayoutHints(orderId, order.displayEntries);
+    return order;
+  }
+
   Future<SessionOrder> adjustOrderLineQuantityAtIndex({
     required int orderId,
     required int lineIndex,
     required int delta,
+    List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
-    return _mutateOrderLine(
-      orderId: orderId,
-      logTitle: 'Ajustement quantité ligne',
-      mutate: (detail) => OrderMapper.adjustLineQuantityAtIndex(
-        orderDetail: detail,
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — mise à jour quantité impossible.';
+      throw ApiException(
+        message: 'Modification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajustement quantité ligne ──');
+    apiLog.writeln('order_id=$orderId line_index=$lineIndex delta=$delta');
+
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      final detail = await _remote.fetchOrderDetail(orderId);
+      final beforeCount = OrderMapper.countVisibleLineItems(detail);
+      final localMutated = OrderMapper.copyOrderDetail(detail);
+      final payload = OrderMapper.adjustLineQuantityAtIndex(
+        orderDetail: localMutated,
         lineIndex: lineIndex,
         delta: delta,
-      ),
-    );
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      lastAddItemLog = apiLog.toString();
+
+      return _persistOrderAfterLineEdit(
+        orderId: orderId,
+        putResponse: updated,
+        localMutated: localMutated,
+        beforeVisibleCount: beforeCount,
+        previousDisplayEntries: previousDisplayEntries,
+      );
+    } on ApiException catch (e) {
+      apiLog.writeln('ERREUR: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
   }
 
   Future<SessionOrder> applyOfferAtLineIndex({
@@ -3176,7 +3332,8 @@ class OrderRepository {
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
-      final payload = mutate(detail);
+      final localMutated = OrderMapper.copyOrderDetail(detail);
+      final payload = mutate(localMutated);
 
       final updated = await _putOrderUpdate(
         orderId: orderId,
@@ -3187,6 +3344,9 @@ class OrderRepository {
       return _persistOrderAfterItemMutation(
         orderId: orderId,
         detail: updated,
+        keepLinesIfApiEmpty: OrderMapper.orderDetailHasNoVisibleItems(localMutated)
+            ? null
+            : localMutated,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');

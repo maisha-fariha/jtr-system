@@ -228,6 +228,8 @@ class OrderRepository {
   Future<void> closeOrder(
     int orderId, {
     String? tableNumber,
+    String? cancelToWhom,
+    String? cancelNote,
   }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
@@ -241,6 +243,16 @@ class OrderRepository {
     );
 
     if (orderId > 0) {
+      final toWhom = cancelToWhom?.trim();
+      final note = cancelNote?.trim();
+      if ((toWhom != null && toWhom.isNotEmpty) ||
+          (note != null && note.isNotEmpty)) {
+        logOrderFlow(
+          'CLOSE order=$orderId'
+          '${toWhom != null && toWhom.isNotEmpty ? ' toWhom="$toWhom"' : ''}'
+          '${note != null && note.isNotEmpty ? ' note="$note"' : ''}',
+        );
+      }
       await _remote.closeOrder(orderId);
       await _local.removeOrderDetail(orderId);
       await _sessionLocal.removeOpenOrderFromList(orderId);

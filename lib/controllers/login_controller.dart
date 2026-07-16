@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../controllers/session_controller.dart';
 import '../models/user_suggestion.dart';
 import '../routes/app_pages.dart';
 import '../widgets/user_identifiant_field_controller.dart';
@@ -115,6 +116,10 @@ class LoginController extends GetxController {
       );
       if (Get.isRegistered<SessionRepository>()) {
         await Get.find<SessionRepository>().clearOpenOrdersCache();
+      }
+      // Drop any previous session controller so the next open is a fresh paint.
+      if (Get.isRegistered<SessionController>()) {
+        Get.delete<SessionController>(force: true);
       }
       // Auth succeeded — reuse the existing "Chargement base de données"
       // screen to preload session data before the session page mounts.

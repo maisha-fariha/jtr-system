@@ -101,22 +101,30 @@ class SessionController extends GetxController {
     final args = Get.arguments;
     final justPreloaded = args is Map && args['preloaded'] == true;
 
-    // Paint cached rows immediately so the session screen is not blank.
-    _hydrateOrdersFromCache();
+    // Prefer rows already mapped during connect preload (no empty remapping gap).
+    final preloadedRows = justPreloaded
+        ? _sessionRepository.takePreloadedSessionOrders()
+        : null;
+    if (preloadedRows != null && preloadedRows.isNotEmpty) {
+      orders.assignAll(preloadedRows);
+    } else {
+      _hydrateOrdersFromCache();
+    }
+
     unawaited(loadActiveDay(forceRefresh: !justPreloaded));
 
     if (justPreloaded) {
-      // Sync screen already fetched fresh data — paint instantly, no spinner.
       if (orders.isEmpty) {
-        // Preload failed or timed out — retry quietly in the background.
+        // Preload missed rows — show loader, never flash "Aucune commande".
         unawaited(
           loadSessionOrders(
             forceRefresh: true,
-            showLoading: false,
+            showLoading: true,
             enrichDetails: false,
           ),
         );
       }
+      unawaited(_prefetchTables());
     } else {
       unawaited(
         loadSessionOrders(
@@ -1185,18 +1193,47 @@ class SessionController extends GetxController {
   }
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
+    if (findOrder(orderNumber: orderNumber) == null) return;
+
     CancelTableDialog.show(
       context: context,
       title: 'Annulation Table',
-      onConfirm: () => CancelTableDialog.show(
-        context: context,
-        title: 'Annulation après édition\nnote',
-        onConfirm: () => deleteOrder(orderNumber),
-      ),
+      onConfirm: ({
+        required String userOrId,
+        required String passcode,
+      }) async {
+        await _authRepository.verifyCredentials(
+          userOrId: userOrId,
+          passcode: passcode,
+        );
+
+        // Open step 2 after step 1 closes (same old two-dialog flow).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          CancelTableNoteDialog.show(
+            context: context,
+            title: 'Annulation après édition\nnote',
+            onConfirm: ({
+              required String toWhom,
+              required String note,
+            }) async {
+              await deleteOrder(
+                orderNumber,
+                cancelToWhom: toWhom,
+                cancelNote: note,
+              );
+            },
+          );
+        });
+      },
     );
   }
 
-  Future<void> deleteOrder(String orderNumber) async {
+  Future<void> deleteOrder(
+    String orderNumber, {
+    String? cancelToWhom,
+    String? cancelNote,
+  }) async {
     final order = findOrder(orderNumber: orderNumber);
     if (order == null) return;
 
@@ -1216,6 +1253,8 @@ class SessionController extends GetxController {
         await _orderRepository.closeOrder(
           order.id,
           tableNumber: order.number,
+          cancelToWhom: cancelToWhom,
+          cancelNote: cancelNote,
         );
       }
 
@@ -1234,16 +1273,16 @@ class SessionController extends GetxController {
           _clearSuppressedTable(order.number);
         }
       }());
-    } on ApiException catch (e) {
+    } on ApiException {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),
       );
-      _showSnack('Erreur', e.message);
+      rethrow;
     } catch (_) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),
       );
-      _showSnack('Erreur', 'Impossible d\'annuler la table.');
+      throw ApiException(message: 'Impossible d\'annuler la table.');
     }
   }
 
@@ -1262,10 +1301,21 @@ class SessionController extends GetxController {
   }
 
   void requestApplyOffer(String orderNumber, {required BuildContext context}) {
+    if (findOrder(orderNumber: orderNumber) == null) return;
+
     CancelTableDialog.show(
       context: context,
       title: 'Table Offerte',
-      onConfirm: () => applyOffer(orderNumber),
+      onConfirm: ({
+        required String userOrId,
+        required String passcode,
+      }) async {
+        await _authRepository.verifyCredentials(
+          userOrId: userOrId,
+          passcode: passcode,
+        );
+        await applyOffer(orderNumber);
+      },
     );
   }
 
@@ -1293,10 +1343,10 @@ class SessionController extends GetxController {
         'Offre',
         'Offre appliquée sur la table $orderNumber.',
       );
-    } on ApiException catch (e) {
-      _showSnack('Erreur', e.message);
+    } on ApiException {
+      rethrow;
     } catch (_) {
-      _showSnack('Erreur', 'Impossible d\'appliquer l\'offre.');
+      throw ApiException(message: 'Impossible d\'appliquer l\'offre.');
     }
   }
 

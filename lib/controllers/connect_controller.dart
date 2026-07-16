@@ -12,7 +12,7 @@ import '../routes/app_pages.dart';
 /// Loads every open order, the active day and the tables list, with the
 /// progress bar reflecting real completion of that work (not a fixed
 /// animation), then hands off to [AppRoutes.session] — which then paints
-/// instantly with no loader of its own.
+/// instantly with no empty-state flash.
 class ConnectController extends GetxController {
   ConnectController({
     required AuthRepository authRepository,
@@ -23,7 +23,7 @@ class ConnectController extends GetxController {
   final AuthRepository _authRepository;
   final SessionRepository _sessionRepository;
 
-  static const _syncTimeout = Duration(seconds: 15);
+  static const _syncTimeout = Duration(seconds: 20);
 
   final progress = 0.0.obs;
   final statusDetail = 'ptxListOrders'.obs;
@@ -40,46 +40,47 @@ class ConnectController extends GetxController {
 
   Future<void> _runSync() async {
     if (!_authRepository.isAuthenticated) {
-      // Defensive: this screen is only meant to be reached authenticated.
       _goNext(AppRoutes.login);
       return;
     }
 
     final waiterId = _authRepository.cachedSession?.user.id ?? 0;
-    final steps = <String, Future<void> Function()>{
-      'ptxListOrders': () async {
+
+    // Fresh login: start from an empty cache, then fill it before session opens.
+    try {
+      await _sessionRepository.clearOpenOrdersCache();
+    } catch (_) {}
+
+    progress.value = 0;
+    statusDetail.value = 'ptxListOrders';
+
+    try {
+      // Orders first — session must not open until this list is ready.
+      await _sessionRepository
+          .getSessionOrders(
+            forceRefresh: true,
+            waiterId: waiterId,
+          )
+          .timeout(_syncTimeout);
+      progress.value = 1 / 3;
+      statusDetail.value = 'ptxActiveDay';
+
+      await Future.wait([
+        _sessionRepository.getActiveDay(forceRefresh: true),
+        _sessionRepository.getTablesList(forceRefresh: true),
+      ]).timeout(_syncTimeout);
+
+      progress.value = 1.0;
+      statusDetail.value = 'ptxListTables';
+    } catch (error) {
+      syncError.value = error.toString();
+      // Still try one last orders pull so session is not empty if possible.
+      try {
         await _sessionRepository.getSessionOrders(
           forceRefresh: true,
           waiterId: waiterId,
         );
-      },
-      'ptxActiveDay': () async {
-        await _sessionRepository.getActiveDay(forceRefresh: true);
-      },
-      'ptxListTables': () async {
-        await _sessionRepository.getTablesList(forceRefresh: true);
-      },
-    };
-
-    var completed = 0;
-    final total = steps.length;
-    progress.value = 0;
-
-    try {
-      await Future.wait(
-        steps.entries.map((entry) async {
-          await entry.value();
-          completed++;
-          // Real, dynamic progress — one increment per finished step.
-          progress.value = completed / total;
-          statusDetail.value = entry.key;
-        }),
-      ).timeout(_syncTimeout);
-    } catch (error) {
-      syncError.value = error.toString();
-      // Best effort — the session page already knows how to recover
-      // (cache / error state), so a slow or failed preload must never
-      // trap the user here.
+      } catch (_) {}
     }
 
     progress.value = 1.0;

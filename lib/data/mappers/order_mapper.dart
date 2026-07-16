@@ -69,13 +69,16 @@ class OrderMapper {
     return null;
   }
 
+  /// True when [order] is owned by [waiterId], or owner is unknown (list APIs
+  /// often omit `waiter_id` — excluding those caused an empty session flash).
   static bool orderBelongsToWaiter(
     Map<String, dynamic> order,
     int waiterId,
   ) {
     if (waiterId <= 0) return true;
     final orderWaiterId = waiterIdFromOrderMap(order);
-    return orderWaiterId != null && orderWaiterId == waiterId;
+    if (orderWaiterId == null) return true;
+    return orderWaiterId == waiterId;
   }
 
   /// Builds session rows from [GET /api/orders] (active-day open orders).

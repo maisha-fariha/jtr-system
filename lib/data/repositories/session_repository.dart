@@ -25,9 +25,23 @@ class SessionRepository {
   /// right after the post-login sync screen, without waiting on Hive I/O.
   List<Map<String, dynamic>>? _openOrdersMemory;
 
+  /// Already-mapped rows from the last connect preload (avoids empty flash).
+  List<SessionOrder>? _preloadedSessionOrders;
+
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
   List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
+
+  /// Rows prepared by [ConnectController] — prefer this over remapping cache.
+  List<SessionOrder>? takePreloadedSessionOrders() {
+    final rows = _preloadedSessionOrders;
+    _preloadedSessionOrders = null;
+    return rows;
+  }
+
+  void _rememberPreloadedOrders(List<SessionOrder> orders) {
+    _preloadedSessionOrders = List<SessionOrder>.from(orders);
+  }
 
   /// Instant session-list paint from memory or Hive (no network).
   List<SessionOrder> getCachedSessionOrders({int? waiterId}) {
@@ -140,6 +154,7 @@ class SessionRepository {
 
   Future<void> clearOpenOrdersCache() async {
     _openOrdersMemory = null;
+    _preloadedSessionOrders = null;
     await _local.clearOpenOrdersList();
   }
 
@@ -209,10 +224,12 @@ class SessionRepository {
 
     _openOrdersMemory = pageMaps;
     await _local.saveOpenOrdersList(pageMaps);
-    return OrderMapper.sessionOrdersFromOrdersList(
+    final mapped = OrderMapper.sessionOrdersFromOrdersList(
       pageMaps,
       waiterId: scopedId,
       lightweight: true,
     );
+    _rememberPreloadedOrders(mapped);
+    return mapped;
   }
 }

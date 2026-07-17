@@ -285,7 +285,17 @@ class DeviceActivationMapper {
     if (lower.contains('deactivated') || lower.contains('désactivé')) {
       return DeviceGateOutcome.deactivated;
     }
-    // revoked / invalid credentials → re-activate
-    return DeviceGateOutcome.needsActivation;
+    // Doc: only wipe on revoke / invalid device credentials.
+    if (lower.contains('revoked') ||
+        lower.contains('révoqué') ||
+        lower.contains('revoque') ||
+        lower.contains('invalid device') ||
+        lower.contains('identifiants poste') ||
+        lower.contains('device credentials') ||
+        lower.contains('unknown device')) {
+      return DeviceGateOutcome.needsActivation;
+    }
+    // Network / unknown API errors: keep credentials (handled by caller).
+    return DeviceGateOutcome.active;
   }
 }

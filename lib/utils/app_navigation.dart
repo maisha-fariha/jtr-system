@@ -14,7 +14,7 @@ class AppNavigation {
     if (Get.isRegistered<AuthRepository>()) {
       await Get.find<AuthRepository>().logout();
     }
-    Get.offAllNamed(AppRoutes.home);
+    Get.offAllNamed(AppRoutes.login);
   }
 
   static void _closeOverlays() {

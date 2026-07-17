@@ -60,25 +60,67 @@ class DeviceRepository {
     if (!hasCreds) {
       ApiConfig.resetToDefaults();
       _apiClient.applyRuntimeConfig();
+      logDeviceActivation(phase: 'GATE_NO_CREDENTIALS');
       return DeviceGateOutcome.needsActivation;
     }
 
     await restoreRuntimeFromStorage();
+    logDeviceActivation(
+      phase: 'GATE_CREDS_RESTORED',
+      posUrl: ApiConfig.baseUrl,
+      response: {
+        'tenant_schema': ApiConfig.tenantSchema,
+        'device_id': ApiConfig.deviceId,
+        'has_token': ApiConfig.deviceToken?.isNotEmpty == true,
+      },
+    );
 
     try {
       final session = await _remote.fetchSession();
-      if (session.isActive) return DeviceGateOutcome.active;
-      if (session.isDeactivated) return DeviceGateOutcome.deactivated;
+      if (session.isActive) {
+        logDeviceActivation(
+          phase: 'GATE_SESSION_ACTIVE',
+          response: {
+            'device_id': session.deviceId,
+            'status': session.status,
+            'label': session.label,
+          },
+        );
+        return DeviceGateOutcome.active;
+      }
+      if (session.isDeactivated) {
+        logDeviceActivation(phase: 'GATE_SESSION_DEACTIVATED');
+        return DeviceGateOutcome.deactivated;
+      }
+      logDeviceActivation(
+        phase: 'GATE_SESSION_OTHER_STATUS',
+        response: {'status': session.status},
+      );
       return DeviceGateOutcome.deactivated;
     } on ApiException catch (e) {
       final outcome =
           DeviceActivationMapper.mapSessionErrorMessage(e.message);
+      logDeviceActivation(
+        phase: 'GATE_SESSION_ERROR',
+        error: e.message,
+        response: {
+          'mapped_outcome': outcome.name,
+          'statusCode': e.statusCode,
+          'body': e.responseBody,
+        },
+      );
+      // Only wipe storage on explicit revoke / invalid device credentials.
       if (outcome == DeviceGateOutcome.needsActivation) {
         await clearDeviceCredentials();
+        logDeviceActivation(phase: 'GATE_CREDENTIALS_CLEARED');
       }
       return outcome;
-    } catch (_) {
-      // Network/unknown: keep credentials, treat as active so offline reopen works.
+    } catch (e) {
+      // Network/unknown: keep credentials so reopen still reaches login/home.
+      logDeviceActivation(
+        phase: 'GATE_SESSION_NETWORK',
+        error: e.toString(),
+      );
       return DeviceGateOutcome.active;
     }
   }

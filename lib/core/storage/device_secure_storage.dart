@@ -4,7 +4,11 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 class DeviceSecureStorage {
   DeviceSecureStorage({FlutterSecureStorage? storage})
       : _storage = storage ??
-            const FlutterSecureStorage();
+            const FlutterSecureStorage(
+              iOptions: IOSOptions(
+                accessibility: KeychainAccessibility.first_unlock_this_device,
+              ),
+            );
 
   static const _keyDeviceId = 'jtr_device_id';
   static const _keyDeviceToken = 'jtr_device_token';

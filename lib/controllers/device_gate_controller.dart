@@ -2,15 +2,20 @@ import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
 import '../data/models/device_activation_models.dart';
+import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
 import '../routes/app_pages.dart';
 
-/// Cold-start loading screen that decides Activation / Blocked / Connect.
+/// Cold-start loading screen that decides Activation / Blocked / Login / Connect.
 class DeviceGateController extends GetxController {
-  DeviceGateController({required DeviceRepository deviceRepository})
-      : _deviceRepository = deviceRepository;
+  DeviceGateController({
+    required DeviceRepository deviceRepository,
+    required AuthRepository authRepository,
+  })  : _deviceRepository = deviceRepository,
+        _authRepository = authRepository;
 
   final DeviceRepository _deviceRepository;
+  final AuthRepository _authRepository;
 
   final isLoading = true.obs;
   final statusText = 'Vérification du poste…'.obs;
@@ -45,7 +50,13 @@ class DeviceGateController extends GetxController {
           _go(AppRoutes.deviceBlocked, arguments: {'reason': 'license'});
           return;
         case DeviceGateOutcome.active:
-          _go(AppRoutes.connect);
+          // Connect (session preload) only makes sense once authenticated;
+          // otherwise go straight to Login — no sync screen before auth.
+          _go(
+            _authRepository.isAuthenticated
+                ? AppRoutes.connect
+                : AppRoutes.login,
+          );
           return;
       }
     } catch (e) {

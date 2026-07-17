@@ -80,8 +80,6 @@ class SessionController extends GetxController {
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
   final isLoadingOrders = false.obs;
-  /// True while pages 2..N are loading after page 1 is already on screen.
-  final isLoadingMoreOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
   final activeDay = ActiveDayInfo.fallback().obs;
@@ -100,19 +98,43 @@ class SessionController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    // Paint cached rows immediately so the session screen is not blank.
-    _hydrateOrdersFromCache();
-    unawaited(loadActiveDay());
-    // Cache-first: if Hive had rows, soft-refresh in background.
-    // Cold start (empty cache) still awaits the fast first-page network fetch.
-    unawaited(
-      loadSessionOrders(
-        forceRefresh: orders.isEmpty,
-        showLoading: orders.isEmpty,
-        enrichDetails: false,
-      ),
-    );
-    unawaited(_prefetchTables());
+    final args = Get.arguments;
+    final justPreloaded = args is Map && args['preloaded'] == true;
+
+    // Prefer rows already mapped during connect preload (no empty remapping gap).
+    final preloadedRows = justPreloaded
+        ? _sessionRepository.takePreloadedSessionOrders()
+        : null;
+    if (preloadedRows != null && preloadedRows.isNotEmpty) {
+      orders.assignAll(preloadedRows);
+    } else {
+      _hydrateOrdersFromCache();
+    }
+
+    unawaited(loadActiveDay(forceRefresh: !justPreloaded));
+
+    if (justPreloaded) {
+      if (orders.isEmpty) {
+        // Preload missed rows — show loader, never flash "Aucune commande".
+        unawaited(
+          loadSessionOrders(
+            forceRefresh: true,
+            showLoading: true,
+            enrichDetails: false,
+          ),
+        );
+      }
+      unawaited(_prefetchTables());
+    } else {
+      unawaited(
+        loadSessionOrders(
+          forceRefresh: orders.isEmpty,
+          showLoading: orders.isEmpty,
+          enrichDetails: false,
+        ),
+      );
+      unawaited(_prefetchTables());
+    }
   }
 
   void _hydrateOrdersFromCache() {
@@ -179,7 +201,7 @@ class SessionController extends GetxController {
     try {
       // Don't re-fetch active day here — onInit already loads it.
       // Stale-while-revalidate: paint cache instantly, then refresh UI when
-      // the first network page returns (no spinner if rows already visible).
+      // the full network fetch returns (no spinner if rows already visible).
       if (!forceRefresh) {
         final cached = _sessionRepository.getCachedSessionOrders(
           waiterId: _currentWaiterId,
@@ -202,33 +224,17 @@ class SessionController extends GetxController {
         }
       }
 
-      void onMorePages(List<SessionOrder> more) {
-        _applySessionOrderSummaries(
-          more,
-          retainOrders: retainOrders,
-          enrichDetails: enrichDetails,
-          replaceList: false,
-        );
-      }
-
+      // Every page is fetched before this returns — the list is applied once,
+      // fully loaded, instead of appearing row-by-row.
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
               waiterId: _currentWaiterId,
-              onLoadingMoreChanged: (loading) {
-                isLoadingMoreOrders.value = loading;
-              },
-              onMorePagesLoaded: onMorePages,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
               waiterId: _currentWaiterId,
-              onLoadingMoreChanged: (loading) {
-                isLoadingMoreOrders.value = loading;
-              },
-              onMorePagesLoaded: onMorePages,
             );
 
-      // Page 1: replace only when allowed (pull-to-refresh / first paint).
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
@@ -261,17 +267,6 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onLoadingMoreChanged: (loading) {
-          isLoadingMoreOrders.value = loading;
-        },
-        onMorePagesLoaded: (more) {
-          _applySessionOrderSummaries(
-            more,
-            retainOrders: retainOrders,
-            enrichDetails: enrichDetails,
-            replaceList: false,
-          );
-        },
       );
       // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
@@ -296,17 +291,6 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _currentWaiterId,
-        onLoadingMoreChanged: (loading) {
-          isLoadingMoreOrders.value = loading;
-        },
-        onMorePagesLoaded: (more) {
-          _applySessionOrderSummaries(
-            more,
-            retainOrders: retainOrders,
-            enrichDetails: false,
-            replaceList: false,
-          );
-        },
       );
       _applySessionOrderSummaries(
         summaries,
@@ -425,9 +409,38 @@ class SessionController extends GetxController {
   ) {
     if (previous == null) return incoming;
 
-    // Lightweight list rows have no lines — keep local products AND total.
-    // (API summaries often still report 0,00 € right after the first add.)
-    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+    // Brand-new empty table: never keep a leaked API seed in memory.
+    if (previous.id > 0 &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(previous.id)) {
+      return previous.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+      );
+    }
+
+    final incomingLines = incoming.products.length;
+    final previousLines = previous.products.length;
+    final incomingDisplay = incoming.displayEntries.length;
+    final previousDisplay = previous.displayEntries.length;
+
+    // Lightweight / stale background rows must not demote a richer ticket.
+    final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
+        (incomingLines > 0 &&
+            previousLines > 0 &&
+            incomingLines < previousLines) ||
+        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0);
+
+    if (incomingThinner) {
       return previous.copyWith(
         impressionCount: incoming.impressionCount,
         impressionColor: incoming.impressionColor,
@@ -491,6 +504,9 @@ class SessionController extends GetxController {
   }
 
   /// Fills product lines from cache / network without blocking the list UI.
+  ///
+  /// Uses a detail-revision guard so a slow GET cannot overwrite a ticket the
+  /// waiter just mutated (qty +/− / add) in table details.
   Future<void> _enrichOrdersInBackground(List<SessionOrder> summaries) async {
     final tasks = <Future<void>>[];
 
@@ -499,15 +515,22 @@ class SessionController extends GetxController {
 
       tasks.add(() async {
         try {
+          final revisionAtStart =
+              _orderRepository.detailRevision(summary.id);
+          final previous = findOrder(orderId: summary.id);
+
           final cached = _orderRepository.cachedOrderDetail(summary.id);
+          SessionOrder detail;
           if (cached != null) {
             final seedId = _orderRepository.lastEmptyOrderSeedProductId;
-            var detail = OrderMapper.sessionOrderHidingCreateSeed(
+            detail = OrderMapper.sessionOrderHidingCreateSeed(
               cached,
               seedProductId: seedId,
             ).copyWith(
               id: summary.id,
             );
+            // Keep brand-new tables empty until a real line is added — do not
+            // clear the lock just because cache still holds the API seed.
             if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
               detail = detail.copyWith(
                 products: const [],
@@ -516,16 +539,25 @@ class SessionController extends GetxController {
                 total: OrderMapper.formatPrice('0'),
               );
             }
-            if (_stillInList(summary.id)) {
-              _upsertOrderInList(detail);
-            }
+          } else {
+            detail = await _orderRepository.getOrderDetail(summary.id);
+          }
+
+          if (!_stillInList(summary.id)) return;
+          if (revisionAtStart !=
+              _orderRepository.detailRevision(summary.id)) {
+            return;
+          }
+          // Allow empty-shell to replace a brief seed flash already in memory.
+          final emptyShellOverride =
+              _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
+                  detail.products.isEmpty;
+          if (!emptyShellOverride &&
+              _wouldDowngradeDetail(detail, previous)) {
             return;
           }
 
-          final detail = await _orderRepository.getOrderDetail(summary.id);
-          if (_stillInList(summary.id)) {
-            _upsertOrderInList(detail);
-          }
+          _upsertOrderInList(detail);
         } catch (_) {}
       }());
     }
@@ -537,6 +569,25 @@ class SessionController extends GetxController {
 
   bool _stillInList(int orderId) =>
       orders.any((order) => order.id == orderId);
+
+  /// True when applying [incoming] would erase lines the UI already shows.
+  bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
+    if (previous == null) return false;
+    if (incoming.products.isEmpty && previous.products.isNotEmpty) {
+      return true;
+    }
+    if (previous.products.isNotEmpty &&
+        incoming.products.isNotEmpty &&
+        incoming.products.length < previous.products.length) {
+      return true;
+    }
+    if (incoming.displayEntries.isEmpty &&
+        previous.displayEntries.isNotEmpty &&
+        previous.products.isNotEmpty) {
+      return true;
+    }
+    return false;
+  }
 
   bool _isOrderSuppressed(String orderNumber) {
     for (final suppressed in _suppressedTableNumbers) {
@@ -569,19 +620,23 @@ class SessionController extends GetxController {
 
     // Never let create-seed flash into the session list / table details.
     var safeOrder = order;
+    var forceReplace = replaceDetail;
     if (order.id > 0 &&
-        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id) &&
-        (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
-      safeOrder = order.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
+      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
+        safeOrder = order.copyWith(
+          products: const [],
+          displayEntries: const [],
+          itemCount: 0,
+          total: OrderMapper.formatPrice('0'),
+        );
+      }
+      // PreferDetailed would otherwise keep a seed that already leaked in.
+      forceReplace = true;
     }
 
     SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
-        replaceDetail ? incoming : _preferDetailedOrder(incoming, previous);
+        forceReplace ? incoming : _preferDetailedOrder(incoming, previous);
 
     if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(
@@ -727,8 +782,16 @@ class SessionController extends GetxController {
         existing.id,
         previousDisplayEntries: layoutHints,
       );
-      orders[idx] = detail;
-      orders.refresh();
+      // Re-resolve the row by id — a background list refresh may have
+      // mutated `orders` while this request was in flight, so the index
+      // captured before the `await` can no longer be trusted (writing to
+      // a stale index silently drops the fetched detail on the floor,
+      // leaving the row showing its lightweight total with no items).
+      final freshIdx = orders.indexWhere((order) => order.id == existing.id);
+      if (freshIdx >= 0) {
+        orders[freshIdx] = detail;
+        orders.refresh();
+      }
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
     } catch (_) {
@@ -1201,18 +1264,47 @@ class SessionController extends GetxController {
   }
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
+    if (findOrder(orderNumber: orderNumber) == null) return;
+
     CancelTableDialog.show(
       context: context,
       title: 'Annulation Table',
-      onConfirm: () => CancelTableDialog.show(
-        context: context,
-        title: 'Annulation après édition\nnote',
-        onConfirm: () => deleteOrder(orderNumber),
-      ),
+      onConfirm: ({
+        required String userOrId,
+        required String passcode,
+      }) async {
+        await _authRepository.verifyCredentials(
+          userOrId: userOrId,
+          passcode: passcode,
+        );
+
+        // Open step 2 after step 1 closes (same old two-dialog flow).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          CancelTableNoteDialog.show(
+            context: context,
+            title: 'Annulation après édition\nnote',
+            onConfirm: ({
+              required String toWhom,
+              required String note,
+            }) async {
+              await deleteOrder(
+                orderNumber,
+                cancelToWhom: toWhom,
+                cancelNote: note,
+              );
+            },
+          );
+        });
+      },
     );
   }
 
-  Future<void> deleteOrder(String orderNumber) async {
+  Future<void> deleteOrder(
+    String orderNumber, {
+    String? cancelToWhom,
+    String? cancelNote,
+  }) async {
     final order = findOrder(orderNumber: orderNumber);
     if (order == null) return;
 
@@ -1232,6 +1324,8 @@ class SessionController extends GetxController {
         await _orderRepository.closeOrder(
           order.id,
           tableNumber: order.number,
+          cancelToWhom: cancelToWhom,
+          cancelNote: cancelNote,
         );
       }
 
@@ -1250,16 +1344,16 @@ class SessionController extends GetxController {
           _clearSuppressedTable(order.number);
         }
       }());
-    } on ApiException catch (e) {
+    } on ApiException {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),
       );
-      _showSnack('Erreur', e.message);
+      rethrow;
     } catch (_) {
       _suppressedTableNumbers.removeWhere(
         (suppressed) => _tableKeysMatch(suppressed, order.number),
       );
-      _showSnack('Erreur', 'Impossible d\'annuler la table.');
+      throw ApiException(message: 'Impossible d\'annuler la table.');
     }
   }
 
@@ -1278,10 +1372,21 @@ class SessionController extends GetxController {
   }
 
   void requestApplyOffer(String orderNumber, {required BuildContext context}) {
+    if (findOrder(orderNumber: orderNumber) == null) return;
+
     CancelTableDialog.show(
       context: context,
       title: 'Table Offerte',
-      onConfirm: () => applyOffer(orderNumber),
+      onConfirm: ({
+        required String userOrId,
+        required String passcode,
+      }) async {
+        await _authRepository.verifyCredentials(
+          userOrId: userOrId,
+          passcode: passcode,
+        );
+        await applyOffer(orderNumber);
+      },
     );
   }
 
@@ -1309,10 +1414,10 @@ class SessionController extends GetxController {
         'Offre',
         'Offre appliquée sur la table $orderNumber.',
       );
-    } on ApiException catch (e) {
-      _showSnack('Erreur', e.message);
+    } on ApiException {
+      rethrow;
     } catch (_) {
-      _showSnack('Erreur', 'Impossible d\'appliquer l\'offre.');
+      throw ApiException(message: 'Impossible d\'appliquer l\'offre.');
     }
   }
 

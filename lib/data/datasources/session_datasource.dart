@@ -105,9 +105,13 @@ class SessionRemoteDataSource {
   }
 
   /// Pages 2..[lastPage] in parallel (capped).
+  ///
+  /// [onPagesLoaded] reports how many pages are done out of [lastPage]
+  /// (page 1 is assumed already fetched by the caller).
   Future<List<Map<String, dynamic>>> fetchOrdersRemainingPages({
     required int lastPage,
     int? waiterId,
+    void Function(int pagesLoaded, int totalPages)? onPagesLoaded,
   }) async {
     if (lastPage <= 1) return const [];
 
@@ -119,6 +123,7 @@ class SessionRemoteDataSource {
     // Small batches avoid slamming the API (13+ concurrent often >3s).
     const batchSize = 4;
     final orders = <Map<String, dynamic>>[];
+    var pagesLoaded = 1;
     for (var i = 0; i < remainingPages.length; i += batchSize) {
       final batch = remainingPages.skip(i).take(batchSize).toList();
       final pages = await Future.wait(
@@ -127,6 +132,11 @@ class SessionRemoteDataSource {
       for (final page in pages) {
         orders.addAll(page.orders);
       }
+      pagesLoaded += batch.length;
+      onPagesLoaded?.call(
+        pagesLoaded > lastPage ? lastPage : pagesLoaded,
+        lastPage,
+      );
     }
     return orders;
   }

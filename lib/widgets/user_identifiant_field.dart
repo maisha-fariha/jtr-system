@@ -13,11 +13,13 @@ class UserIdentifiantField extends StatelessWidget {
     required this.controller,
     this.hintText = 'Identifiant',
     this.showFieldIcons = false,
+    this.enableAutofill = true,
   });
 
   final UserIdentifiantFieldController controller;
   final String hintText;
   final bool showFieldIcons;
+  final bool enableAutofill;
 
   @override
   Widget build(BuildContext context) {
@@ -41,6 +43,9 @@ class UserIdentifiantField extends StatelessWidget {
                 controller: controller.textController,
                 focusNode: controller.identifiantFocusNode,
                 onTap: controller.onIdentifiantTap,
+                autofillHints: enableAutofill ? null : const [],
+                enableSuggestions: enableAutofill,
+                autocorrect: false,
                 style: TextStyle(
                   fontSize: JtrResponsive.getResponsiveFontSize(
                     context,

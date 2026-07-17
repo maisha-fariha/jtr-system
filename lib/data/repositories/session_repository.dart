@@ -21,13 +21,31 @@ class SessionRepository {
   final SessionLocalDataSource _local;
   final ConnectivityService _connectivity;
 
+  /// Last successful network fetch — lets the session screen paint instantly
+  /// right after the post-login sync screen, without waiting on Hive I/O.
+  List<Map<String, dynamic>>? _openOrdersMemory;
+
+  /// Already-mapped rows from the last connect preload (avoids empty flash).
+  List<SessionOrder>? _preloadedSessionOrders;
+
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
   List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
 
-  /// Instant session-list paint from Hive (no network).
+  /// Rows prepared by [ConnectController] — prefer this over remapping cache.
+  List<SessionOrder>? takePreloadedSessionOrders() {
+    final rows = _preloadedSessionOrders;
+    _preloadedSessionOrders = null;
+    return rows;
+  }
+
+  void _rememberPreloadedOrders(List<SessionOrder> orders) {
+    _preloadedSessionOrders = List<SessionOrder>.from(orders);
+  }
+
+  /// Instant session-list paint from memory or Hive (no network).
   List<SessionOrder> getCachedSessionOrders({int? waiterId}) {
-    final cached = _local.readOpenOrdersList();
+    final cached = _openOrdersMemory ?? _local.readOpenOrdersList();
     if (cached.isEmpty) return const [];
     return OrderMapper.sessionOrdersFromOrdersList(
       cached,
@@ -135,23 +153,27 @@ class SessionRepository {
   }
 
   Future<void> clearOpenOrdersCache() async {
+    _openOrdersMemory = null;
+    _preloadedSessionOrders = null;
     await _local.clearOpenOrdersList();
   }
 
   /// Open orders for the session screen — primary [GET /api/orders], not tables.
   ///
-  /// Returns page 1 as soon as it arrives (~Postman latency). Remaining pages
-  /// load in the background; [onMorePagesLoaded] receives each batch to append,
-  /// and [onLoadingMoreChanged] drives the bottom list loader.
+  /// Loads every page (page 1 + remaining, remaining fetched in parallel
+  /// batches) before returning, so the caller shows one loader and then
+  /// paints the complete list at once — no row-by-row drip-feed.
+  ///
+  /// [onProgress] reports 0.0–1.0 for this fetch only (page batches).
   Future<List<SessionOrder>> getSessionOrders({
     bool forceRefresh = false,
     int? waiterId,
-    void Function(bool loading)? onLoadingMoreChanged,
-    void Function(List<SessionOrder> orders)? onMorePagesLoaded,
+    void Function(double fraction)? onProgress,
   }) async {
     if (!forceRefresh) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
         return cached;
       }
     }
@@ -159,127 +181,87 @@ class SessionRepository {
     try {
       return await _fetchSessionOrdersFromNetwork(
         waiterId: waiterId,
-        onLoadingMoreChanged: onLoadingMoreChanged,
-        onMorePagesLoaded: onMorePagesLoaded,
+        onProgress: onProgress,
       );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
-      if (cached.isNotEmpty) return cached;
+      if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
+        return cached;
+      }
       rethrow;
     }
   }
 
-  /// Network refresh: page 1 first, then remaining pages in background.
+  /// Network refresh: fetches every page before returning (see [getSessionOrders]).
   Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
     int? waiterId,
-    void Function(bool loading)? onLoadingMoreChanged,
-    void Function(List<SessionOrder> orders)? onMorePagesLoaded,
+    void Function(double fraction)? onProgress,
   }) async {
     try {
       return await _fetchSessionOrdersFromNetwork(
         waiterId: waiterId,
-        onLoadingMoreChanged: onLoadingMoreChanged,
-        onMorePagesLoaded: onMorePagesLoaded,
+        onProgress: onProgress,
       );
     } catch (_) {
       final cached = getCachedSessionOrders(waiterId: waiterId);
-      if (cached.isNotEmpty) return cached;
+      if (cached.isNotEmpty) {
+        onProgress?.call(1.0);
+        return cached;
+      }
       rethrow;
     }
   }
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
-    void Function(bool loading)? onLoadingMoreChanged,
-    void Function(List<SessionOrder> orders)? onMorePagesLoaded,
+    void Function(double fraction)? onProgress,
   }) async {
     final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
 
+    onProgress?.call(0.02);
     final first = await _remote.fetchOrdersFirstPage(waiterId: scopedId);
     var pageMaps = first.orders;
     var lastPage = first.lastPage;
+    var effectiveWaiterId = scopedId;
 
     // Prefer waiter-scoped page 1; only fall back once (page 1).
     if (pageMaps.isEmpty && scopedId != null) {
       final unscoped = await _remote.fetchOrdersFirstPage();
       pageMaps = unscoped.orders;
       lastPage = unscoped.lastPage;
-      unawaited(_local.saveOpenOrdersList(pageMaps));
-      final firstOrders = OrderMapper.sessionOrdersFromOrdersList(
-        pageMaps,
-        waiterId: scopedId,
-        lightweight: true,
-      );
-      if (lastPage > 1) {
-        unawaited(
-          _finishRemainingPages(
-            page1: pageMaps,
-            lastPage: lastPage,
-            waiterId: null,
-            filterWaiterId: scopedId,
-            onLoadingMoreChanged: onLoadingMoreChanged,
-            onMorePagesLoaded: onMorePagesLoaded,
-          ),
-        );
-      }
-      return firstOrders;
+      effectiveWaiterId = null;
     }
 
-    unawaited(_local.saveOpenOrdersList(pageMaps));
-    final firstOrders = OrderMapper.sessionOrdersFromOrdersList(
+    void reportPages(int loaded, int total) {
+      if (total <= 0) {
+        onProgress?.call(1.0);
+        return;
+      }
+      onProgress?.call((loaded / total).clamp(0.0, 1.0));
+    }
+
+    reportPages(1, lastPage < 1 ? 1 : lastPage);
+
+    if (lastPage > 1) {
+      final extraMaps = await _remote.fetchOrdersRemainingPages(
+        lastPage: lastPage,
+        waiterId: effectiveWaiterId,
+        onPagesLoaded: reportPages,
+      );
+      pageMaps = [...pageMaps, ...extraMaps];
+    }
+
+    onProgress?.call(0.95);
+    _openOrdersMemory = pageMaps;
+    await _local.saveOpenOrdersList(pageMaps);
+    final mapped = OrderMapper.sessionOrdersFromOrdersList(
       pageMaps,
       waiterId: scopedId,
       lightweight: true,
     );
-
-    if (lastPage > 1) {
-      unawaited(
-        _finishRemainingPages(
-          page1: pageMaps,
-          lastPage: lastPage,
-          waiterId: scopedId,
-          filterWaiterId: scopedId,
-          onLoadingMoreChanged: onLoadingMoreChanged,
-          onMorePagesLoaded: onMorePagesLoaded,
-        ),
-      );
-    }
-
-    return firstOrders;
-  }
-
-  Future<void> _finishRemainingPages({
-    required List<Map<String, dynamic>> page1,
-    required int lastPage,
-    required int? waiterId,
-    required int? filterWaiterId,
-    void Function(bool loading)? onLoadingMoreChanged,
-    void Function(List<SessionOrder> orders)? onMorePagesLoaded,
-  }) async {
-    onLoadingMoreChanged?.call(true);
-    final accumulated = <Map<String, dynamic>>[...page1];
-    try {
-      // Load page-by-page so rows can append while the bottom loader shows.
-      for (var page = 2; page <= lastPage && page <= 50; page++) {
-        final result = await _remote.fetchOrdersPage(
-          page: page,
-          waiterId: waiterId,
-        );
-        if (result.orders.isEmpty) continue;
-        accumulated.addAll(result.orders);
-        onMorePagesLoaded?.call(
-          OrderMapper.sessionOrdersFromOrdersList(
-            result.orders,
-            waiterId: filterWaiterId,
-            lightweight: true,
-          ),
-        );
-      }
-      await _local.saveOpenOrdersList(accumulated);
-    } catch (_) {
-      // Keep page-1 list already on screen.
-    } finally {
-      onLoadingMoreChanged?.call(false);
-    }
+    _rememberPreloadedOrders(mapped);
+    onProgress?.call(1.0);
+    return mapped;
   }
 }

@@ -7,6 +7,7 @@ import '../controllers/session_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
+import '../data/repositories/auth_repository.dart';
 import '../routes/app_pages.dart';
 import '../utils/app_features.dart';
 import '../utils/app_navigation.dart';
@@ -35,8 +36,31 @@ class SessionPage extends GetView<SessionController> {
                 child: Obx(() {
                   if (controller.isLoadingOrders.value &&
                       controller.orders.isEmpty) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: AppTheme.primary),
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              color: AppTheme.primary,
+                            ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 12),
+                          Text(
+                            'Chargement…',
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                13,
+                              ),
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
                     );
                   }
 
@@ -45,6 +69,7 @@ class SessionPage extends GetView<SessionController> {
                       color: AppTheme.primary,
                       onRefresh: () => controller.loadSessionOrders(
                         forceRefresh: true,
+                        replaceExistingList: false,
                       ),
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -75,14 +100,12 @@ class SessionPage extends GetView<SessionController> {
                     color: AppTheme.primary,
                     onRefresh: () => controller.loadSessionOrders(
                       forceRefresh: true,
+                      replaceExistingList: false,
                     ),
                     child: Obx(() {
-                      final loadingMore = controller.isLoadingMoreOrders.value;
                       // toList() so in-place total/product updates rebuild rows
                       // (length alone does not always notify Obx).
                       final visibleOrders = controller.orders.toList();
-                      final count =
-                          visibleOrders.length + (loadingMore ? 1 : 0);
                       return ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
                         padding: JtrResponsive.getResponsivePadding(
@@ -90,29 +113,10 @@ class SessionPage extends GetView<SessionController> {
                           top: 8,
                           bottom: 8,
                         ),
-                        itemCount: count,
+                        itemCount: visibleOrders.length,
                         separatorBuilder: (context, index) =>
                             JtrResponsive.getResponsiveSpacing(context, 8),
                         itemBuilder: (context, index) {
-                          if (loadingMore &&
-                              index == visibleOrders.length) {
-                            return Padding(
-                              padding: JtrResponsive.getResponsivePadding(
-                                context,
-                                vertical: 16,
-                              ),
-                              child: const Center(
-                                child: SizedBox(
-                                  width: 28,
-                                  height: 28,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: AppTheme.primary,
-                                  ),
-                                ),
-                              ),
-                            );
-                          }
                           return _OrderRow(
                             order: visibleOrders[index],
                           );
@@ -153,6 +157,10 @@ class _SessionHeader extends GetView<SessionController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final day = controller.activeDay.value;
+      final auth = Get.find<AuthRepository>();
+      final userName = auth.cachedSession?.user.name?.trim() ?? '';
+      final headerLabel =
+          userName.isNotEmpty ? userName.toUpperCase() : 'SESSION ACTIVE';
 
       return Padding(
         padding: JtrResponsive.getResponsivePadding(
@@ -187,7 +195,7 @@ class _SessionHeader extends GetView<SessionController> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'SESSION ACTIVE',
+                    headerLabel,
                     style: TextStyle(
                       fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
                       fontWeight: FontWeight.w500,

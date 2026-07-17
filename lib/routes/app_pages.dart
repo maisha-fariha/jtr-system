@@ -52,6 +52,7 @@ class AppPages {
         Get.put(
           DeviceGateController(
             deviceRepository: Get.find<DeviceRepository>(),
+            authRepository: Get.find<AuthRepository>(),
           ),
         );
       }),
@@ -63,6 +64,7 @@ class AppPages {
         Get.put(
           DeviceGateController(
             deviceRepository: Get.find<DeviceRepository>(),
+            authRepository: Get.find<AuthRepository>(),
           ),
         );
       }),
@@ -99,7 +101,12 @@ class AppPages {
       name: AppRoutes.connect,
       page: () => const ConnectPage(),
       binding: BindingsBuilder(() {
-        Get.put(ConnectController(authRepository: Get.find<AuthRepository>()));
+        Get.put(
+          ConnectController(
+            authRepository: Get.find<AuthRepository>(),
+            sessionRepository: Get.find<SessionRepository>(),
+          ),
+        );
       }),
     ),
     GetPage(

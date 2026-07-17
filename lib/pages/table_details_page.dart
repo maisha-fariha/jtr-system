@@ -638,6 +638,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
         groupTag: groupTag,
+        enabled: controller.canModifyOrder,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -683,6 +684,7 @@ class _ProductLine extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
+        enabled: controller.canModifyOrder,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -1234,10 +1236,10 @@ class _CategoryTabs extends GetView<TableDetailsController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      // While catalog loads, keep tab height but no spinner — grid shows one.
       if (controller.isCatalogLoading.value && controller.categoryRoots.isEmpty) {
-        return const SizedBox(
-          height: 44,
-          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        return SizedBox(
+          height: JtrResponsive.adaptiveHeight(context, 44, compact: 36),
         );
       }
 

@@ -113,7 +113,7 @@ class HomePage extends StatelessWidget {
                             Get.offNamed(AppRoutes.session);
                             return;
                           }
-                          Get.toNamed(AppRoutes.connect);
+                          Get.toNamed(AppRoutes.login);
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppTheme.primary,

@@ -112,13 +112,21 @@ class ConnectPage extends GetView<ConnectController> {
   }
 
   Widget _buildProgressBar(BuildContext context, double value) {
-    final percent = (value * 100).round();
+    final clamped = value.clamp(0.0, 1.0);
+    final percent = (clamped * 100).round();
     final barHeight = JtrResponsive.getResponsiveHeight(context, 44);
     final barRadius = JtrResponsive.getResponsiveRadius(context, 22);
+    final labelStyle = TextStyle(
+      color: Colors.white,
+      fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
+      fontWeight: FontWeight.w600,
+    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final fillWidth = constraints.maxWidth * value.clamp(0.0, 1.0);
+        final fillWidth = constraints.maxWidth * clamped;
+        // Keep the label readable even at low % (min chip width).
+        final labelWidth = fillWidth < 48 ? 48.0 : fillWidth;
 
         return Container(
           height: barHeight,
@@ -129,7 +137,8 @@ class ConnectPage extends GetView<ConnectController> {
           child: Stack(
             children: [
               AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
                 width: fillWidth,
                 height: barHeight,
                 decoration: BoxDecoration(
@@ -137,26 +146,28 @@ class ConnectPage extends GetView<ConnectController> {
                   borderRadius: BorderRadius.circular(barRadius),
                 ),
               ),
-              if (fillWidth > 0)
-                Positioned(
-                  left: 0,
-                  width: fillWidth,
-                  top: 0,
-                  bottom: 0,
-                  child: Center(
+              Positioned(
+                left: 0,
+                width: labelWidth.clamp(0.0, constraints.maxWidth),
+                top: 0,
+                bottom: 0,
+                child: Align(
+                  alignment: fillWidth < 48
+                      ? Alignment.centerLeft
+                      : Alignment.center,
+                  child: Padding(
+                    padding: EdgeInsets.only(left: fillWidth < 48 ? 12 : 0),
                     child: Text(
                       '$percent%',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: JtrResponsive.getResponsiveFontSize(
-                          context,
-                          16,
-                        ),
-                        fontWeight: FontWeight.w600,
+                      style: labelStyle.copyWith(
+                        color: fillWidth < 48
+                            ? AppTheme.darkText
+                            : Colors.white,
                       ),
                     ),
                   ),
                 ),
+              ),
             ],
           ),
         );

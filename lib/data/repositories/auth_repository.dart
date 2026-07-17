@@ -133,6 +133,36 @@ class AuthRepository {
     return session;
   }
 
+  /// Re-authenticates for a sensitive action (e.g. table cancel).
+  ///
+  /// Keeps the new session token — restoring the previous token after
+  /// `force_login` leaves the app with an invalidated token and later APIs
+  /// fail with "Unauthenticated".
+  Future<void> verifyCredentials({
+    required String userOrId,
+    required String passcode,
+  }) async {
+    final online = await _connectivity.isOnline;
+    if (!online) {
+      throw ApiException(
+        message: 'Vérification impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final session = await _remote.login(
+      LoginRequest(
+        type: 'passcode',
+        userOrId: userOrId,
+        passcode: passcode,
+        forceLogin: true,
+      ),
+    );
+
+    await _local.saveSession(session);
+    _apiClient.setAuthToken(session.token);
+    logAuthToken(session.token, source: 'verify_credentials');
+  }
+
   /// Restores the saved auth token into [ApiClient] after a cold start.
   Future<bool> restoreSessionOnAppStart() async {
     final session = _local.readSession();

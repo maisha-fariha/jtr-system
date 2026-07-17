@@ -83,9 +83,9 @@ class DeviceActivationController extends GetxController {
     // Temporary: device activate API is not deployed yet.
     if (kBypassDeviceActivation) {
       debugPrint(
-        '════════ DEVICE ACTIVATE BYPASS → ${AppRoutes.connect} ════════',
+        '════════ DEVICE ACTIVATE BYPASS → ${AppRoutes.login} ════════',
       );
-      await _goToConnectRequiringLogin();
+      await _goToLoginRequiringAuth();
       return;
     }
 
@@ -110,7 +110,7 @@ class DeviceActivationController extends GetxController {
         apiBaseUrl: importedApiBaseUrl.value ??
             '${ApiConfig.normalizeOriginBaseUrl(ApiConfig.defaultBaseUrl)}/api',
       );
-      await _goToConnectRequiringLogin();
+      await _goToLoginRequiringAuth();
     } on ApiException catch (e) {
       errorMessage.value = e.message;
     } on FormatException catch (e) {
@@ -124,11 +124,11 @@ class DeviceActivationController extends GetxController {
 
   /// After device activation, never skip login because of a restored Hive token
   /// (Android backup / reinstall often keeps the previous auth session).
-  Future<void> _goToConnectRequiringLogin() async {
+  Future<void> _goToLoginRequiringAuth() async {
     await _authRepository.logout();
     if (Get.isRegistered<SessionRepository>()) {
       await Get.find<SessionRepository>().clearOpenOrdersCache();
     }
-    Get.offAllNamed(AppRoutes.connect);
+    Get.offAllNamed(AppRoutes.login);
   }
 }

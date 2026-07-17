@@ -69,13 +69,16 @@ class OrderMapper {
     return null;
   }
 
+  /// True when [order] is owned by [waiterId], or owner is unknown (list APIs
+  /// often omit `waiter_id` — excluding those caused an empty session flash).
   static bool orderBelongsToWaiter(
     Map<String, dynamic> order,
     int waiterId,
   ) {
     if (waiterId <= 0) return true;
     final orderWaiterId = waiterIdFromOrderMap(order);
-    return orderWaiterId != null && orderWaiterId == waiterId;
+    if (orderWaiterId == null) return true;
+    return orderWaiterId == waiterId;
   }
 
   /// Builds session rows from [GET /api/orders] (active-day open orders).
@@ -778,15 +781,7 @@ class OrderMapper {
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-
-          final status = item['status'] as String?;
-          if (status == 'cancelled') continue;
-
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
           products.add(orderProductFromItem(item));
         }
       }
@@ -951,27 +946,37 @@ class OrderMapper {
     entries.add(_suivreEntry(sectionIndex, courseNumber: courseNumber));
   }
 
-  static int _resolveItemCourseGroupKey(
-    Map<String, dynamic> item,
-    Map<String, dynamic> course,
-    int courseIndex,
+  /// Items in add order: `created_at`, then `id` (stable across soft vs menu).
+  static List<Map<String, dynamic>> _visibleItemsInStableAddOrder(
+    dynamic items,
   ) {
-    final itemCourseId = (item['course_id'] as num?)?.toInt();
-    if (itemCourseId != null && itemCourseId > 0) {
-      return itemCourseId;
+    if (items is! List) return const [];
+
+    final visible = <Map<String, dynamic>>[];
+    for (final item in items) {
+      if (item is! Map<String, dynamic>) continue;
+      if (item['status'] == 'cancelled') continue;
+      visible.add(item);
     }
 
-    final courseId = (course['id'] as num?)?.toInt();
-    if (courseId != null && courseId > 0) {
-      return courseId;
-    }
+    visible.sort((a, b) {
+      final aCreated = DateTime.tryParse(a['created_at']?.toString() ?? '');
+      final bCreated = DateTime.tryParse(b['created_at']?.toString() ?? '');
+      if (aCreated != null && bCreated != null) {
+        final byTime = aCreated.compareTo(bCreated);
+        if (byTime != 0) return byTime;
+      } else if (aCreated != null) {
+        return -1;
+      } else if (bCreated != null) {
+        return 1;
+      }
 
-    final courseNumber = (course['course_number'] as num?)?.toInt();
-    if (courseNumber != null) {
-      return courseNumber;
-    }
+      final aId = (a['id'] as num?)?.toInt() ?? 0;
+      final bId = (b['id'] as num?)?.toInt() ?? 0;
+      return aId.compareTo(bId);
+    });
 
-    return courseIndex + 1;
+    return visible;
   }
 
   static List<OrderDisplayEntry> extractOrderDisplayEntries(
@@ -1002,33 +1007,24 @@ class OrderMapper {
       final firstCourseNumber =
           (courses.first['course_number'] as num?)?.toInt() ?? 1;
 
-      int? firstGroupKey;
-      int? currentGroupKey;
-
       for (var courseIndex = 0; courseIndex < courses.length; courseIndex++) {
         final course = courses[courseIndex];
         final courseNumber =
             (course['course_number'] as num?)?.toInt() ?? firstCourseNumber;
-        final items = course['items'];
-
-        final visibleItems = <Map<String, dynamic>>[];
-        if (items is List) {
-          for (final item in items) {
-            if (item is! Map<String, dynamic>) continue;
-            if (item['status'] == 'cancelled') continue;
-            visibleItems.add(item);
-          }
-        }
+        final visibleItems =
+            _visibleItemsInStableAddOrder(course['items']);
 
         final isFollowUpCourse =
             courseIndex > 0 || courseNumber > firstCourseNumber;
         var activeSection = 0;
-        var suivreHeaderForCourse = false;
 
         if (isFollowUpCourse && visibleItems.isEmpty) {
           continue;
         }
 
+        // Only real API follow-up courses get À SUIVRE — never mid-course
+        // splits on course_id / to_be_continued (menu after softs used to
+        // inject a fake divider even when the waiter never opened suivre).
         if (isFollowUpCourse && visibleItems.isNotEmpty) {
           suivreSectionIndex++;
           activeSection = suivreSectionIndex;
@@ -1041,70 +1037,16 @@ class OrderMapper {
             sectionIndex: activeSection,
             courseNumber: demandCourseNumber,
           );
-          suivreHeaderForCourse = true;
         }
 
-        var sawNonSuivreItemsInCourse = false;
-
         for (final item in visibleItems) {
-          final groupKey =
-              _resolveItemCourseGroupKey(item, course, courseIndex);
-          final itemStatus = item['status'] as String?;
-          final isSuivreItem = itemStatus == 'to_be_continued';
-
-          if (firstGroupKey == null) {
-            firstGroupKey = groupKey;
-            currentGroupKey = groupKey;
-            activeSection = 0;
-          } else if (groupKey != currentGroupKey) {
-            suivreSectionIndex++;
-            activeSection = suivreSectionIndex;
-            _appendSuivreIfNeeded(
-              entries: entries,
-              sectionIndex: activeSection,
-              courseNumber: courseNumber,
-            );
-            currentGroupKey = groupKey;
-            suivreHeaderForCourse = true;
-            sawNonSuivreItemsInCourse = false;
-          } else if (isFollowUpCourse && !suivreHeaderForCourse) {
-            suivreSectionIndex++;
-            activeSection = suivreSectionIndex;
-            final demandCourseNumber = courseIndex > 0
-                ? ((courses[courseIndex - 1]['course_number'] as num?)?.toInt() ??
-                    courseNumber - 1)
-                : courseNumber - 1;
-            _appendSuivreIfNeeded(
-              entries: entries,
-              sectionIndex: activeSection,
-              courseNumber: demandCourseNumber,
-            );
-            suivreHeaderForCourse = true;
-          }
-
-          if (isSuivreItem &&
-              sawNonSuivreItemsInCourse &&
-              !suivreHeaderForCourse) {
-            suivreSectionIndex++;
-            activeSection = suivreSectionIndex;
-            _appendSuivreIfNeeded(
-              entries: entries,
-              sectionIndex: activeSection,
-              courseNumber: courseNumber,
-            );
-            suivreHeaderForCourse = true;
-          }
-
-          if (!isSuivreItem) {
-            sawNonSuivreItemsInCourse = true;
-          }
-
           entries.add(
             OrderDisplayEntry.product(
               product: orderProductFromItem(item),
               lineIndex: lineIndex++,
               sectionIndex: activeSection,
               courseNumber: courseNumber,
+              itemId: (item['id'] as num?)?.toInt(),
             ),
           );
         }
@@ -1193,6 +1135,7 @@ class OrderMapper {
           lineIndex: lineIndex++,
           sectionIndex: sectionIndex,
           courseNumber: productEntry.courseNumber,
+          itemId: productEntry.itemId,
         ),
       );
     }
@@ -1299,12 +1242,151 @@ class OrderMapper {
         previous: previousDisplayEntries,
         next: entries,
       );
+      // Keep previously visible item order (menu then soft, etc.) when the API
+      // returns items[] reshuffled after a mutation.
+      entries = preservePreviousProductOrder(
+        previous: previousDisplayEntries,
+        next: entries,
+      );
     }
 
     return _normalizeSuivreLayout(
       entries,
       keepTrailingEmptySuivre: effectiveSuivreCount > apiSuivreCount,
     );
+  }
+
+  /// Reorders products within each course to match [previous] item ids.
+  /// New ids (or optimistic id 0) are appended at the end of their course.
+  static List<OrderDisplayEntry> preservePreviousProductOrder({
+    required List<OrderDisplayEntry> previous,
+    required List<OrderDisplayEntry> next,
+  }) {
+    final previousIds = <int>[];
+    final seen = <int>{};
+    for (final entry in previous) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      final id = entry.itemId ?? 0;
+      if (id <= 0) continue;
+      if (seen.add(id)) previousIds.add(id);
+    }
+    if (previousIds.isEmpty) {
+      return _preserveOrderByProductFingerprint(previous: previous, next: next);
+    }
+
+    final byCourse = <int?, List<OrderDisplayEntry>>{};
+    for (final entry in next) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      byCourse.putIfAbsent(entry.courseNumber, () => []).add(entry);
+    }
+
+    for (final courseNumber in byCourse.keys.toList()) {
+      final products = byCourse[courseNumber]!;
+      final byId = <int, OrderDisplayEntry>{};
+      final withoutId = <OrderDisplayEntry>[];
+      for (final product in products) {
+        final id = product.itemId ?? 0;
+        if (id > 0) {
+          byId[id] = product;
+        } else {
+          withoutId.add(product);
+        }
+      }
+
+      final ordered = <OrderDisplayEntry>[];
+      for (final id in previousIds) {
+        final match = byId.remove(id);
+        if (match != null) ordered.add(match);
+      }
+      // Keep relative order of any remaining API ids, then optimistic lines.
+      for (final product in products) {
+        final id = product.itemId ?? 0;
+        if (id > 0 && byId.containsKey(id)) {
+          ordered.add(byId.remove(id)!);
+        }
+      }
+      ordered.addAll(withoutId);
+      byCourse[courseNumber] = ordered;
+    }
+
+    return _rebuildEntriesKeepingDividers(
+      next: next,
+      productsByCourse: byCourse,
+    );
+  }
+
+  /// Fallback when previous lines have no real item ids yet (optimistic only).
+  static List<OrderDisplayEntry> _preserveOrderByProductFingerprint({
+    required List<OrderDisplayEntry> previous,
+    required List<OrderDisplayEntry> next,
+  }) {
+    final previousKeys = <String>[];
+    for (final entry in previous) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      final key = _productFingerprint(entry.product);
+      if (key != null) previousKeys.add(key);
+    }
+    if (previousKeys.isEmpty) return next;
+
+    final byCourse = <int?, List<OrderDisplayEntry>>{};
+    for (final entry in next) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      byCourse.putIfAbsent(entry.courseNumber, () => []).add(entry);
+    }
+
+    for (final courseNumber in byCourse.keys.toList()) {
+      final products = byCourse[courseNumber]!;
+      final remaining = List<OrderDisplayEntry>.from(products);
+      final ordered = <OrderDisplayEntry>[];
+
+      for (final key in previousKeys) {
+        final idx = remaining.indexWhere(
+          (entry) => _productFingerprint(entry.product) == key,
+        );
+        if (idx < 0) continue;
+        ordered.add(remaining.removeAt(idx));
+      }
+      ordered.addAll(remaining);
+      byCourse[courseNumber] = ordered;
+    }
+
+    return _rebuildEntriesKeepingDividers(
+      next: next,
+      productsByCourse: byCourse,
+    );
+  }
+
+  static String? _productFingerprint(OrderProduct? product) {
+    if (product == null) return null;
+    return '${product.name}|${product.price}|${product.quantity}';
+  }
+
+  static List<OrderDisplayEntry> _rebuildEntriesKeepingDividers({
+    required List<OrderDisplayEntry> next,
+    required Map<int?, List<OrderDisplayEntry>> productsByCourse,
+  }) {
+    final cursors = <int?, int>{};
+    final result = <OrderDisplayEntry>[];
+    for (final entry in next) {
+      if (entry.type != OrderDisplayEntryType.product) {
+        result.add(entry);
+        continue;
+      }
+      final courseNumber = entry.courseNumber;
+      final products = productsByCourse[courseNumber];
+      if (products == null || products.isEmpty) {
+        result.add(entry);
+        continue;
+      }
+      final cursor = cursors[courseNumber] ?? 0;
+      if (cursor >= products.length) {
+        result.add(entry);
+        continue;
+      }
+      result.add(products[cursor]);
+      cursors[courseNumber] = cursor + 1;
+    }
+    return result;
   }
 
   static List<OrderDisplayEntry> _normalizeSuivreLayout(
@@ -2416,6 +2498,9 @@ class OrderMapper {
   }
 
   /// Course number for the next item from the current display layout.
+  ///
+  /// New lines stay on the latest open course (including DEMANDÉE). Only an
+  /// explicit trailing À SUIVRE moves appends to the next course.
   static int? resolveAppendCourseNumberFromLayout(
     List<OrderDisplayEntry> layoutHints,
   ) {
@@ -2425,7 +2510,7 @@ class OrderMapper {
       if (entry.type == OrderDisplayEntryType.suivreSeparator) {
         final above = entry.courseNumber;
         if (above != null && above > 0) return above + 1;
-        return null;
+        return 2;
       }
 
       if (entry.type == OrderDisplayEntryType.demandeSeparator) {
@@ -2437,7 +2522,8 @@ class OrderMapper {
       if (entry.type == OrderDisplayEntryType.product) {
         final number = entry.courseNumber;
         if (number != null && number > 0) return number;
-        return null;
+        // Optimistic lines often have no courseNumber yet — stay on course 1.
+        return 1;
       }
     }
 
@@ -2492,29 +2578,30 @@ class OrderMapper {
       return _resolveCourseTarget(courses, nextNumber);
     }
 
-    // Prefer an empty follow-up course the backend may have opened after demande.
-    for (var i = courses.length - 1; i >= 0; i--) {
-      final course = courses[i];
-      if (_visibleItemCountInCourse(course) > 0) continue;
+    // Prefer an empty follow-up course only when the waiter opened À SUIVRE.
+    // Otherwise empty course shells from the API steal new lines (menu after
+    // softs) and show a spurious À SUIVRE.
+    if (suivreSectionCount > 0) {
+      for (var i = courses.length - 1; i >= 0; i--) {
+        final course = courses[i];
+        if (_visibleItemCountInCourse(course) > 0) continue;
 
-      final courseNumber = (course['course_number'] as num?)?.toInt();
-      if (courseNumber == null) continue;
+        final courseNumber = (course['course_number'] as num?)?.toInt();
+        if (courseNumber == null) continue;
 
-      return (
-        id: (course['id'] as num?)?.toInt(),
-        number: courseNumber,
-      );
+        return (
+          id: (course['id'] as num?)?.toInt(),
+          number: courseNumber,
+        );
+      }
     }
 
     if (latestCourseWithItems != null) {
-      if (!_courseWasRequestedToKitchen(latestCourseWithItems)) {
-        return (
-          id: (latestCourseWithItems['id'] as num?)?.toInt(),
-          number: latestWithItemsNumber,
-        );
-      }
-
-      return _resolveCourseTarget(courses, latestWithItemsNumber + 1);
+      // Keep appending to the latest course even after DEMANDÉE.
+      return (
+        id: (latestCourseWithItems['id'] as num?)?.toInt(),
+        number: latestWithItemsNumber,
+      );
     }
 
     return _resolveCourseTarget(courses, maxCourseNumber > 0 ? maxCourseNumber : 1);
@@ -2638,8 +2725,8 @@ class OrderMapper {
     required int lineIndex,
     required int qty,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       if (qty <= 0) {
         item['status'] = 'cancelled';
         return;
@@ -2649,7 +2736,7 @@ class OrderMapper {
       item['qty'] = qty;
       item['sub_total'] = unitPrice * qty;
     });
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustSimpleProductQuantity({
@@ -2840,11 +2927,23 @@ class OrderMapper {
     }
 
     // Fallback: single free simple line left from create seed.
+    // Offered lines also have sub_total 0 — they are NOT create-seed.
     if (countVisibleLineItems(orderDetail) != 1) return false;
     final item = firstVisibleItem(orderDetail);
     if (item == null) return false;
+    if (_isOfferedLineItem(item)) return false;
     if (!_isSimpleLineItem(item)) return false;
     return _parseMoney(item['sub_total']) <= 0.0001;
+  }
+
+  static bool _isOfferedLineItem(Map<String, dynamic> item) {
+    if (item['is_offer'] == true ||
+        item['is_offered'] == true ||
+        item['offered'] == true) {
+      return true;
+    }
+    final reason = item['offer_reason']?.toString().trim() ?? '';
+    return reason.isNotEmpty;
   }
 
   /// True when the ticket has a non-cancelled line that is not create-seed.
@@ -3027,12 +3126,11 @@ class OrderMapper {
       return buildOrderUpdatePayload(orderDetail);
     }
 
-    final working = Map<String, dynamic>.from(orderDetail);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
     var currentIndex = 0;
-
-    final seatOrders = working['seat_orders'];
+    final seatOrders = orderDetail['seat_orders'];
     if (seatOrders is! List) {
-      return buildOrderUpdatePayload(working);
+      return buildOrderUpdatePayload(orderDetail);
     }
 
     for (final seat in seatOrders) {
@@ -3040,13 +3138,7 @@ class OrderMapper {
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
           if (lineIndices.contains(currentIndex)) {
             item['status'] = 'cancelled';
           }
@@ -3055,47 +3147,18 @@ class OrderMapper {
       }
     }
 
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> cancelOrderLineAtIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    var currentIndex = 0;
-    var cancelled = false;
-
-    final seatOrders = working['seat_orders'];
-    if (seatOrders is! List) {
-      return buildOrderUpdatePayload(working);
-    }
-
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = _sortedCoursesList(seat['courses']);
-
-      for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
-          if (currentIndex == lineIndex) {
-            item['status'] = 'cancelled';
-            cancelled = true;
-            break;
-          }
-          currentIndex++;
-        }
-        if (cancelled) break;
-      }
-      if (cancelled) break;
-    }
-
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
+      item['status'] = 'cancelled';
+    });
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> adjustLineQuantityAtIndex({
@@ -3103,8 +3166,8 @@ class OrderMapper {
     required int lineIndex,
     required int delta,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       final currentQty = (item['qty'] as num?)?.toInt() ?? 1;
       final newQty = currentQty + delta;
       if (newQty <= 0) {
@@ -3115,21 +3178,30 @@ class OrderMapper {
       item['qty'] = newQty;
       item['sub_total'] = unitPrice * newQty;
     });
-    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> applyOfferAtLineIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       item['is_offer'] = true;
       item['offer_reason'] = 'Article offert';
       item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
       item['sub_total'] = '0.00';
     });
-    return buildOrderUpdatePayload(working);
+    final payload = buildOrderUpdatePayload(orderDetail);
+    final status = orderDetail['status']?.toString().trim().toLowerCase();
+    payload['status'] = (status == null ||
+            status.isEmpty ||
+            status == 'offered' ||
+            status == 'closed' ||
+            status == 'cancelled')
+        ? 'open'
+        : orderDetail['status'];
+    return payload;
   }
 
   /// Sets the API `comment` field on a visible line (message / pencil).
@@ -3138,12 +3210,12 @@ class OrderMapper {
     required int lineIndex,
     required String comment,
   }) {
-    final working = _deepCopyOrderMap(orderDetail);
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
     final trimmed = comment.trim();
-    _mutateVisibleLineAtIndex(working, lineIndex, (item) {
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
       item['comment'] = trimmed;
     });
-    return buildOrderUpdatePayload(working);
+    return buildOrderUpdatePayload(orderDetail);
   }
 
   static bool _mutateVisibleLineAtIndex(
@@ -3160,13 +3232,8 @@ class OrderMapper {
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
-        final items = course['items'];
-        if (items is! List) continue;
-
-        for (final item in items) {
-          if (item is! Map<String, dynamic>) continue;
-          if (item['status'] == 'cancelled') continue;
-
+        // Must match extractProducts / UI lineIndex (created_at, then id).
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
           if (currentIndex == lineIndex) {
             mutate(item);
             return true;
@@ -3178,6 +3245,10 @@ class OrderMapper {
 
     return false;
   }
+
+  /// Deep copy of an order detail map (mutation fallback / safe edits).
+  static Map<String, dynamic> copyOrderDetail(Map<String, dynamic> source) =>
+      _deepCopyOrderMap(source);
 
   static double parseOrderPayableAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
@@ -4020,6 +4091,8 @@ class OrderMapper {
       'is_loss': false,
       'menu_selections': sanitizedMenus,
       'is_still_menu_missing': isStillMenuMissing,
+      // Stable sort key before the API assigns a real timestamp/id.
+      'created_at': DateTime.now().toUtc().toIso8601String(),
     };
   }
 
@@ -4478,9 +4551,15 @@ class OrderMapper {
         courseNumber = (entry.courseNumber ?? 0) + 1;
         break;
       }
+      if (entry.type == OrderDisplayEntryType.demandeSeparator) {
+        sectionIndex = entry.sectionIndex ?? 0;
+        courseNumber = (entry.courseNumber ?? 0) + 1;
+        break;
+      }
       if (entry.type == OrderDisplayEntryType.product && courseNumber == null) {
         sectionIndex = entry.sectionIndex ?? 0;
         courseNumber = entry.courseNumber;
+        break;
       }
     }
 
@@ -4489,7 +4568,8 @@ class OrderMapper {
         product: product,
         lineIndex: lineIndex,
         sectionIndex: sectionIndex,
-        courseNumber: courseNumber,
+        courseNumber: courseNumber ?? 1,
+        itemId: 0,
       ),
     );
     return result;
@@ -4509,6 +4589,7 @@ class OrderMapper {
             lineIndex: lineIndex,
             sectionIndex: entry.sectionIndex ?? 0,
             courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
           )
         else
           entry,
@@ -4535,6 +4616,7 @@ class OrderMapper {
               lineIndex: index - 1,
               sectionIndex: entry.sectionIndex ?? 0,
               courseNumber: entry.courseNumber,
+              itemId: entry.itemId,
             ),
           );
           continue;

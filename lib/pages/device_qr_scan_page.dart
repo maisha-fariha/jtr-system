@@ -7,6 +7,7 @@ import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 
 /// Full-screen camera QR scan. Returns scanned text via [Get.back].
+/// Detection is limited to the centered square frame only.
 class DeviceQrScanPage extends StatefulWidget {
   const DeviceQrScanPage({super.key});
 
@@ -199,6 +200,61 @@ class _DeviceQrScanPageState extends State<DeviceQrScanPage>
     );
   }
 
+  Widget _buildScannerBody(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final boxSize = JtrResponsive.getResponsiveSize(context, 240);
+        final radius = JtrResponsive.getResponsiveRadius(context, 16);
+        final scanWindow = Rect.fromCenter(
+          center: Offset(
+            constraints.maxWidth / 2,
+            constraints.maxHeight / 2,
+          ),
+          width: boxSize,
+          height: boxSize,
+        );
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            MobileScanner(
+              controller: _scanner,
+              onDetect: _onDetect,
+              scanWindow: scanWindow,
+              errorBuilder: _scannerErrorBuilder,
+            ),
+            IgnorePointer(
+              child: CustomPaint(
+                size: Size(constraints.maxWidth, constraints.maxHeight),
+                painter: _ScanFrameOverlayPainter(
+                  scanWindow: scanWindow,
+                  borderColor: AppTheme.primary,
+                  borderRadius: radius,
+                  overlayColor: Colors.black.withValues(alpha: 0.58),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: 48,
+              child: Text(
+                'Placez uniquement le QR dans le cadre',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -228,49 +284,51 @@ class _DeviceQrScanPageState extends State<DeviceQrScanPage>
             )
           : _permissionDenied
               ? _permissionDeniedPanel()
-              : Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    MobileScanner(
-                      controller: _scanner,
-                      onDetect: _onDetect,
-                      errorBuilder: _scannerErrorBuilder,
-                    ),
-                    Center(
-                      child: Container(
-                        width: JtrResponsive.getResponsiveSize(context, 240),
-                        height: JtrResponsive.getResponsiveSize(context, 240),
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: AppTheme.primary,
-                            width: 2.5,
-                          ),
-                          borderRadius: BorderRadius.circular(
-                            JtrResponsive.getResponsiveRadius(context, 16),
-                          ),
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      left: 24,
-                      right: 24,
-                      bottom: 48,
-                      child: Text(
-                        'Placez le QR du dashboard Windows dans le cadre',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.9),
-                          fontSize: JtrResponsive.getResponsiveFontSize(
-                            context,
-                            14,
-                          ),
-                          fontWeight: FontWeight.w600,
-                          height: 1.35,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              : _buildScannerBody(context),
     );
+  }
+}
+
+/// Dims everything outside [scanWindow] and draws the square frame border.
+class _ScanFrameOverlayPainter extends CustomPainter {
+  _ScanFrameOverlayPainter({
+    required this.scanWindow,
+    required this.borderColor,
+    required this.borderRadius,
+    required this.overlayColor,
+  });
+
+  final Rect scanWindow;
+  final Color borderColor;
+  final double borderRadius;
+  final Color overlayColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hole = RRect.fromRectAndRadius(
+      scanWindow,
+      Radius.circular(borderRadius),
+    );
+    final overlayPath = Path()
+      ..addRect(Offset.zero & size)
+      ..addRRect(hole)
+      ..fillType = PathFillType.evenOdd;
+
+    canvas.drawPath(overlayPath, Paint()..color = overlayColor);
+    canvas.drawRRect(
+      hole,
+      Paint()
+        ..color = borderColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScanFrameOverlayPainter oldDelegate) {
+    return oldDelegate.scanWindow != scanWindow ||
+        oldDelegate.borderColor != borderColor ||
+        oldDelegate.borderRadius != borderRadius ||
+        oldDelegate.overlayColor != overlayColor;
   }
 }

@@ -93,6 +93,8 @@ class DeviceActivationController extends GetxController {
     isScanningQr.value = true;
     try {
       final raw = await Get.to<String>(() => const DeviceQrScanPage());
+      // Stop scan spinner before activate so only one loader is shown.
+      isScanningQr.value = false;
       if (raw == null || raw.trim().isEmpty) return;
       try {
         await applyQrText(raw);
@@ -115,6 +117,9 @@ class DeviceActivationController extends GetxController {
 
   Future<void> importQrPng() async {
     _clearFeedback();
+    if (isSubmitting.value || isScanningQr.value || isImportingQr.value) {
+      return;
+    }
     isImportingQr.value = true;
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -122,6 +127,8 @@ class DeviceActivationController extends GetxController {
         allowedExtensions: const ['png', 'jpg', 'jpeg', 'webp'],
         withData: true,
       );
+      // Stop import spinner before activate so only one loader is shown.
+      isImportingQr.value = false;
       if (result == null || result.files.isEmpty) return;
 
       final file = result.files.single;

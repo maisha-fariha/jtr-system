@@ -32,14 +32,7 @@ class LoginPage extends GetView<LoginController> {
           centerTitle: true,
           elevation: 3,
           shadowColor: Colors.black.withValues(alpha: 0.1),
-          leading: IconButton(
-            icon: Icon(
-              Icons.arrow_back_ios_new,
-              color: AppTheme.darkText,
-              size: JtrResponsive.getResponsiveSize(context, 20),
-            ),
-            onPressed: () => Get.back(),
-          ),
+          automaticallyImplyLeading: false,
           title: Text(
             'CONNEXION',
             style: TextStyle(
@@ -49,6 +42,23 @@ class LoginPage extends GetView<LoginController> {
               letterSpacing: 1.2,
             ),
           ),
+          actions: [
+            if (Get.isRegistered<ThemeController>())
+              Obx(() {
+                final isDark = ThemeController.to.isDark.value;
+                return IconButton(
+                  tooltip: isDark ? 'Mode clair' : 'Mode sombre',
+                  onPressed: ThemeController.to.toggle,
+                  icon: Icon(
+                    isDark
+                        ? Icons.light_mode_outlined
+                        : Icons.dark_mode_outlined,
+                    color: AppTheme.darkText,
+                    size: JtrResponsive.getResponsiveSize(context, 22),
+                  ),
+                );
+              }),
+          ],
         ),
         body: Stack(
           clipBehavior: Clip.none,

@@ -172,6 +172,9 @@ class DeviceActivationController extends GetxController {
       phase: 'QR_PARSED',
       posUrl: posUrl,
       qrPayload: {
+        'format': DeviceActivationMapper.isActivationDeepLink(qrText)
+            ? 'jtrpos_deeplink'
+            : (qrText.trim().startsWith('{') ? 'json' : 'plain_or_other'),
         'code': payload.code,
         'type': payload.type,
         'tenant_schema': payload.tenantSchema,

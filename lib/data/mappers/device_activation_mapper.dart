@@ -93,6 +93,74 @@ class DeviceActivationMapper {
     return null;
   }
 
+  /// True when [raw] looks like a POS deep-link QR (`jtrpos://activate?...`).
+  static bool isActivationDeepLink(String raw) {
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme.isEmpty) return false;
+    final scheme = uri.scheme.toLowerCase();
+    return scheme == 'jtrpos' || scheme == 'jtr';
+  }
+
+  /// Parses `jtrpos://activate?code=...&tenant_schema=...&api_base_url=...`.
+  static ActivationQrPayload? tryParseActivationDeepLink(String raw) {
+    final text = raw.trim();
+    if (!isActivationDeepLink(text)) return null;
+
+    final uri = Uri.tryParse(text);
+    if (uri == null) return null;
+
+    final q = uri.queryParameters;
+    if (q.isEmpty) {
+      throw const FormatException(
+        'QR jtrpos incomplet (paramètres manquants).',
+      );
+    }
+
+    return payloadFromActivationFields(
+      <String, dynamic>{
+        for (final e in q.entries) e.key: e.value,
+      },
+    );
+  }
+
+  /// Shared field extraction for JSON QR and `jtrpos://` deep-link QR.
+  static ActivationQrPayload payloadFromActivationFields(
+    Map<String, dynamic> map,
+  ) {
+    final type = (map['type']?.toString() ?? '').trim().toLowerCase();
+    if (type.isNotEmpty && type != 'mobile') {
+      throw FormatException(
+        'Ce QR est de type "$type". L\'app mobile exige type "mobile".',
+      );
+    }
+
+    final code = normalizeCode(map['code']?.toString() ?? '');
+    final tenant = normalizeTenantSchema(
+      map['tenant_schema']?.toString() ??
+          map['tenantSchema']?.toString() ??
+          '',
+    );
+    final apiBaseUrl = posApiBaseUrlFromQrMap(map);
+    if (code.isEmpty || tenant.isEmpty || apiBaseUrl == null) {
+      throw const FormatException(
+        'QR incomplet (code, tenant_schema, api_base_url / IP requis).',
+      );
+    }
+
+    final versionRaw = map['v'] ?? map['version'];
+    final version = versionRaw is num
+        ? versionRaw.toInt()
+        : int.tryParse(versionRaw?.toString() ?? '') ?? 1;
+
+    return ActivationQrPayload(
+      version: version,
+      apiBaseUrl: apiBaseUrl,
+      code: code,
+      type: type.isEmpty ? 'mobile' : type,
+      tenantSchema: tenant,
+    );
+  }
+
   /// True when [raw] is a bare http(s) URL (e.g. mock activate endpoint).
   static bool isAbsoluteHttpUrl(String raw) {
     final text = raw.trim();
@@ -122,12 +190,13 @@ class DeviceActivationMapper {
   /// Extracts a GET activation URL from QR text (bare URL or JSON field).
   ///
   /// Used for mocks like https://mocki.io/v1/... where POST /devices/activate
-  /// is not available.
+  /// is not available. Does not treat `jtrpos://` deep links as GET URLs.
   static String? activationUrlFromQrText(String raw) {
     final text = raw.trim();
     if (text.startsWith('\uFEFF')) {
       return activationUrlFromQrText(text.substring(1));
     }
+    if (isActivationDeepLink(text)) return null;
     if (isAbsoluteHttpUrl(text) && !isPosBaseOnlyUrl(text)) {
       return text;
     }
@@ -159,7 +228,10 @@ class DeviceActivationMapper {
     return null;
   }
 
-  /// Parses QR text. Accepts JSON payload or plain activation code.
+  /// Parses QR text. Accepts:
+  /// - JSON payload `{ "code", "tenant_schema", "api_base_url", "type": "mobile" }`
+  /// - Deep link `jtrpos://activate?code=...&tenant_schema=...&api_base_url=...`
+  /// - Plain activation code (with fallback POS URL + tenant)
   static ActivationQrPayload parseQrText(
     String raw, {
     String? fallbackApiBaseUrl,
@@ -170,43 +242,17 @@ class DeviceActivationMapper {
       text = text.substring(1).trim();
     }
 
+    // POS machine deep-link QR (same fields as JSON, query-encoded).
+    final deepLink = tryParseActivationDeepLink(text);
+    if (deepLink != null) return deepLink;
+
     if (text.startsWith('{')) {
       final decoded = jsonDecode(text);
       if (decoded is! Map) {
         throw const FormatException('QR JSON invalide.');
       }
-      final map = Map<String, dynamic>.from(decoded);
-      final type = (map['type']?.toString() ?? '').trim().toLowerCase();
-      if (type.isNotEmpty && type != 'mobile') {
-        throw FormatException(
-          'Ce QR est de type "$type". L\'app mobile exige type "mobile".',
-        );
-      }
-
-      final code = normalizeCode(map['code']?.toString() ?? '');
-      final tenant = normalizeTenantSchema(
-        map['tenant_schema']?.toString() ??
-            map['tenantSchema']?.toString() ??
-            '',
-      );
-      final apiBaseUrl = posApiBaseUrlFromQrMap(map);
-      if (code.isEmpty || tenant.isEmpty || apiBaseUrl == null) {
-        throw const FormatException(
-          'QR incomplet (code, tenant_schema, api_base_url / IP requis).',
-        );
-      }
-
-      final versionRaw = map['v'] ?? map['version'];
-      final version = versionRaw is num
-          ? versionRaw.toInt()
-          : int.tryParse(versionRaw?.toString() ?? '') ?? 1;
-
-      return ActivationQrPayload(
-        version: version,
-        apiBaseUrl: apiBaseUrl,
-        code: code,
-        type: type.isEmpty ? 'mobile' : type,
-        tenantSchema: tenant,
+      return payloadFromActivationFields(
+        Map<String, dynamic>.from(decoded),
       );
     }
 

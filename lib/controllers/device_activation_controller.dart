@@ -31,23 +31,57 @@ class DeviceActivationController extends GetxController {
 
   final codeController = TextEditingController();
   final tenantController = TextEditingController();
-
-  /// POS URL from QR only (not shown as an input field).
-  String? _posApiBaseUrlFromQr;
+  final apiBaseUrlController = TextEditingController();
 
   final isSubmitting = false.obs;
   final isImportingQr = false.obs;
   final isScanningQr = false.obs;
-  final errorMessage = RxnString();
 
-  /// Last POS URL taken from QR (shown as read-only hint + logged).
-  final resolvedPosUrl = RxnString();
+  /// User-facing text from API `message` (or local validation).
+  final feedbackMessage = RxnString();
+  final feedbackIsError = false.obs;
 
   @override
   void onClose() {
     codeController.dispose();
     tenantController.dispose();
+    apiBaseUrlController.dispose();
     super.onClose();
+  }
+
+  void _clearFeedback() {
+    feedbackMessage.value = null;
+    feedbackIsError.value = false;
+  }
+
+  void _showError(String message) {
+    final text = message.trim();
+    if (text.isEmpty) return;
+    feedbackIsError.value = true;
+    feedbackMessage.value = text;
+  }
+
+  void _showSuccess(String message) {
+    final text = message.trim();
+    if (text.isEmpty) return;
+    feedbackIsError.value = false;
+    feedbackMessage.value = text;
+  }
+
+  String _apiMessage(ApiException e) {
+    final fromBody = _messageFromBody(e.responseBody);
+    if (fromBody != null) return fromBody;
+    return e.message.trim().isNotEmpty
+        ? e.message.trim()
+        : 'Activation impossible.';
+  }
+
+  String? _messageFromBody(Object? body) {
+    if (body is Map) {
+      final message = body['message']?.toString().trim();
+      if (message != null && message.isNotEmpty) return message;
+    }
+    return null;
   }
 
   /// Live camera scan of the dashboard QR.
@@ -55,7 +89,7 @@ class DeviceActivationController extends GetxController {
     if (isSubmitting.value || isImportingQr.value || isScanningQr.value) {
       return;
     }
-    errorMessage.value = null;
+    _clearFeedback();
     isScanningQr.value = true;
     try {
       final raw = await Get.to<String>(() => const DeviceQrScanPage());
@@ -64,22 +98,23 @@ class DeviceActivationController extends GetxController {
         await applyQrText(raw);
       } on ApiException catch (e) {
         logDeviceActivation(phase: 'QR_SCAN_ERROR', error: e.message);
-        errorMessage.value = e.message;
+        _showError(_apiMessage(e));
       } on FormatException catch (e) {
         logDeviceActivation(phase: 'QR_SCAN_ERROR', error: e.message);
-        errorMessage.value = e.message;
+        _showError(e.message);
       }
     } catch (e) {
       logDeviceActivation(phase: 'QR_SCAN_ERROR', error: e.toString());
-      errorMessage.value =
-          'Impossible d\'ouvrir la caméra. Vérifiez l\'autorisation caméra.';
+      _showError(
+        'Impossible d\'ouvrir la caméra. Vérifiez l\'autorisation caméra.',
+      );
     } finally {
       isScanningQr.value = false;
     }
   }
 
   Future<void> importQrPng() async {
-    errorMessage.value = null;
+    _clearFeedback();
     isImportingQr.value = true;
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -103,13 +138,13 @@ class DeviceActivationController extends GetxController {
       await applyQrText(qrText);
     } on ApiException catch (e) {
       logDeviceActivation(phase: 'QR_ERROR', error: e.message);
-      errorMessage.value = e.message;
+      _showError(_apiMessage(e));
     } on FormatException catch (e) {
       logDeviceActivation(phase: 'QR_ERROR', error: e.message);
-      errorMessage.value = e.message;
+      _showError(e.message);
     } catch (e) {
       logDeviceActivation(phase: 'QR_ERROR', error: e.toString());
-      errorMessage.value = 'Impossible d\'importer le QR.';
+      _showError('Impossible d\'importer le QR.');
     } finally {
       isImportingQr.value = false;
     }
@@ -146,17 +181,17 @@ class DeviceActivationController extends GetxController {
     );
 
     if (DeviceActivationMapper.isUnreachableFromMobileHost(posUrl)) {
-      errorMessage.value =
-          'Le QR contient 127.0.0.1 / localhost. '
-          'Régénérez le QR depuis le dashboard avec l\'IP LAN du poste.';
+      _showError(
+        'Le QR contient 127.0.0.1 / localhost. '
+        'Régénérez le QR depuis le dashboard avec l\'IP LAN du poste.',
+      );
       return;
     }
 
     codeController.text = payload.code;
     tenantController.text = payload.tenantSchema;
-    _posApiBaseUrlFromQr = posUrl;
-    resolvedPosUrl.value = posUrl;
-    errorMessage.value = null;
+    apiBaseUrlController.text = posUrl;
+    _clearFeedback();
 
     // Point Dio at the QR POS URL immediately (before activate completes).
     ApiConfig.applyRuntime(
@@ -171,8 +206,7 @@ class DeviceActivationController extends GetxController {
   }
 
   Future<void> _activateFromQrUrl(String url) async {
-    errorMessage.value = null;
-    resolvedPosUrl.value = url;
+    _clearFeedback();
     logDeviceActivation(
       phase: 'ACTIVATE_URL_START',
       posUrl: url,
@@ -183,8 +217,7 @@ class DeviceActivationController extends GetxController {
     try {
       final result = await _deviceRepository.activateFromAbsoluteUrl(url);
       tenantController.text = result.tenantSchema;
-      _posApiBaseUrlFromQr = result.apiBaseUrl;
-      resolvedPosUrl.value = result.apiBaseUrl;
+      apiBaseUrlController.text = result.apiBaseUrl;
 
       logDeviceActivation(
         phase: 'ACTIVATE_URL_OK',
@@ -197,8 +230,11 @@ class DeviceActivationController extends GetxController {
           'device_uuid': result.deviceUuid,
           'company_code': result.companyCode,
           'runtime_baseUrl': ApiConfig.baseUrl,
+          'message': result.message,
         },
       );
+      _showSuccess(result.message ?? 'Device activated');
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       await _goToLoginRequiringAuth();
     } on ApiException catch (e) {
       logDeviceActivation(
@@ -207,46 +243,46 @@ class DeviceActivationController extends GetxController {
         response: e.responseBody,
         error: e.message,
       );
-      errorMessage.value = e.message;
+      _showError(_apiMessage(e));
     } on FormatException catch (e) {
       logDeviceActivation(
         phase: 'ACTIVATE_URL_ERROR',
         posUrl: url,
         error: e.message,
       );
-      errorMessage.value = e.message;
+      _showError(e.message);
     } catch (e) {
       logDeviceActivation(
         phase: 'ACTIVATE_URL_ERROR',
         posUrl: url,
         error: e.toString(),
       );
-      errorMessage.value =
-          'Impossible d\'appeler l\'URL du QR. Vérifiez le réseau.';
+      _showError('Impossible d\'appeler l\'URL du QR. Vérifiez le réseau.');
     } finally {
       isSubmitting.value = false;
     }
   }
 
   Future<void> activate() async {
-    errorMessage.value = null;
+    _clearFeedback();
 
     final code = DeviceActivationMapper.normalizeCode(codeController.text);
     final tenant =
         DeviceActivationMapper.normalizeTenantSchema(tenantController.text);
-    final posServer = (_posApiBaseUrlFromQr ?? resolvedPosUrl.value ?? '').trim();
+    final posServer = apiBaseUrlController.text.trim();
 
     if (code.length < 8) {
-      errorMessage.value = 'Saisissez un code d\'activation valide.';
+      _showError('Saisissez un code d\'activation valide.');
       return;
     }
     if (tenant.isEmpty) {
-      errorMessage.value = 'Saisissez le schéma restaurant.';
+      _showError('Saisissez le schéma restaurant.');
       return;
     }
     if (posServer.isEmpty) {
-      errorMessage.value =
-          'Scannez ou importez le QR pour récupérer l\'adresse du poste.';
+      _showError(
+        'Saisissez l\'URL / IP du poste (ex. 192.168.1.10) ou scannez le QR.',
+      );
       return;
     }
 
@@ -254,18 +290,17 @@ class DeviceActivationController extends GetxController {
     try {
       apiBaseUrl = DeviceActivationMapper.normalizePosApiBaseUrl(posServer);
       if (DeviceActivationMapper.isUnreachableFromMobileHost(apiBaseUrl)) {
-        errorMessage.value =
-            'Le QR contient 127.0.0.1 / localhost. '
-            'Régénérez le QR avec l\'IP LAN du poste.';
+        _showError(
+          'Utilisez l\'IP LAN du poste (ex. 192.168.x.x), pas 127.0.0.1.',
+        );
         return;
       }
     } on FormatException catch (e) {
-      errorMessage.value = e.message;
+      _showError(e.message);
       return;
     }
 
-    resolvedPosUrl.value = apiBaseUrl;
-    _posApiBaseUrlFromQr = apiBaseUrl;
+    apiBaseUrlController.text = apiBaseUrl;
     logDeviceActivation(
       phase: 'ACTIVATE_START',
       posUrl: apiBaseUrl,
@@ -277,7 +312,7 @@ class DeviceActivationController extends GetxController {
       },
     );
 
-    // Use QR POS URL dynamically for the activate call.
+    // Use typed / QR POS URL dynamically for the activate call.
     ApiConfig.applyRuntime(baseUrl: apiBaseUrl, tenantSchema: tenant);
     _deviceRepository.applyRuntimeConfigOnly();
 
@@ -298,10 +333,12 @@ class DeviceActivationController extends GetxController {
           'label': result.label,
           'device_uuid': result.deviceUuid,
           'runtime_baseUrl': ApiConfig.baseUrl,
+          'message': result.message,
         },
       );
-      resolvedPosUrl.value = result.apiBaseUrl;
-      _posApiBaseUrlFromQr = result.apiBaseUrl;
+      apiBaseUrlController.text = result.apiBaseUrl;
+      _showSuccess(result.message ?? 'Device activated');
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       await _goToLoginRequiringAuth();
     } on ApiException catch (e) {
       logDeviceActivation(
@@ -310,23 +347,24 @@ class DeviceActivationController extends GetxController {
         response: e.responseBody,
         error: e.message,
       );
-      errorMessage.value = e.message;
+      _showError(_apiMessage(e));
     } on FormatException catch (e) {
       logDeviceActivation(
         phase: 'ACTIVATE_ERROR',
         posUrl: apiBaseUrl,
         error: e.message,
       );
-      errorMessage.value = e.message;
+      _showError(e.message);
     } catch (e) {
       logDeviceActivation(
         phase: 'ACTIVATE_ERROR',
         posUrl: apiBaseUrl,
         error: e.toString(),
       );
-      errorMessage.value =
-          'Activation impossible. Vérifiez que le téléphone est sur '
-          'le même réseau que le poste Windows.';
+      _showError(
+        'Activation impossible. Vérifiez que le téléphone est sur '
+        'le même réseau que le poste Windows.',
+      );
     } finally {
       isSubmitting.value = false;
     }

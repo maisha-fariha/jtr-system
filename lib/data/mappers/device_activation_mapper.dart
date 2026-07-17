@@ -241,13 +241,20 @@ class DeviceActivationMapper {
     );
   }
 
-  static DeviceActivationResult activationFromJson(Map<String, dynamic> data) {
+  static DeviceActivationResult activationFromJson(
+    Map<String, dynamic> data, {
+    String? message,
+  }) {
     final deviceId = data['device_id'];
     final token = data['device_token']?.toString() ?? '';
     final tenant = data['tenant_schema']?.toString() ?? '';
     final apiRaw = data['api_base_url']?.toString() ?? '';
     if (token.isEmpty || tenant.isEmpty || apiRaw.isEmpty) {
-      throw const FormatException('Réponse d\'activation incomplète.');
+      throw FormatException(
+        message?.trim().isNotEmpty == true
+            ? message!.trim()
+            : 'Réponse d\'activation incomplète.',
+      );
     }
 
     return DeviceActivationResult(
@@ -263,6 +270,7 @@ class DeviceActivationMapper {
       bootstrap: data['bootstrap'] is Map<String, dynamic>
           ? data['bootstrap'] as Map<String, dynamic>
           : null,
+      message: message?.trim().isNotEmpty == true ? message!.trim() : null,
     );
   }
 

@@ -169,15 +169,26 @@ class DeviceRemoteDataSource {
       final envelope = ApiEnvelope.parseResponse(raw);
       if (!envelope.success || envelope.data is! Map) {
         throw ApiException(
-          message: envelope.message ?? 'Activation impossible.',
+          message: envelope.message?.trim().isNotEmpty == true
+              ? envelope.message!.trim()
+              : 'Activation impossible.',
           statusCode: envelope.status,
           responseBody: raw,
         );
       }
 
-      return DeviceActivationMapper.activationFromJson(
-        Map<String, dynamic>.from(envelope.data as Map),
-      );
+      try {
+        return DeviceActivationMapper.activationFromJson(
+          Map<String, dynamic>.from(envelope.data as Map),
+          message: envelope.message,
+        );
+      } on FormatException catch (e) {
+        throw ApiException(
+          message: e.message,
+          statusCode: envelope.status,
+          responseBody: raw,
+        );
+      }
     } on DioException catch (e) {
       logDeviceApi(
         method: 'GET',
@@ -298,15 +309,26 @@ class DeviceRemoteDataSource {
       final envelope = ApiEnvelope.parseResponse(raw);
       if (!envelope.success || envelope.data is! Map) {
         throw ApiException(
-          message: envelope.message ?? 'Activation impossible.',
+          message: envelope.message?.trim().isNotEmpty == true
+              ? envelope.message!.trim()
+              : 'Activation impossible.',
           statusCode: envelope.status,
           responseBody: raw,
         );
       }
 
-      return DeviceActivationMapper.activationFromJson(
-        Map<String, dynamic>.from(envelope.data as Map),
-      );
+      try {
+        return DeviceActivationMapper.activationFromJson(
+          Map<String, dynamic>.from(envelope.data as Map),
+          message: envelope.message,
+        );
+      } on FormatException catch (e) {
+        throw ApiException(
+          message: e.message,
+          statusCode: envelope.status,
+          responseBody: raw,
+        );
+      }
     } on DioException catch (e) {
       logDeviceApi(
         method: 'POST',

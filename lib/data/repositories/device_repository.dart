@@ -194,6 +194,7 @@ class DeviceRepository {
       label: result.label,
       companyCode: result.companyCode,
       bootstrap: result.bootstrap,
+      message: result.message,
     );
   }
 

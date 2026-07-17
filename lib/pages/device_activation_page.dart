@@ -84,7 +84,8 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                           JtrResponsive.getResponsiveSpacing(context, 10),
                           Text(
                             'Liez cet appareil au poste Windows (caisse).\n'
-                            'Scannez le QR à la caméra ou importez une image.',
+                            'Scannez le QR, importez une image, ou saisissez '
+                            'code + schéma + URL du poste.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: JtrResponsive.getResponsiveFontSize(
@@ -127,33 +128,19 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                               hint: 'ex. mocca',
                             ),
                           ),
-                          Obx(() {
-                            final url = controller.resolvedPosUrl.value;
-                            if (url == null || url.isEmpty) {
-                              return const SizedBox.shrink();
-                            }
-                            return Padding(
-                              padding: EdgeInsets.only(
-                                top: JtrResponsive.getResponsiveHeight(
-                                  context,
-                                  14,
-                                ),
-                              ),
-                              child: Text(
-                                'API: $url',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize:
-                                      JtrResponsive.getResponsiveFontSize(
-                                    context,
-                                    12,
-                                  ),
-                                  fontWeight: FontWeight.w600,
-                                  color: AppTheme.primary,
-                                ),
-                              ),
-                            );
-                          }),
+                          JtrResponsive.getResponsiveSpacing(context, 18),
+                          _FieldLabel(text: 'URL / IP du poste'),
+                          JtrResponsive.getResponsiveSpacing(context, 8),
+                          TextField(
+                            controller: controller.apiBaseUrlController,
+                            keyboardType: TextInputType.url,
+                            cursorColor: AppTheme.primary,
+                            style: TextStyle(color: AppTheme.darkText),
+                            decoration: _fieldDecoration(
+                              context,
+                              hint: 'ex. 192.168.1.10 ou http://192.168.1.10/api',
+                            ),
+                          ),
                           JtrResponsive.getResponsiveSpacing(context, 16),
                           Obx(
                             () => ElevatedButton.icon(
@@ -275,10 +262,11 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                             ),
                           ),
                           Obx(() {
-                            final error = controller.errorMessage.value;
-                            if (error == null || error.isEmpty) {
+                            final message = controller.feedbackMessage.value;
+                            if (message == null || message.isEmpty) {
                               return const SizedBox.shrink();
                             }
+                            final isError = controller.feedbackIsError.value;
                             return Padding(
                               padding: EdgeInsets.only(
                                 top: JtrResponsive.getResponsiveHeight(
@@ -287,10 +275,13 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                 ),
                               ),
                               child: Text(
-                                error,
+                                message,
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
-                                  color: AppTheme.toolbarKitchen,
+                                  color: isError
+                                      ? AppTheme.toolbarKitchen
+                                      : AppTheme.primary,
+                                  fontWeight: FontWeight.w600,
                                   fontSize:
                                       JtrResponsive.getResponsiveFontSize(
                                     context,

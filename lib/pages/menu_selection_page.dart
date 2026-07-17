@@ -440,7 +440,7 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                       children: [
                         for (final entry in grouped.entries) ...[
                           Text(
-                            entry.key.label,
+                            'CHOIX ${entry.key.number}',
                             style: TextStyle(
                               fontSize: JtrResponsive.getResponsiveFontSize(
                                 context,
@@ -451,6 +451,24 @@ class _OrderSummarySidebar extends GetView<MenuSelectionController> {
                               color: AppTheme.textSecondary,
                             ),
                           ),
+                          if (entry.key.label.trim().isNotEmpty &&
+                              entry.key.label.toUpperCase() !=
+                                  'CHOIX ${entry.key.number}') ...[
+                            JtrResponsive.getResponsiveSpacing(context, 2),
+                            Text(
+                              entry.key.label,
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  10,
+                                ),
+                                fontWeight: FontWeight.w500,
+                                color: AppTheme.textSecondary.withValues(
+                                  alpha: 0.8,
+                                ),
+                              ),
+                            ),
+                          ],
                           JtrResponsive.getResponsiveSpacing(context, 6),
                           for (final item in entry.value)
                             Padding(

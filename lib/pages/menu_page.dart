@@ -383,20 +383,30 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
                           JtrResponsive.getResponsiveSpacing(context, 4),
                           if (selectedByCourse[category.number]?.isNotEmpty ??
                               false)
-                            Text(
-                              '${selectedByCourse[category.number]!.length}x ${selectedByCourse[category.number]!.first.name}'
-                              '${selectedByCourse[category.number]!.length > 1 ? ' +${selectedByCourse[category.number]!.length - 1}' : ''}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  12,
+                            ...[
+                              for (final item
+                                  in selectedByCourse[category.number]!)
+                                Padding(
+                                  padding: JtrResponsive.getResponsivePadding(
+                                    context,
+                                    bottom: 2,
+                                  ),
+                                  child: Text(
+                                    '1x ${item.name}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize:
+                                          JtrResponsive.getResponsiveFontSize(
+                                        context,
+                                        12,
+                                      ),
+                                      fontWeight: FontWeight.w800,
+                                      color: AppTheme.darkText,
+                                    ),
+                                  ),
                                 ),
-                                fontWeight: FontWeight.w800,
-                                color: AppTheme.darkText,
-                              ),
-                            )
+                            ]
                           else
                             Text(
                               '—',

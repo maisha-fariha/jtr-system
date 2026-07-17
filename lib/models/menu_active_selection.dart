@@ -42,32 +42,27 @@ class MenuActiveSelection {
   List<MenuItem> get allSelectedItems =>
       selectedItemsByCourse.values.expand((items) => items).toList();
 
-  bool _sameMenuItem(MenuItem a, MenuItem b) {
-    if (a.productId != null && b.productId != null) {
-      return a.productId == b.productId;
-    }
-    return a.name == b.name;
-  }
-
   MenuActiveSelection merge(MenuActiveSelection other) {
-    final merged = <int, List<MenuItem>>{};
-    for (final entry in selectedItemsByCourse.entries) {
-      merged[entry.key] = List<MenuItem>.from(entry.value);
-    }
-
-    for (final entry in other.selectedItemsByCourse.entries) {
-      final current = merged.putIfAbsent(entry.key, () => <MenuItem>[]);
-      for (final item in entry.value) {
-        final exists = current.any((e) => _sameMenuItem(e, item));
-        if (!exists) current.add(item);
-      }
-    }
+    // The menu page returns the full current selection for this menu.
+    // Replace course lists — do not append. Appending kept deselected items
+    // after re-open / unselect / pick-another (left list showed two scoops).
+    final messages = <int, String>{
+      ...messagesByCourse,
+      ...other.messagesByCourse,
+    };
+    messages.removeWhere(
+      (course, _) =>
+          (other.selectedItemsByCourse[course] ?? const <MenuItem>[]).isEmpty,
+    );
 
     return MenuActiveSelection(
       menu: other.menu,
       choiceNumber: other.choiceNumber,
-      selectedItemsByCourse: merged,
-      messagesByCourse: {...messagesByCourse, ...other.messagesByCourse},
+      selectedItemsByCourse: {
+        for (final entry in other.selectedItemsByCourse.entries)
+          entry.key: List<MenuItem>.from(entry.value),
+      },
+      messagesByCourse: messages,
     );
   }
 

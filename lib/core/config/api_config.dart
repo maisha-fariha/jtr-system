@@ -1,10 +1,15 @@
-/// Runtime API configuration. Defaults are used before device activation;
-/// after activate / restore they are overridden from secure storage.
+/// Runtime API configuration.
+///
+/// Before device activation, placeholders are used. After activation against
+/// the Windows POS, [applyRuntime] stores that machine's origin + device
+/// headers; all subsequent API calls go to the local POS IP (not a cloud host).
 class ApiConfig {
   ApiConfig._();
 
-  static const String defaultBaseUrl = 'https://api.goatech.ma';
-  static const String defaultTenantSchema = 'mocca';
+  /// Placeholder only — never used as production host. Activation always
+  /// requires the Windows POS `api_base_url` from QR / manual IP entry.
+  static const String defaultBaseUrl = 'http://127.0.0.1';
+  static const String defaultTenantSchema = '';
 
   static String _baseUrl = defaultBaseUrl;
   static String _tenantSchema = defaultTenantSchema;
@@ -18,6 +23,20 @@ class ApiConfig {
 
   static const connectTimeout = Duration(seconds: 30);
   static const receiveTimeout = Duration(seconds: 30);
+
+  /// True when [baseUrl] looks like a LAN / local POS host.
+  static bool get isLocalPosBaseUrl {
+    final host = Uri.tryParse(_baseUrl)?.host.toLowerCase() ?? '';
+    if (host.isEmpty) return false;
+    if (host == 'localhost' || host == '127.0.0.1') return true;
+    if (host.startsWith('192.168.') ||
+        host.startsWith('10.') ||
+        host.startsWith('172.')) {
+      return true;
+    }
+    // Bare IPv4
+    return RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host);
+  }
 
   /// Applies origin base URL (without trailing `/api`) + tenant + optional device headers.
   static void applyRuntime({

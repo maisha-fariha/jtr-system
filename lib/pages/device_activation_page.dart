@@ -83,8 +83,8 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                           ),
                           JtrResponsive.getResponsiveSpacing(context, 10),
                           Text(
-                            'Saisissez le code d\'activation ou importez '
-                            'l\'image QR (PNG) depuis le dashboard JTR',
+                            'Liez cet appareil au poste Windows (caisse).\n'
+                            'Scannez le QR à la caméra ou importez une image.',
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: JtrResponsive.getResponsiveFontSize(
@@ -127,10 +127,100 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                               hint: 'ex. mocca',
                             ),
                           ),
+                          Obx(() {
+                            final url = controller.resolvedPosUrl.value;
+                            if (url == null || url.isEmpty) {
+                              return const SizedBox.shrink();
+                            }
+                            return Padding(
+                              padding: EdgeInsets.only(
+                                top: JtrResponsive.getResponsiveHeight(
+                                  context,
+                                  14,
+                                ),
+                              ),
+                              child: Text(
+                                'API: $url',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    12,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.primary,
+                                ),
+                              ),
+                            );
+                          }),
                           JtrResponsive.getResponsiveSpacing(context, 16),
+                          Obx(
+                            () => ElevatedButton.icon(
+                              onPressed: controller.isImportingQr.value ||
+                                      controller.isScanningQr.value ||
+                                      controller.isSubmitting.value
+                                  ? null
+                                  : controller.scanQrWithCamera,
+                              icon: controller.isScanningQr.value
+                                  ? SizedBox(
+                                      height: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
+                                      ),
+                                      width: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
+                                      ),
+                                      child: const CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.qr_code_scanner,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        22,
+                                      ),
+                                    ),
+                              label: Text(
+                                'Scanner le QR (caméra)',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    14,
+                                  ),
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                disabledBackgroundColor:
+                                    AppTheme.primary.withValues(alpha: 0.45),
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: JtrResponsive.getResponsivePadding(
+                                  context,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    JtrResponsive.getResponsiveRadius(
+                                      context,
+                                      16,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 10),
                           Obx(
                             () => OutlinedButton(
                               onPressed: controller.isImportingQr.value ||
+                                      controller.isScanningQr.value ||
                                       controller.isSubmitting.value
                                   ? null
                                   : controller.importQrPng,
@@ -172,7 +262,7 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                       ),
                                     )
                                   : Text(
-                                      'Importer une image QR (PNG)',
+                                      'Importer le QR (PNG)',
                                       style: TextStyle(
                                         fontWeight: FontWeight.w700,
                                         fontSize:

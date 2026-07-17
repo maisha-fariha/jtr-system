@@ -1,16 +1,17 @@
-import 'package:flutter/foundation.dart';
-import 'package:image/image.dart' as img;
-import 'package:zxing2/qrcode.dart';
-
 import '../../core/config/api_config.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/device_secure_storage.dart';
+import '../../utils/api_log.dart';
 import '../datasources/device_remote_datasource.dart';
 import '../mappers/device_activation_mapper.dart';
 import '../models/device_activation_models.dart';
 import 'dart:io';
 import 'dart:math';
+
+import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
+import 'package:zxing2/qrcode.dart';
 
 class DeviceRepository {
   DeviceRepository({
@@ -51,6 +52,9 @@ class DeviceRepository {
     return true;
   }
 
+  /// Sync Dio to current [ApiConfig] (e.g. after QR sets POS URL).
+  void applyRuntimeConfigOnly() => _apiClient.applyRuntimeConfig();
+
   Future<DeviceGateOutcome> resolveStartupGate() async {
     final hasCreds = await _secureStorage.hasCredentials;
     if (!hasCreds) {
@@ -82,12 +86,11 @@ class DeviceRepository {
   Future<DeviceActivationResult> activateWithCode({
     required String code,
     required String tenantSchema,
-    String? apiBaseUrl,
+    required String apiBaseUrl,
   }) async {
     final payload = DeviceActivationMapper.parseQrText(
       code,
-      fallbackApiBaseUrl: apiBaseUrl ??
-          '${ApiConfig.normalizeOriginBaseUrl(ApiConfig.defaultBaseUrl)}/api',
+      fallbackApiBaseUrl: apiBaseUrl,
       fallbackTenantSchema: tenantSchema,
     );
     if (!payload.isMobile) {
@@ -104,10 +107,22 @@ class DeviceRepository {
     return _activatePayload(payload);
   }
 
+  /// GET a full activation URL from the QR (mock / dashboard deep link).
+  Future<DeviceActivationResult> activateFromAbsoluteUrl(String url) async {
+    final result = await _remote.activateFromUrl(url);
+    return _persistActivationResult(
+      result: result,
+      contactedApiBaseUrl: result.apiBaseUrl,
+    );
+  }
+
   Future<DeviceActivationResult> _activatePayload(
     ActivationQrPayload payload,
   ) async {
-    final origin = ApiConfig.normalizeOriginBaseUrl(payload.apiBaseUrl);
+    // Contact the POS using the real LAN IP from the QR / typed address.
+    final contactedApiBaseUrl =
+        DeviceActivationMapper.normalizePosApiBaseUrl(payload.apiBaseUrl);
+    final origin = ApiConfig.normalizeOriginBaseUrl(contactedApiBaseUrl);
     final fingerprint = await _stableFingerprint();
 
     final result = await _remote.activate(
@@ -122,11 +137,41 @@ class DeviceRepository {
       },
     );
 
+    return _persistActivationResult(
+      result: result,
+      contactedApiBaseUrl: contactedApiBaseUrl,
+    );
+  }
+
+  Future<DeviceActivationResult> _persistActivationResult({
+    required DeviceActivationResult result,
+    required String contactedApiBaseUrl,
+  }) async {
+    // Never persist 127.0.0.1 / localhost from the activate response — keep the
+    // LAN IP that successfully reached the Windows POS when available.
+    final storedApiBaseUrl =
+        DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+      contactedApiBaseUrl: contactedApiBaseUrl,
+      responseApiBaseUrl: result.apiBaseUrl,
+    );
+
+    logDeviceActivation(
+      phase: 'STORE_RUNTIME',
+      posUrl: storedApiBaseUrl,
+      response: {
+        'contacted_api_base_url': contactedApiBaseUrl,
+        'response_api_base_url': result.apiBaseUrl,
+        'stored_api_base_url': storedApiBaseUrl,
+        'device_id': result.deviceId,
+        'tenant_schema': result.tenantSchema,
+      },
+    );
+
     final credentials = DeviceCredentials(
       deviceId: result.deviceId,
       deviceToken: result.deviceToken,
       tenantSchema: result.tenantSchema,
-      apiBaseUrl: result.apiBaseUrl,
+      apiBaseUrl: storedApiBaseUrl,
       deviceUuid: result.deviceUuid,
       label: result.label,
     );
@@ -139,7 +184,17 @@ class DeviceRepository {
       deviceToken: credentials.deviceToken,
     );
     _apiClient.applyRuntimeConfig();
-    return result;
+
+    return DeviceActivationResult(
+      deviceId: result.deviceId,
+      deviceToken: result.deviceToken,
+      tenantSchema: result.tenantSchema,
+      apiBaseUrl: storedApiBaseUrl,
+      deviceUuid: result.deviceUuid,
+      label: result.label,
+      companyCode: result.companyCode,
+      bootstrap: result.bootstrap,
+    );
   }
 
   Future<void> clearDeviceCredentials() async {

@@ -30,6 +30,13 @@
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scanner le QR d'activation du poste Windows (caisse).</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

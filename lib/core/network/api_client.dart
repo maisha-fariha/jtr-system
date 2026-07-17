@@ -132,13 +132,14 @@ class ApiClient extends GetxService {
 
   ApiException _mapError(DioException error) {
     final response = error.response;
-    if (response?.data is Map<String, dynamic>) {
-      final data = response!.data as Map<String, dynamic>;
-      final message = data['message'] as String?;
+    final body = response?.data;
+    if (body is Map<String, dynamic>) {
+      final message = body['message'] as String?;
       if (message != null && message.isNotEmpty) {
         return ApiException(
           message: message,
-          statusCode: response.statusCode,
+          statusCode: response?.statusCode,
+          responseBody: body,
         );
       }
     }
@@ -148,18 +149,26 @@ class ApiClient extends GetxService {
       case DioExceptionType.receiveTimeout:
       case DioExceptionType.sendTimeout:
         return ApiException(
-          message: 'Connection timed out. Please try again.',
+          message: ApiConfig.isLocalPosBaseUrl
+              ? 'Délai dépassé vers le poste Windows. Vérifiez l\'IP et le réseau.'
+              : 'Connection timed out. Please try again.',
           statusCode: response?.statusCode,
+          responseBody: body,
         );
       case DioExceptionType.connectionError:
         return ApiException(
-          message: 'No internet connection.',
+          message: ApiConfig.isLocalPosBaseUrl
+              ? 'Impossible de joindre le poste Windows. '
+                  'Vérifiez le Wi‑Fi et l\'adresse IP du poste.'
+              : 'No internet connection.',
           statusCode: response?.statusCode,
+          responseBody: body,
         );
       default:
         return ApiException(
           message: error.message ?? 'An unexpected error occurred.',
           statusCode: response?.statusCode,
+          responseBody: body,
         );
     }
   }

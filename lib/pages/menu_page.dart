@@ -10,29 +10,84 @@ import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 
-/// Slightly larger text on large screens for menu / CHOIX layout.
-double _menuPageFontSize(BuildContext context, double base) {
-  final fontSize = JtrResponsive.getResponsiveFontSize(context, base);
-  if (JtrResponsive.isLargeDevice(context)) {
-    return fontSize + 2;
+/// Shared type scale for the CHOIX screen — one adaptive size per role so
+/// sidebar, headers, and every item card stay visually consistent.
+class _MenuStyle {
+  _MenuStyle._();
+
+  static double fs(BuildContext context, double base) {
+    final size = JtrResponsive.getResponsiveFontSize(context, base);
+    if (JtrResponsive.isLargeDevice(context)) return size + 1;
+    return size;
   }
-  return fontSize;
+
+  static TextStyle overline(BuildContext context) => TextStyle(
+        fontSize: fs(context, 10),
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.6,
+        height: 1.2,
+        color: AppTheme.textSecondary,
+      );
+
+  static TextStyle caption(BuildContext context, {Color? color}) => TextStyle(
+        fontSize: fs(context, 11),
+        fontWeight: FontWeight.w600,
+        height: 1.2,
+        color: color ?? AppTheme.textSecondary,
+      );
+
+  static TextStyle body(BuildContext context, {Color? color}) => TextStyle(
+        fontSize: fs(context, 12),
+        fontWeight: FontWeight.w700,
+        height: 1.25,
+        color: color ?? AppTheme.darkText,
+      );
+
+  static TextStyle title(BuildContext context, {Color? color}) => TextStyle(
+        fontSize: fs(context, 13),
+        fontWeight: FontWeight.w700,
+        height: 1.25,
+        color: color ?? AppTheme.darkText,
+      );
+
+  static TextStyle headline(BuildContext context) => TextStyle(
+        fontSize: fs(context, 16),
+        fontWeight: FontWeight.w800,
+        height: 1.2,
+        color: AppTheme.darkText,
+      );
+
+  static TextStyle price(BuildContext context) => TextStyle(
+        fontSize: fs(context, 12),
+        fontWeight: FontWeight.w700,
+        height: 1.2,
+        color: AppTheme.primary,
+      );
+
+  /// Same name size for every card in a row — based on cell width, not content.
+  static double itemNameSize(BuildContext context, double cellWidth) {
+    final base = fs(context, 12);
+    if (cellWidth < 100) return (base - 1).clamp(10.0, base);
+    if (cellWidth < 120) return base;
+    return (base + 0.5).clamp(base, base + 1);
+  }
+
+  static double cardRadius(BuildContext context) =>
+      JtrResponsive.getResponsiveRadius(context, 12);
+
+  static EdgeInsets cardPadding(BuildContext context) =>
+      JtrResponsive.getResponsivePadding(
+        context,
+        left: 12,
+        top: 10,
+        right: 12,
+        bottom: 10,
+      );
 }
 
-/// Figma frame 160:1522 — product-selection screen (CHOIX 1/2/3).
+/// CHOIX product-selection screen (menu list + side selection summary).
 ///
-/// Layout (390 × 884):
-///  • TopHeader  — h=64
-///  • MainContent — h=756, scrollable
-///    – CHOIX 1 Section  y=96  h=177  (3 items)
-///    – CHOIX 2 Section  y=305 h=317  (5 items, 2 rows)
-///    – CHOIX 3 Section  y=654 h=397  (5 items, 2 rows)
-///  • Footer BottomNav — h=64
-///  • FAB at x=302 y=724 (64×64)
-///
-/// Obx rule: every reactive read must happen *inside* the Obx closure, not
-/// inside a child widget's build method. Each leaf that shows reactive state
-/// owns its own Obx.
+/// Obx rule: every reactive read must happen *inside* the Obx closure.
 class MenuPage extends GetView<OrderMenuController> {
   const MenuPage({super.key});
 
@@ -61,9 +116,9 @@ class MenuPage extends GetView<OrderMenuController> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final showSidePanel = presetMenu != null;
-                    final sideWidth = (constraints.maxWidth * 0.28).clamp(
-                      110.0,
-                      190.0,
+                    final sideWidth = (constraints.maxWidth * 0.30).clamp(
+                      124.0,
+                      200.0,
                     );
 
                     return Row(
@@ -78,7 +133,7 @@ class MenuPage extends GetView<OrderMenuController> {
                           child: SingleChildScrollView(
                             padding: JtrResponsive.getResponsivePadding(
                               context,
-                              bottom: 16,
+                              bottom: 20,
                             ),
                             child: Padding(
                               padding: JtrResponsive.getResponsivePadding(
@@ -90,7 +145,7 @@ class MenuPage extends GetView<OrderMenuController> {
                                 children: [
                                   JtrResponsive.getResponsiveSpacing(
                                     context,
-                                    24,
+                                    20,
                                   ),
                                   for (final category
                                       in controller.visibleCategories) ...[
@@ -98,7 +153,7 @@ class MenuPage extends GetView<OrderMenuController> {
                                     _CourseSectionBody(category: category),
                                     JtrResponsive.getResponsiveSpacing(
                                       context,
-                                      32,
+                                      28,
                                     ),
                                   ],
                                 ],
@@ -125,7 +180,7 @@ class MenuPage extends GetView<OrderMenuController> {
   }
 }
 
-// ─── TopHeader (h=64) ─────────────────────────────────────────────────────────
+// ─── Header ───────────────────────────────────────────────────────────────────
 
 class _MenuHeader extends GetView<OrderMenuController> {
   const _MenuHeader();
@@ -135,7 +190,6 @@ class _MenuHeader extends GetView<OrderMenuController> {
     return SizedBox(
       height: JtrResponsive.adaptiveHeight(context, 64, compact: 48),
       child: Padding(
-        // Figma: left container at x=16; confirm button at x=334 → right pad=16
         padding: JtrResponsive.getResponsivePadding(context, horizontal: 16),
         child: Row(
           children: [
@@ -150,7 +204,6 @@ class _MenuHeader extends GetView<OrderMenuController> {
   }
 }
 
-// Badge count and back-icon. Obx lives HERE — reads selectedCount directly.
 class _MenuIconButton extends GetView<OrderMenuController> {
   const _MenuIconButton();
 
@@ -159,7 +212,7 @@ class _MenuIconButton extends GetView<OrderMenuController> {
     return Obx(() {
       final count = controller.selectedCount;
       final buttonSize = JtrResponsive.getResponsiveSize(context, 40);
-      final badgeSize = JtrResponsive.getResponsiveSize(context, 20);
+      final badgeSize = JtrResponsive.getResponsiveSize(context, 18);
 
       return SizedBox(
         width: buttonSize,
@@ -200,11 +253,12 @@ class _MenuIconButton extends GetView<OrderMenuController> {
                   alignment: Alignment.center,
                   child: Text(
                     '$count',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: _menuPageFontSize(context, 10),
-                      fontWeight: FontWeight.bold,
+                    style: _MenuStyle.caption(context, color: Colors.white)
+                        .copyWith(
+                      fontSize: _MenuStyle.fs(context, 10),
+                      fontWeight: FontWeight.w800,
                       height: 1,
+                      color: Colors.white,
                     ),
                   ),
                 ),
@@ -216,8 +270,6 @@ class _MenuIconButton extends GetView<OrderMenuController> {
   }
 }
 
-// Current order display — currentTable is set once in onInit so no Obx needed,
-// but we keep it to surface the value correctly on first build.
 class _OrderDisplay extends GetView<OrderMenuController> {
   const _OrderDisplay();
 
@@ -227,27 +279,12 @@ class _OrderDisplay extends GetView<OrderMenuController> {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'COMMANDE EN COURS',
-          style: TextStyle(
-            fontSize: _menuPageFontSize(context, 11),
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.5,
-            color: AppTheme.textSecondary.withValues(alpha: 0.7),
-            height: 1.2,
-          ),
-        ),
+        Text('COMMANDE EN COURS', style: _MenuStyle.overline(context)),
         JtrResponsive.getResponsiveSpacing(context, 2),
-        // Access .value inside build — tracked by GetView's implicit Obx
         Obx(
           () => Text(
             'Table ${controller.currentTable.value}',
-            style: TextStyle(
-              fontSize: _menuPageFontSize(context, 16),
-              fontWeight: FontWeight.bold,
-              color: AppTheme.darkText,
-              height: 1.2,
-            ),
+            style: _MenuStyle.headline(context),
           ),
         ),
       ],
@@ -255,186 +292,6 @@ class _OrderDisplay extends GetView<OrderMenuController> {
   }
 }
 
-class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
-  const _SelectedMenuSidePanel();
-
-  @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final menu = controller.presetMenu;
-      if (menu == null) return const SizedBox.shrink();
-
-      // Group current selections by course.
-      final selectedByCourse = <int, List<MenuItem>>{};
-      for (final item in controller.selectedItems) {
-        selectedByCourse
-            .putIfAbsent(item.courseNumber, () => <MenuItem>[])
-            .add(item);
-      }
-
-      return Container(
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          left: 12,
-          right: 10,
-          top: 18,
-          bottom: 12,
-        ),
-        decoration: BoxDecoration(
-          border: Border(right: BorderSide(color: AppTheme.cardBorder)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: JtrResponsive.getResponsiveSize(context, 46),
-              height: JtrResponsive.getResponsiveSize(context, 46),
-              decoration: BoxDecoration(
-                color: AppTheme.lightButton,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: AppTheme.primary.withValues(alpha: 0.25),
-                ),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                menu.badgeLabel,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.primary,
-                ),
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 10),
-            Text(
-              'CHOIX ${controller.choiceNumber}',
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                fontWeight: FontWeight.w700,
-                color: AppTheme.textSecondary,
-                letterSpacing: 0.4,
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 6),
-            Text(
-              menu.label,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: _menuPageFontSize(context, 13),
-                fontWeight: FontWeight.w800,
-                color: AppTheme.darkText,
-                height: 1.2,
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 6),
-            Text(
-              menu.formattedPrice,
-              style: TextStyle(
-                fontSize: _menuPageFontSize(context, 12),
-                fontWeight: FontWeight.w700,
-                color: AppTheme.primary,
-                height: 1.2,
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 12),
-            Divider(
-              height: 1,
-              color: AppTheme.cardBorder.withValues(alpha: 0.8),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 10),
-            Text(
-              'SÉLECTION',
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
-                fontWeight: FontWeight.w800,
-                color: AppTheme.textSecondary,
-                letterSpacing: 0.5,
-              ),
-            ),
-            JtrResponsive.getResponsiveSpacing(context, 8),
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  for (final category in controller.visibleCategories)
-                    Padding(
-                      padding: JtrResponsive.getResponsivePadding(
-                        context,
-                        bottom: 10,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'CHOIX ${category.number}',
-                            style: TextStyle(
-                              fontSize: JtrResponsive.getResponsiveFontSize(
-                                context,
-                                10,
-                              ),
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.textSecondary,
-                              letterSpacing: 0.3,
-                            ),
-                          ),
-                          JtrResponsive.getResponsiveSpacing(context, 4),
-                          if (selectedByCourse[category.number]?.isNotEmpty ??
-                              false)
-                            ...[
-                              for (final item
-                                  in selectedByCourse[category.number]!)
-                                Padding(
-                                  padding: JtrResponsive.getResponsivePadding(
-                                    context,
-                                    bottom: 2,
-                                  ),
-                                  child: Text(
-                                    '1x ${item.name}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize:
-                                          JtrResponsive.getResponsiveFontSize(
-                                        context,
-                                        12,
-                                      ),
-                                      fontWeight: FontWeight.w800,
-                                      color: AppTheme.darkText,
-                                    ),
-                                  ),
-                                ),
-                            ]
-                          else
-                            Text(
-                              '—',
-                              style: TextStyle(
-                                fontSize: JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  12,
-                                ),
-                                fontWeight: FontWeight.w700,
-                                color: AppTheme.textSecondary.withValues(
-                                  alpha: 0.6,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      );
-    });
-  }
-}
-
-// Confirm icon — enabled when items are selected; shows selection count.
 class _ConfirmIconButton extends GetView<OrderMenuController> {
   const _ConfirmIconButton();
 
@@ -477,8 +334,8 @@ class _ConfirmIconButton extends GetView<OrderMenuController> {
                     '$count',
                     style: TextStyle(
                       color: AppTheme.primary,
-                      fontSize: _menuPageFontSize(context, 9),
-                      fontWeight: FontWeight.bold,
+                      fontSize: _MenuStyle.fs(context, 10),
+                      fontWeight: FontWeight.w800,
                       height: 1,
                     ),
                   ),
@@ -491,7 +348,135 @@ class _ConfirmIconButton extends GetView<OrderMenuController> {
   }
 }
 
-// ─── Course Section Header ─────────────────────────────────────────────────────
+// ─── Side panel (same type scale as grid) ─────────────────────────────────────
+
+class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
+  const _SelectedMenuSidePanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final menu = controller.presetMenu;
+      if (menu == null) return const SizedBox.shrink();
+
+      final selectedByCourse = <int, List<MenuItem>>{};
+      for (final item in controller.selectedItems) {
+        selectedByCourse
+            .putIfAbsent(item.courseNumber, () => <MenuItem>[])
+            .add(item);
+      }
+
+      final badgeSize = JtrResponsive.getResponsiveSize(context, 44);
+
+      return Container(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 14,
+          right: 12,
+          top: 18,
+          bottom: 12,
+        ),
+        decoration: BoxDecoration(
+          color: AppTheme.background,
+          border: Border(right: BorderSide(color: AppTheme.cardBorder)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: badgeSize,
+              height: badgeSize,
+              decoration: BoxDecoration(
+                color: AppTheme.lightButton,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: AppTheme.primary.withValues(alpha: 0.22),
+                ),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                menu.badgeLabel,
+                textAlign: TextAlign.center,
+                style: _MenuStyle.body(context, color: AppTheme.primary)
+                    .copyWith(fontWeight: FontWeight.w800),
+              ),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 12),
+            Text(
+              'CHOIX ${controller.choiceNumber}',
+              style: _MenuStyle.overline(context),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 6),
+            Text(
+              menu.label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: _MenuStyle.title(context),
+            ),
+            JtrResponsive.getResponsiveSpacing(context, 4),
+            Text(menu.formattedPrice, style: _MenuStyle.price(context)),
+            JtrResponsive.getResponsiveSpacing(context, 14),
+            Divider(height: 1, color: AppTheme.cardBorder),
+            JtrResponsive.getResponsiveSpacing(context, 12),
+            Text('SÉLECTION', style: _MenuStyle.overline(context)),
+            JtrResponsive.getResponsiveSpacing(context, 10),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final category in controller.visibleCategories)
+                    Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        bottom: 12,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'CHOIX ${category.number}',
+                            style: _MenuStyle.caption(context),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 4),
+                          if (selectedByCourse[category.number]?.isNotEmpty ??
+                              false)
+                            for (final item
+                                in selectedByCourse[category.number]!)
+                              Padding(
+                                padding: JtrResponsive.getResponsivePadding(
+                                  context,
+                                  bottom: 4,
+                                ),
+                                child: Text(
+                                  '1x ${item.name}',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: _MenuStyle.body(context),
+                                ),
+                              )
+                          else
+                            Text(
+                              '—',
+                              style: _MenuStyle.body(
+                                context,
+                                color: AppTheme.textSecondary
+                                    .withValues(alpha: 0.55),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+// ─── Course sections ──────────────────────────────────────────────────────────
 
 class _CourseSectionHeader extends GetView<OrderMenuController> {
   const _CourseSectionHeader({required this.category});
@@ -511,7 +496,7 @@ class _CourseSectionHeader extends GetView<OrderMenuController> {
           JtrResponsive.getResponsiveRadius(context, 8),
         ),
         child: SizedBox(
-          height: JtrResponsive.getResponsiveHeight(context, 33),
+          height: JtrResponsive.getResponsiveHeight(context, 36),
           child: Row(
             children: [
               Container(
@@ -526,28 +511,25 @@ class _CourseSectionHeader extends GetView<OrderMenuController> {
                   '${category.number}',
                   style: TextStyle(
                     color: Colors.white,
-                    fontSize: _menuPageFontSize(context, 12),
-                    fontWeight: FontWeight.bold,
+                    fontSize: _MenuStyle.fs(context, 12),
+                    fontWeight: FontWeight.w800,
                     height: 1,
                   ),
                 ),
               ),
-              JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+              JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
               Expanded(
                 child: Text(
                   'CHOIX ${category.number} — ${category.label}',
-                  style: TextStyle(
-                    fontSize: _menuPageFontSize(context, 13),
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.darkText,
-                    letterSpacing: 0.4,
-                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _MenuStyle.title(context),
                 ),
               ),
               Icon(
                 expanded ? Icons.expand_more : Icons.chevron_right,
-                size: JtrResponsive.getResponsiveSize(context, 20),
-                color: AppTheme.textSecondary.withValues(alpha: 0.6),
+                size: JtrResponsive.getResponsiveSize(context, 22),
+                color: AppTheme.textSecondary.withValues(alpha: 0.55),
               ),
             ],
           ),
@@ -572,21 +554,13 @@ class _CourseSectionBody extends GetView<OrderMenuController> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          JtrResponsive.getResponsiveSpacing(context, 16),
+          JtrResponsive.getResponsiveSpacing(context, 14),
           _CourseItemsGrid(category: category),
         ],
       );
     });
   }
 }
-
-// ─── Course Items Grid ─────────────────────────────────────────────────────────
-//
-// Figma: items h=128, 3 per row, gap=12.
-// Available width = 342px (after 24px horizontal padding).
-// Cell width = (342 − 12 − 12) / 3 ≈ 106px.
-//
-// No Obx here — each _MenuItemButton owns its own Obx.
 
 class _CourseItemsGrid extends StatelessWidget {
   const _CourseItemsGrid({required this.category});
@@ -595,25 +569,43 @@ class _CourseItemsGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final columns = JtrResponsive.gridColumns<int>(
-      context,
-      small: 3,
-      medium: 4,
-      large: 4,
-    );
-    final spacing = JtrResponsive.getResponsiveWidth(context, 12);
-    final runSpacing = JtrResponsive.getResponsiveHeight(context, 12);
+    final spacing = JtrResponsive.getResponsiveWidth(context, 10);
+    final runSpacing = JtrResponsive.getResponsiveHeight(context, 10);
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final int columns;
+        if (constraints.maxWidth < 280) {
+          columns = 2;
+        } else if (constraints.maxWidth < 420) {
+          columns = 3;
+        } else {
+          columns = JtrResponsive.gridColumns<int>(
+            context,
+            small: 3,
+            medium: 4,
+            large: 4,
+          );
+        }
+
         final cellWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
+        final nameSize = _MenuStyle.itemNameSize(context, cellWidth);
+        final cardHeight =
+            JtrResponsive.adaptiveHeight(context, 112, compact: 88);
+
         return Wrap(
           spacing: spacing,
           runSpacing: runSpacing,
           children: [
             for (final item in category.items)
-              _MenuItemButton(item: item, category: category, width: cellWidth),
+              _MenuItemButton(
+                item: item,
+                category: category,
+                width: cellWidth,
+                height: cardHeight,
+                nameFontSize: nameSize,
+              ),
           ],
         );
       },
@@ -621,114 +613,97 @@ class _CourseItemsGrid extends StatelessWidget {
   }
 }
 
-// ─── Menu Item Button (h=128) ─────────────────────────────────────────────────
-//
-// Figma layout (per item):
-//  • y=0–4:   coloured accent bar (Overlay rounded-rect, h=4)
-//  • x=16 y=16 h=17: price/code text
-//  • x=16 y=33+~43=76 h=~36: item name (pushed toward bottom via Spacer)
-//
-// Owns its own Obx so reactive selection state is read INSIDE the closure.
-
 class _MenuItemButton extends GetView<OrderMenuController> {
   const _MenuItemButton({
     required this.item,
     required this.category,
     required this.width,
+    required this.height,
+    required this.nameFontSize,
   });
 
   final MenuItem item;
   final MenuCategory category;
   final double width;
+  final double height;
+  final double nameFontSize;
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      // ← observable read INSIDE Obx closure — GetX tracks this correctly
       final isSelected = controller.isSelected(item);
       final bg = isSelected ? AppTheme.lightButton : AppTheme.background;
       final borderColor = isSelected ? AppTheme.primary : AppTheme.cardBorder;
-      final itemRadius = JtrResponsive.getResponsiveRadius(context, 10);
+      final radius = _MenuStyle.cardRadius(context);
 
       return GestureDetector(
         onTap: () => controller.toggleItem(item),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
           width: width,
-          height: JtrResponsive.adaptiveHeight(context, 128, compact: 92),
+          height: height,
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.circular(itemRadius),
+            borderRadius: BorderRadius.circular(radius),
             border: Border.all(
               color: borderColor,
-              width: isSelected
-                  ? JtrResponsive.getResponsiveWidth(context, 1.5)
-                  : JtrResponsive.getResponsiveWidth(context, 1),
+              width: isSelected ? 1.5 : 1,
             ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: JtrResponsive.getResponsiveSize(context, 4),
-                offset: Offset(
-                  0,
-                  JtrResponsive.getResponsiveHeight(context, 2),
-                ),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
               ),
             ],
           ),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Accent bar — h=4, border-radius top only
               Container(
                 height: JtrResponsive.getResponsiveHeight(context, 4),
                 decoration: BoxDecoration(
                   color: isSelected
                       ? category.color
-                      : category.color.withValues(alpha: 0.5),
+                      : category.color.withValues(alpha: 0.45),
                   borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(itemRadius),
+                    top: Radius.circular(radius),
                   ),
                 ),
               ),
               Expanded(
                 child: Padding(
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    left: 16,
-                    top: 12,
-                    right: 8,
-                    bottom: 8,
-                  ),
+                  padding: _MenuStyle.cardPadding(context),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Price text — y=16 in Figma (12px below accent bar)
                       Text(
                         item.displayPriceLabel,
-                        style: TextStyle(
-                          fontSize: _menuPageFontSize(context, 11),
-                          fontWeight: FontWeight.w600,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _MenuStyle.caption(
+                          context,
                           color: isSelected
                               ? AppTheme.primary
                               : AppTheme.textSecondary,
-                          height: 1.2,
                         ),
                       ),
-                      // Spacer pushes name toward bottom half (~y=76 in Figma)
                       const Spacer(),
                       Text(
                         item.name,
-                        maxLines: 3,
+                        maxLines: item.name.trim().contains(RegExp(r'\s'))
+                            ? 2
+                            : 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: _menuPageFontSize(context, 10),
-                          fontWeight: FontWeight.w700,
+                        softWrap: true,
+                        style: _MenuStyle.body(
+                          context,
                           color: isSelected
                               ? AppTheme.darkText
-                              : AppTheme.darkText.withValues(alpha: 0.75),
-                          height: 1.25,
-                          letterSpacing: 0.2,
+                              : AppTheme.darkText.withValues(alpha: 0.8),
+                        ).copyWith(
+                          fontSize: nameFontSize,
+                          height: 1.2,
                         ),
                       ),
                     ],
@@ -742,9 +717,6 @@ class _MenuItemButton extends GetView<OrderMenuController> {
     });
   }
 }
-
-// Confirm action lives in the header (_ConfirmIconButton) to avoid overlapping
-// the bottom navigation bar.
 
 class _MenuBottomNav extends GetView<OrderMenuController> {
   const _MenuBottomNav();

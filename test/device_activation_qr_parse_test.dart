@@ -44,4 +44,22 @@ void main() {
       expect(DeviceActivationMapper.activationUrlFromQrText(raw), isNull);
     });
   });
+
+  group('DeviceActivationMapper.activationFromJson', () {
+    test('uses fallbacks when bypass response omits tenant / api url', () {
+      final result = DeviceActivationMapper.activationFromJson(
+        {
+          'device_id': 42,
+          'device_token': 'tok-bypass',
+        },
+        fallbackTenantSchema: 'mocca',
+        fallbackApiBaseUrl: 'https://api.goatech.ma/',
+      );
+
+      expect(result.deviceId, '42');
+      expect(result.deviceToken, 'tok-bypass');
+      expect(result.tenantSchema, 'mocca');
+      expect(result.apiBaseUrl, 'https://api.goatech.ma/api');
+    });
+  });
 }

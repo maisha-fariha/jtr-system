@@ -32,9 +32,17 @@
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scanner le QR d'activation du poste Windows (caisse).</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>JTR System doit accéder au poste de caisse Windows sur le Wi‑Fi local pour l'activation et les commandes.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>UIApplicationSceneManifest</key>

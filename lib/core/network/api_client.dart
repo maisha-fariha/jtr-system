@@ -3,6 +3,7 @@ import 'package:get/get.dart' hide Response;
 
 import '../config/api_config.dart';
 import 'api_exception.dart';
+import 'lan_connection_message.dart';
 
 class ApiClient extends GetxService {
   ApiClient() {
@@ -148,23 +149,31 @@ class ApiClient extends GetxService {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.receiveTimeout:
       case DioExceptionType.sendTimeout:
-        return ApiException(
-          message: ApiConfig.isLocalPosBaseUrl
-              ? 'Délai dépassé vers le poste Windows. Vérifiez l\'IP et le réseau.'
-              : 'Connection timed out. Please try again.',
-          statusCode: response?.statusCode,
-          responseBody: body,
-        );
       case DioExceptionType.connectionError:
         return ApiException(
           message: ApiConfig.isLocalPosBaseUrl
-              ? 'Impossible de joindre le poste Windows. '
-                  'Vérifiez le Wi‑Fi et l\'adresse IP du poste.'
-              : 'No internet connection.',
+              ? lanPosConnectionUserMessage(
+                  error: error,
+                  targetHost: hostFromBaseUrl(ApiConfig.baseUrl),
+                )
+              : (error.type == DioExceptionType.connectionError
+                  ? 'No internet connection.'
+                  : 'Connection timed out. Please try again.'),
           statusCode: response?.statusCode,
           responseBody: body,
         );
       default:
+        if (ApiConfig.isLocalPosBaseUrl &&
+            (error.message ?? '').toLowerCase().contains('refused')) {
+          return ApiException(
+            message: lanPosConnectionUserMessage(
+              error: error,
+              targetHost: hostFromBaseUrl(ApiConfig.baseUrl),
+            ),
+            statusCode: response?.statusCode,
+            responseBody: body,
+          );
+        }
         return ApiException(
           message: error.message ?? 'An unexpected error occurred.',
           statusCode: response?.statusCode,

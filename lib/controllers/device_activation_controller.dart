@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/config/api_config.dart';
+import '../core/config/device_activation_bypass.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/device_activation_mapper.dart';
 import '../data/repositories/auth_repository.dart';
@@ -14,11 +15,10 @@ import '../pages/device_qr_scan_page.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 
-/// Activates this mobile device against a local Windows POS (cashier) machine.
+/// Activates this mobile device against the configured API host.
 ///
-/// QR / activation code from the Admin Dashboard includes the POS LAN IP
-/// (`api_base_url`). After success, all API calls go to that IP with device
-/// headers — there is no central production server.
+/// Production / LAN: QR or manual code + POS IP. Test: [DeviceActivationBypass]
+/// against https://api.goatech.ma with code `JTR-BYPASS`.
 class DeviceActivationController extends GetxController {
   DeviceActivationController({
     required DeviceRepository deviceRepository,
@@ -40,6 +40,18 @@ class DeviceActivationController extends GetxController {
   /// User-facing text from API `message` (or local validation).
   final feedbackMessage = RxnString();
   final feedbackIsError = false.obs;
+
+  bool get isQrDisabled => DeviceActivationBypass.enabled;
+
+  @override
+  void onInit() {
+    super.onInit();
+    if (DeviceActivationBypass.enabled) {
+      codeController.text = DeviceActivationBypass.activationCode;
+      apiBaseUrlController.text = DeviceActivationBypass.apiBaseUrl;
+      tenantController.text = DeviceActivationBypass.tenantSchema;
+    }
+  }
 
   @override
   void onClose() {
@@ -86,6 +98,7 @@ class DeviceActivationController extends GetxController {
 
   /// Live camera scan of the dashboard QR.
   Future<void> scanQrWithCamera() async {
+    if (isQrDisabled) return;
     if (isSubmitting.value || isImportingQr.value || isScanningQr.value) {
       return;
     }
@@ -116,6 +129,7 @@ class DeviceActivationController extends GetxController {
   }
 
   Future<void> importQrPng() async {
+    if (isQrDisabled) return;
     _clearFeedback();
     if (isSubmitting.value || isScanningQr.value || isImportingQr.value) {
       return;
@@ -282,16 +296,27 @@ class DeviceActivationController extends GetxController {
     final posServer = apiBaseUrlController.text.trim();
 
     if (code.length < 8) {
-      _showError('Saisissez un code d\'activation valide.');
+      _showError(
+        DeviceActivationBypass.enabled
+            ? 'Utilisez le code de bypass ${DeviceActivationBypass.activationCode}.'
+            : 'Saisissez un code d\'activation valide.',
+      );
       return;
     }
     if (tenant.isEmpty) {
-      _showError('Saisissez le schéma restaurant.');
+      _showError(
+        DeviceActivationBypass.enabled
+            ? 'Saisissez le schéma restaurant (X-Tenant-Schema), '
+                'pas le code de bypass.'
+            : 'Saisissez le schéma restaurant.',
+      );
       return;
     }
     if (posServer.isEmpty) {
       _showError(
-        'Saisissez l\'URL / IP du poste (ex. 192.168.1.10) ou scannez le QR.',
+        DeviceActivationBypass.enabled
+            ? 'Saisissez l\'URL API (ex. ${DeviceActivationBypass.apiBaseUrl}).'
+            : 'Saisissez l\'URL / IP du poste (ex. 192.168.1.10) ou scannez le QR.',
       );
       return;
     }
@@ -372,8 +397,11 @@ class DeviceActivationController extends GetxController {
         error: e.toString(),
       );
       _showError(
-        'Activation impossible. Vérifiez que le téléphone est sur '
-        'le même réseau que le poste Windows.',
+        DeviceActivationBypass.enabled
+            ? 'Activation impossible. Vérifiez l\'URL API, le schéma '
+                'et le réseau.'
+            : 'Activation impossible. Vérifiez que le téléphone est sur '
+                'le même réseau que le poste Windows.',
       );
     } finally {
       isSubmitting.value = false;

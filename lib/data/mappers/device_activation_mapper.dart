@@ -290,16 +290,25 @@ class DeviceActivationMapper {
   static DeviceActivationResult activationFromJson(
     Map<String, dynamic> data, {
     String? message,
+    String? fallbackTenantSchema,
+    String? fallbackApiBaseUrl,
   }) {
     final deviceId = data['device_id'];
     final token = data['device_token']?.toString() ?? '';
-    final tenant = data['tenant_schema']?.toString() ?? '';
-    final apiRaw = data['api_base_url']?.toString() ?? '';
+    final tenant = (data['tenant_schema']?.toString() ??
+            fallbackTenantSchema ??
+            '')
+        .trim();
+    final apiRaw = (data['api_base_url']?.toString() ??
+            fallbackApiBaseUrl ??
+            '')
+        .trim();
     if (token.isEmpty || tenant.isEmpty || apiRaw.isEmpty) {
       throw FormatException(
         message?.trim().isNotEmpty == true
             ? message!.trim()
-            : 'Réponse d\'activation incomplète.',
+            : 'Réponse d\'activation incomplète '
+                '(device_id / device_token requis).',
       );
     }
 
@@ -308,7 +317,7 @@ class DeviceActivationMapper {
           ? '${deviceId.toInt()}'
           : deviceId?.toString() ?? '',
       deviceToken: token,
-      tenantSchema: tenant,
+      tenantSchema: normalizeTenantSchema(tenant),
       apiBaseUrl: normalizePosApiBaseUrl(apiRaw),
       deviceUuid: data['device_uuid']?.toString(),
       label: data['label']?.toString(),

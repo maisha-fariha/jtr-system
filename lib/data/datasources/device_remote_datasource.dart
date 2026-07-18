@@ -1,8 +1,10 @@
 import 'package:dio/dio.dart';
 
+import '../../core/config/device_activation_bypass.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
 import '../../core/network/api_exception.dart';
+import '../../core/network/lan_connection_message.dart';
 import '../../utils/api_log.dart';
 import '../mappers/device_activation_mapper.dart';
 import '../models/api_envelope.dart';
@@ -92,7 +94,10 @@ class DeviceRemoteDataSource {
         error: e.message ?? e.toString(),
       );
       throw ApiException(
-        message: e.message ?? e.toString(),
+        message: lanPosConnectionUserMessage(
+          error: e,
+          targetHost: hostFromBaseUrl(baseUrl),
+        ),
         statusCode: e.response?.statusCode,
         responseBody: e.response?.data,
       );
@@ -199,7 +204,10 @@ class DeviceRemoteDataSource {
         error: e.message ?? e.toString(),
       );
       throw ApiException(
-        message: e.message ?? e.toString(),
+        message: lanPosConnectionUserMessage(
+          error: e,
+          targetHost: hostFromBaseUrl(url),
+        ),
         statusCode: e.response?.statusCode,
         responseBody: e.response?.data,
       );
@@ -243,14 +251,23 @@ class DeviceRemoteDataSource {
     _client.dio.options.headers.remove('Authorization');
 
     final path = ApiEndpoints.deviceActivate;
-    final body = <String, dynamic>{
-      'code': code,
-      'type': 'mobile',
-      'app_version': appVersion,
-      'public_key': null,
-      if (fingerprint?.isNotEmpty == true) 'fingerprint': fingerprint,
-      if (metadata != null) 'metadata': metadata,
-    };
+    final normalizedCode = DeviceActivationMapper.normalizeCode(code);
+    final isBypass = DeviceActivationBypass.enabled &&
+        normalizedCode == DeviceActivationBypass.activationCode;
+    // Bypass contract: { code, type } only. Full LAN activate may include extras.
+    final body = isBypass
+        ? <String, dynamic>{
+            'code': DeviceActivationBypass.activationCode,
+            'type': DeviceActivationBypass.deviceType,
+          }
+        : <String, dynamic>{
+            'code': code,
+            'type': 'mobile',
+            'app_version': appVersion,
+            'public_key': null,
+            if (fingerprint?.isNotEmpty == true) 'fingerprint': fingerprint,
+            if (metadata != null) 'metadata': metadata,
+          };
     final request = {
       'baseUrl': originBaseUrl,
       'url': '$originBaseUrl$path',
@@ -321,6 +338,9 @@ class DeviceRemoteDataSource {
         return DeviceActivationMapper.activationFromJson(
           Map<String, dynamic>.from(envelope.data as Map),
           message: envelope.message,
+          // Bypass may omit these; persist values used for the request.
+          fallbackTenantSchema: tenantSchema,
+          fallbackApiBaseUrl: originBaseUrl,
         );
       } on FormatException catch (e) {
         throw ApiException(
@@ -340,7 +360,10 @@ class DeviceRemoteDataSource {
         error: e.message ?? e.toString(),
       );
       throw ApiException(
-        message: e.message ?? e.toString(),
+        message: lanPosConnectionUserMessage(
+          error: e,
+          targetHost: hostFromBaseUrl(originBaseUrl),
+        ),
         statusCode: e.response?.statusCode,
         responseBody: e.response?.data,
       );

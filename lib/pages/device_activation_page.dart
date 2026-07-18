@@ -144,24 +144,30 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                 : 'URL / IP du poste',
                           ),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          TextField(
-                            controller: controller.apiBaseUrlController,
-                            enabled: !controller.isQrDisabled,
-                            readOnly: controller.isQrDisabled,
-                            keyboardType: TextInputType.url,
-                            cursorColor: AppTheme.primary,
-                            style: TextStyle(
-                              color: controller.isQrDisabled
-                                  ? AppTheme.textSecondary
-                                  : AppTheme.darkText,
+                          if (controller.isQrDisabled)
+                            // Fixed display — never rewrite with trailing /api.
+                            InputDecorator(
+                              decoration: _fieldDecoration(
+                                context,
+                                hint: '',
+                              ),
+                              child: Text(
+                                controller.bypassDisplayApiUrl,
+                                style: TextStyle(color: AppTheme.darkText),
+                              ),
+                            )
+                          else
+                            TextField(
+                              controller: controller.apiBaseUrlController,
+                              keyboardType: TextInputType.url,
+                              cursorColor: AppTheme.primary,
+                              style: TextStyle(color: AppTheme.darkText),
+                              decoration: _fieldDecoration(
+                                context,
+                                hint:
+                                    'ex. 192.168.1.10 ou http://192.168.1.10/api',
+                              ),
                             ),
-                            decoration: _fieldDecoration(
-                              context,
-                              hint: controller.isQrDisabled
-                                  ? 'https://api.goatech.ma/'
-                                  : 'ex. 192.168.1.10 ou http://192.168.1.10/api',
-                            ),
-                          ),
                           if (!controller.isQrDisabled) ...[
                             JtrResponsive.getResponsiveSpacing(context, 16),
                             Obx(

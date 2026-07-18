@@ -29,9 +29,22 @@ class DeviceActivationController extends GetxController {
   final DeviceRepository _deviceRepository;
   final AuthRepository _authRepository;
 
-  final codeController = TextEditingController();
-  final tenantController = TextEditingController();
-  final apiBaseUrlController = TextEditingController();
+  /// Prefill at construction so the first frame already shows bypass values.
+  late final codeController = TextEditingController(
+    text: DeviceActivationBypass.enabled
+        ? DeviceActivationBypass.activationCode
+        : '',
+  );
+  late final tenantController = TextEditingController(
+    text: DeviceActivationBypass.enabled
+        ? DeviceActivationBypass.tenantSchema
+        : '',
+  );
+  late final apiBaseUrlController = TextEditingController(
+    text: DeviceActivationBypass.enabled
+        ? DeviceActivationBypass.apiBaseUrl
+        : '',
+  );
 
   final isSubmitting = false.obs;
   final isImportingQr = false.obs;
@@ -43,14 +56,12 @@ class DeviceActivationController extends GetxController {
 
   bool get isQrDisabled => DeviceActivationBypass.enabled;
 
-  @override
-  void onInit() {
-    super.onInit();
-    if (DeviceActivationBypass.enabled) {
-      codeController.text = DeviceActivationBypass.activationCode;
-      apiBaseUrlController.text = DeviceActivationBypass.apiBaseUrl;
-      tenantController.text = DeviceActivationBypass.tenantSchema;
-    }
+  /// Display-only host for bypass (never append `/api` in the input).
+  String get bypassDisplayApiUrl => DeviceActivationBypass.apiBaseUrl;
+
+  void _pinBypassDisplayUrl() {
+    if (!DeviceActivationBypass.enabled) return;
+    apiBaseUrlController.text = DeviceActivationBypass.apiBaseUrl;
   }
 
   @override
@@ -293,7 +304,9 @@ class DeviceActivationController extends GetxController {
     final code = DeviceActivationMapper.normalizeCode(codeController.text);
     final tenant =
         DeviceActivationMapper.normalizeTenantSchema(tenantController.text);
-    final posServer = apiBaseUrlController.text.trim();
+    final posServer = DeviceActivationBypass.enabled
+        ? DeviceActivationBypass.apiBaseUrl
+        : apiBaseUrlController.text.trim();
 
     if (code.length < 8) {
       _showError(
@@ -335,7 +348,11 @@ class DeviceActivationController extends GetxController {
       return;
     }
 
-    apiBaseUrlController.text = apiBaseUrl;
+    if (!DeviceActivationBypass.enabled) {
+      apiBaseUrlController.text = apiBaseUrl;
+    } else {
+      _pinBypassDisplayUrl();
+    }
     logDeviceActivation(
       phase: 'ACTIVATE_START',
       posUrl: apiBaseUrl,
@@ -371,7 +388,9 @@ class DeviceActivationController extends GetxController {
           'message': result.message,
         },
       );
-      apiBaseUrlController.text = result.apiBaseUrl;
+      if (!DeviceActivationBypass.enabled) {
+        apiBaseUrlController.text = result.apiBaseUrl;
+      }
       _showSuccess(result.message ?? 'Device activated');
       await Future<void>.delayed(const Duration(milliseconds: 600));
       await _goToLoginRequiringAuth();
@@ -404,6 +423,7 @@ class DeviceActivationController extends GetxController {
                 'le même réseau que le poste Windows.',
       );
     } finally {
+      _pinBypassDisplayUrl();
       isSubmitting.value = false;
     }
   }

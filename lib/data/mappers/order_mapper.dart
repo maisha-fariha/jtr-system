@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../../core/network/api_exception.dart';
@@ -1808,6 +1806,92 @@ class OrderMapper {
     return reindexDisplayEntries(result);
   }
 
+  /// After kitchen send, a flat pre-send ticket must stay flat above DEMANDÉE.
+  ///
+  /// The API sometimes parks later lines of the same burst in course 2, which
+  /// extracts as `P1 / DEMANDÉE / P2 / P3`. When [previous] had no divider,
+  /// keep every pre-send product above the first kitchen divider.
+  static List<OrderDisplayEntry> coalesceProductsBeforeFirstDivider({
+    required List<OrderDisplayEntry> previous,
+    required List<OrderDisplayEntry> next,
+  }) {
+    if (previous.any((entry) => entry.isSectionDivider)) return next;
+
+    final dividerIndex = next.indexWhere((entry) => entry.isSectionDivider);
+    if (dividerIndex < 0) return next;
+
+    final prevProducts = <OrderDisplayEntry>[
+      for (final entry in previous)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
+    if (prevProducts.isEmpty) return next;
+
+    final remaining = <OrderDisplayEntry>[
+      for (final entry in next)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
+    if (remaining.isEmpty) return next;
+
+    OrderDisplayEntry? takeMatch(OrderDisplayEntry prevProduct) {
+      final id = prevProduct.itemId ?? 0;
+      if (id > 0) {
+        final byId = remaining.indexWhere((entry) => (entry.itemId ?? 0) == id);
+        if (byId >= 0) return remaining.removeAt(byId);
+      }
+      final key = _productFingerprint(prevProduct.product);
+      if (key != null) {
+        final byKey = remaining.indexWhere(
+          (entry) => _productFingerprint(entry.product) == key,
+        );
+        if (byKey >= 0) return remaining.removeAt(byKey);
+      }
+      if (remaining.isNotEmpty) return remaining.removeAt(0);
+      return null;
+    }
+
+    final above = <OrderDisplayEntry>[];
+    for (final prevProduct in prevProducts) {
+      final match = takeMatch(prevProduct);
+      if (match != null) above.add(match);
+    }
+
+    final productsBeforeDivider = next
+        .take(dividerIndex)
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .length;
+    // Already correct: every pre-send line is above DEMANDÉE.
+    if (productsBeforeDivider >= above.length && remaining.isEmpty) {
+      return next;
+    }
+
+    final firstDivider = next[dividerIndex];
+    final belowSection = firstDivider.sectionIndex ?? 1;
+    final result = <OrderDisplayEntry>[];
+    var lineIndex = 0;
+
+    void addProduct(OrderDisplayEntry product, int sectionIndex) {
+      result.add(
+        OrderDisplayEntry.product(
+          product: product.product!,
+          lineIndex: lineIndex++,
+          sectionIndex: sectionIndex,
+          courseNumber: product.courseNumber,
+          itemId: product.itemId,
+        ),
+      );
+    }
+
+    for (final product in above) {
+      addProduct(product, 0);
+    }
+    result.add(firstDivider);
+    for (final product in remaining) {
+      addProduct(product, belowSection);
+    }
+
+    return reindexDisplayEntries(result);
+  }
+
   static int? suivreSplitAt(List<OrderDisplayEntry> entries) {
     final splits = suivreSplitPositions(entries);
     if (splits.isEmpty) return null;
@@ -1880,6 +1964,11 @@ class OrderMapper {
       if (applyKitchenDemande) {
         // Keep DEMANDÉE from kitchen send — do not reconcile back to À SUIVRE.
         entries = pinProductsRelativeToDividers(
+          previous: previousDisplayEntries,
+          next: entries,
+        );
+        // Flat pre-send ticket: do not leave burst items stranded under DEMANDÉE.
+        entries = coalesceProductsBeforeFirstDivider(
           previous: previousDisplayEntries,
           next: entries,
         );
@@ -3833,8 +3922,42 @@ class OrderMapper {
     return payload;
   }
 
+  /// Deep-copies JSON-like maps without `jsonEncode` (that path ANRs on large
+  /// tickets when called on the UI isolate during rapid taps).
   static Map<String, dynamic> _deepCopyOrderMap(Map<String, dynamic> source) {
-    return jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
+    return Map<String, dynamic>.from(
+      source.map((key, value) => MapEntry(key, _deepCopyJsonValue(value))),
+    );
+  }
+
+  static dynamic _deepCopyJsonValue(dynamic value) {
+    if (value is Map) {
+      return Map<String, dynamic>.from(
+        value.map(
+          (key, nested) => MapEntry(key.toString(), _deepCopyJsonValue(nested)),
+        ),
+      );
+    }
+    if (value is List) {
+      return [for (final item in value) _deepCopyJsonValue(item)];
+    }
+    return value;
+  }
+
+  /// Fast optimistic append for catalog taps — session lists only, no API-detail
+  /// simulation (that path is too heavy for the UI isolate).
+  static SessionOrder predictAppendSimpleProductFast({
+    required SessionOrder current,
+    required String productName,
+    required double unitPrice,
+    int qty = 1,
+  }) {
+    return _predictAppendOnSessionOrder(
+      current: current,
+      productName: productName,
+      unitPrice: unitPrice,
+      qty: qty,
+    );
   }
 
   static Map<String, dynamic> cancelOrderLinesAtIndices({

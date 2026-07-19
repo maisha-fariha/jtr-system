@@ -1761,11 +1761,14 @@ class OrderRepository {
       );
       lastEmptyOrderSeedProductId = null;
       _forgetEmptyShellDisplay(orderId);
-      await _local.saveOrderDetail(orderId, updated);
-      await _sessionLocal.upsertOpenOrderInList(updated);
+      // Persist off the critical path — don't block the UI isolate on Hive JSON.
+      unawaited(_local.saveOrderDetail(orderId, updated));
+      unawaited(_sessionLocal.upsertOpenOrderInList(updated));
       lastAddItemLog = apiLog.toString();
-      return _fetchAndMapOrder(
+      // Map PUT body directly — avoid a second GET that stalls rapid taps.
+      return _mapDetailToSessionOrder(
         orderId,
+        updated,
         previousDisplayEntries: layoutHints,
       );
     } on ApiException catch (e) {
@@ -2826,6 +2829,28 @@ class OrderRepository {
     );
   }
 
+  /// Maps an in-memory order detail without an extra network round-trip.
+  SessionOrder _mapDetailToSessionOrder(
+    int orderId,
+    Map<String, dynamic> detail, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) {
+    final splitHint = previousDisplayEntries == null
+        ? _local.readSuivreSplitHint(orderId)
+        : OrderMapper.suivreSplitPositions(previousDisplayEntries);
+    final countHint = previousDisplayEntries == null
+        ? _local.readSuivreCountHint(orderId)
+        : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+    final order = OrderMapper.fromOrderDetail(
+      detail,
+      previousDisplayEntries: previousDisplayEntries,
+      suivreSplitHints: splitHint,
+      suivreCountHint: countHint,
+    );
+    unawaited(_persistSuivreLayoutHints(orderId, order.displayEntries));
+    return order.copyWith(id: orderId);
+  }
+
   Future<void> _postSeatOrderItems({
     required int orderId,
     required Map<String, dynamic> detail,
@@ -3292,7 +3317,10 @@ class OrderRepository {
     );
   }
 
-  Future<SessionOrder> requestAllCourses(int orderId) async {
+  Future<SessionOrder> requestAllCourses(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
@@ -3338,8 +3366,11 @@ class OrderRepository {
       debugPrint(lastKitchenSendLog!);
 
       // Explicit Envoyer — allow À SUIVRE → DEMANDÉE from kitchen timestamps.
+      // Pass pre-send layout so a flat burst stays above DEMANDÉE even when the
+      // API splits lines across courses.
       final order = OrderMapper.fromOrderDetail(
         updated,
+        previousDisplayEntries: previousDisplayEntries,
         applyKitchenDemande: true,
       );
       await _persistSuivreLayoutHints(orderId, order.displayEntries);

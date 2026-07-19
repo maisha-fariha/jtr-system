@@ -335,6 +335,86 @@ void main() {
     expect(OrderMapper.suivreSeparatorCount(entries), 0);
   });
 
+  test(
+    'kitchen send keeps flat batch above DEMANDÉE when API splits courses',
+    () {
+      // Waiter added 3 identical lines then Envoyer — UI was flat.
+      final previous = [
+        _product(0, 'OULMES', itemId: 0),
+        _product(1, 'OULMES', itemId: 0),
+        _product(2, 'OULMES', itemId: 0),
+      ];
+      // API parked line 1 in course 1 and lines 2–3 in course 2 (both requested).
+      final detail = <String, dynamic>{
+        'id': 1,
+        'table': {'table_number': 1},
+        'seat_orders': [
+          {
+            'seat_number': 1,
+            'courses': [
+              {
+                'course_number': 1,
+                'requested_at': '2026-07-19T12:51:51Z',
+                'status': 'requested',
+                'items': [
+                  {
+                    'id': 11,
+                    'qty': 1,
+                    'status': 'active',
+                    'product': {'id': 10, 'name': 'OULMES'},
+                    'sub_total': 15,
+                  },
+                ],
+              },
+              {
+                'course_number': 2,
+                'requested_at': '2026-07-19T12:51:51Z',
+                'status': 'requested',
+                'items': [
+                  {
+                    'id': 12,
+                    'qty': 1,
+                    'status': 'active',
+                    'product': {'id': 10, 'name': 'OULMES'},
+                    'sub_total': 15,
+                  },
+                  {
+                    'id': 13,
+                    'qty': 1,
+                    'status': 'active',
+                    'product': {'id': 10, 'name': 'OULMES'},
+                    'sub_total': 15,
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      final entries = OrderMapper.finalizeDisplayEntries(
+        detail,
+        previousDisplayEntries: previous,
+        applyKitchenDemande: true,
+      );
+
+      expect(OrderMapper.demandeSeparatorCount(entries), 1);
+      final before = <int?>[];
+      final after = <int?>[];
+      var seenDivider = false;
+      for (final entry in entries) {
+        if (entry.isSectionDivider) {
+          seenDivider = true;
+          continue;
+        }
+        if (entry.type != OrderDisplayEntryType.product) continue;
+        (seenDivider ? after : before).add(entry.itemId);
+      }
+      expect(before, [11, 12, 13]);
+      expect(after, isEmpty);
+    },
+  );
+
   test('removeSuivreSectionFromDisplay drops divider and its items', () {
     final entries = [
       _product(0, 'A', itemId: 1),

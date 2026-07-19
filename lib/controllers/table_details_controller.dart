@@ -130,25 +130,103 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    // Delete in flight: never flash server lines back — keep live layout and
+    // only refresh ids/prices for rows that are still on the ticket.
+    if (live != null &&
+        _suppressDeletedItemIds.isNotEmpty &&
+        OrderMapper.productEntryCount(live.displayEntries) <=
+            OrderMapper.productEntryCount(updated.displayEntries)) {
+      var display = OrderMapper.stabilizeLiveLayoutWithServer(
+        live: live.displayEntries,
+        server: updated.displayEntries,
+      );
+      display = [
+        for (final entry in display)
+          if (entry.type != OrderDisplayEntryType.product)
+            entry
+          else if ((entry.itemId ?? 0) <= 0 ||
+              !_suppressDeletedItemIds.contains(entry.itemId))
+            entry,
+      ];
+      display = OrderMapper.reindexDisplayEntries(display);
+      final products = [
+        for (final entry in display)
+          if (entry.type == OrderDisplayEntryType.product &&
+              entry.product != null)
+            entry.product!,
+      ];
+      if (products.isEmpty) {
+        _locallyCancelledItemIds.clear();
+        if (updated.id > 0) {
+          _orderRepository.rememberEmptyShellDisplay(updated.id);
+        }
+      } else {
+        _locallyCancelledItemIds.removeWhere(
+          (id) => !OrderMapper.productItemIds(display).contains(id),
+        );
+      }
+      _syncOrderInSession(
+        updated.copyWith(
+          products: products,
+          displayEntries: display,
+          itemCount: products.length,
+          total: products.isEmpty
+              ? OrderMapper.formatPrice('0')
+              : updated.total,
+        ),
+        orderNumber,
+        displayEntriesOverride: display,
+      );
+      return;
+    }
+
     final merged = OrderMapper.mergeLiveOptimisticDetail(
       server: updated,
       live: live,
       suppressItemIds: _suppressDeletedItemIds,
     );
-    if (merged.products.isEmpty) {
+
+    // Smooth path: keep the live layout when the visible ticket shape matches
+    // so sync only refreshes ids/prices without reordering rows.
+    SessionOrder toShow = merged;
+    if (live != null &&
+        OrderMapper.productEntryCount(live.displayEntries) ==
+            OrderMapper.productEntryCount(merged.displayEntries) &&
+        OrderMapper.suivreSeparatorCount(live.displayEntries) ==
+            OrderMapper.suivreSeparatorCount(merged.displayEntries) &&
+        OrderMapper.demandeSeparatorCount(live.displayEntries) ==
+            OrderMapper.demandeSeparatorCount(merged.displayEntries)) {
+      final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
+        live: live.displayEntries,
+        server: merged.displayEntries,
+      );
+      final products = [
+        for (final entry in stabilized)
+          if (entry.type == OrderDisplayEntryType.product &&
+              entry.product != null)
+            entry.product!,
+      ];
+      toShow = merged.copyWith(
+        products: products,
+        displayEntries: stabilized,
+        itemCount: products.length,
+      );
+    }
+
+    if (toShow.products.isEmpty) {
       _locallyCancelledItemIds.clear();
-      if (merged.id > 0) {
-        _orderRepository.rememberEmptyShellDisplay(merged.id);
+      if (toShow.id > 0) {
+        _orderRepository.rememberEmptyShellDisplay(toShow.id);
       }
     } else {
       _locallyCancelledItemIds.removeWhere(
-        (id) => !OrderMapper.productItemIds(merged.displayEntries).contains(id),
+        (id) => !OrderMapper.productItemIds(toShow.displayEntries).contains(id),
       );
     }
     _syncOrderInSession(
-      merged,
+      toShow,
       orderNumber,
-      displayEntriesOverride: merged.displayEntries,
+      displayEntriesOverride: toShow.displayEntries,
     );
   }
 
@@ -379,6 +457,10 @@ class TableDetailsController extends GetxController {
       _flushQueuedSimpleAddsNow();
     }
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
+    // Undo window / delete commit in flight — keep the optimistic ticket stable.
+    if (_pendingDeleteSnapshot != null) return;
+    if (_pendingDeleteItemId != null) return;
+    if (isAddingProduct.value) return;
     if (!Get.isRegistered<SessionController>()) return;
 
     final current = order;
@@ -1554,7 +1636,11 @@ class TableDetailsController extends GetxController {
       );
     }
 
-    final layoutHints = current.displayEntries;
+    // Empty ticket / no waiter suite → never carry a ghost À SUIVRE into predict.
+    final rawHints = current.displayEntries;
+    final layoutHints = OrderMapper.suivreSeparatorCount(rawHints) == 0
+        ? OrderMapper.limitSuivreSeparatorCount(rawHints, 0)
+        : rawHints;
     final suivreCount = OrderMapper.suivreSeparatorCount(layoutHints);
     final suivreSplits = OrderMapper.suivreSplitPositions(layoutHints);
     final fastId = _fastResolvedOrderId;
@@ -1562,7 +1648,7 @@ class TableDetailsController extends GetxController {
         fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
 
     final predicted = OrderMapper.predictAfterAppendSimpleProduct(
-      current: current,
+      current: current.copyWith(displayEntries: layoutHints),
       cachedDetail: cached,
       productId: product.id,
       productName: product.name,
@@ -1886,6 +1972,14 @@ class TableDetailsController extends GetxController {
       sectionIndex,
     );
 
+    // Suppress cancelled suite item ids so background refresh cannot resurrect.
+    for (final entry in currentOrder.displayEntries) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      if ((entry.sectionIndex ?? 0) != sectionIndex) continue;
+      final itemId = entry.itemId ?? 0;
+      if (itemId > 0) _locallyCancelledItemIds.add(itemId);
+    }
+
     collapsedSuivreSections.remove(sectionIndex);
     collapsedSuivreSections.refresh();
     if (selectedSuivreSection.value == sectionIndex) {
@@ -1915,6 +2009,8 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: trimmedDisplay,
     );
+    // Persist trimmed hints before GET so sync cannot revive the suite.
+    await _orderRepository.persistSuivreLayoutHints(id, trimmedDisplay);
 
     isAddingProduct.value = true;
     try {
@@ -1933,17 +2029,26 @@ class TableDetailsController extends GetxController {
       }
       if (updated.id > 0) orderId = updated.id;
 
-      // Force trimmed layout — empty API follow-up courses must not resurrect
-      // the deleted À SUIVRE row.
-      final cleanedDisplay = OrderMapper.applyTrimmedSuivreLayout(
-        products: updated.products,
-        trimmedLayout: trimmedDisplay,
+      // Keep the waiter-trimmed layout — only refresh product payloads/ids.
+      final cleanedDisplay = OrderMapper.stabilizeLiveLayoutWithServer(
+        live: trimmedDisplay,
+        server: updated.displayEntries,
       );
+      final cleanedProducts = [
+        for (final entry in cleanedDisplay)
+          if (entry.type == OrderDisplayEntryType.product &&
+              entry.product != null)
+            entry.product!,
+      ];
       await _orderRepository.persistSuivreLayoutHints(id, cleanedDisplay);
       _syncOrderInSession(
         updated.copyWith(
+          products: cleanedProducts,
           displayEntries: cleanedDisplay,
-          itemCount: updated.products.length,
+          itemCount: cleanedProducts.length,
+          total: cleanedProducts.isEmpty
+              ? OrderMapper.formatPrice('0')
+              : updated.total,
         ),
         orderNumber,
         displayEntriesOverride: cleanedDisplay,
@@ -2006,9 +2111,14 @@ class TableDetailsController extends GetxController {
       final id = orderId ?? currentOrder.id;
       if (id > 0) {
         _orderRepository.rememberEmptyShellDisplay(id);
+        unawaited(_orderRepository.persistSuivreLayoutHints(id, const []));
       }
     }
-    _syncOrderInSession(predicted, orderNumber);
+    _syncOrderInSession(
+      predicted,
+      orderNumber,
+      displayEntriesOverride: predicted.displayEntries,
+    );
 
     final qtyLabel = line.quantity.trim().isEmpty ? '1' : line.quantity.trim();
     undoDeleteLabel.value =

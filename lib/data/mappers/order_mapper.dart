@@ -1484,6 +1484,31 @@ class OrderMapper {
       next: display,
     );
 
+    // Live suite deletes / thinner tickets win over a fatter server snapshot.
+    if (suivreSeparatorCount(display) > liveSuivre) {
+      display = limitSuivreSeparatorCount(display, liveSuivre);
+    }
+    // No waiter suite on live → never keep an API-invented À SUIVRE.
+    if (liveSuivre == 0) {
+      display = limitSuivreSeparatorCount(display, 0);
+    }
+    if (liveCount > 0 &&
+        liveCount < serverCount &&
+        productEntryCount(display) > liveCount) {
+      final liveIds = productItemIds(live.displayEntries);
+      display = [
+        for (final entry in display)
+          if (entry.type != OrderDisplayEntryType.product)
+            entry
+          else if ((entry.itemId ?? 0) <= 0 || liveIds.contains(entry.itemId))
+            entry,
+      ];
+      display = pinProductsRelativeToDividers(
+        previous: live.displayEntries,
+        next: display,
+      );
+    }
+
     if (suppressItemIds.isNotEmpty) {
       display = [
         for (final entry in display)
@@ -1493,6 +1518,15 @@ class OrderMapper {
               !suppressItemIds.contains(entry.itemId))
             entry,
       ];
+    }
+
+    // Prefer the waiter's exact layout when the visible set matches — avoids
+    // reorder flicker after delete/add sync.
+    if (_sameVisibleTicketShape(live.displayEntries, display)) {
+      display = stabilizeLiveLayoutWithServer(
+        live: live.displayEntries,
+        server: display,
+      );
     }
 
     display = _reindexDisplayEntries(display);
@@ -1510,6 +1544,71 @@ class OrderMapper {
           ? formatPrice('0')
           : (server.products.isNotEmpty ? server.total : live.total),
     );
+  }
+
+  static bool _sameVisibleTicketShape(
+    List<OrderDisplayEntry> a,
+    List<OrderDisplayEntry> b,
+  ) {
+    if (productEntryCount(a) != productEntryCount(b)) return false;
+    if (suivreSeparatorCount(a) != suivreSeparatorCount(b)) return false;
+    if (demandeSeparatorCount(a) != demandeSeparatorCount(b)) return false;
+    return true;
+  }
+
+  /// Keeps [live] row order/dividers; copies fresher item ids / products from
+  /// [server] when the same line can be matched.
+  static List<OrderDisplayEntry> stabilizeLiveLayoutWithServer({
+    required List<OrderDisplayEntry> live,
+    required List<OrderDisplayEntry> server,
+  }) {
+    final serverProducts = <OrderDisplayEntry>[
+      for (final entry in server)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
+    final remaining = List<OrderDisplayEntry>.from(serverProducts);
+    final result = <OrderDisplayEntry>[];
+    var lineIndex = 0;
+
+    OrderDisplayEntry? takeMatch(OrderDisplayEntry liveProduct) {
+      final id = liveProduct.itemId ?? 0;
+      if (id > 0) {
+        final byId = remaining.indexWhere((e) => (e.itemId ?? 0) == id);
+        if (byId >= 0) return remaining.removeAt(byId);
+      }
+      final key = _productFingerprint(liveProduct.product);
+      if (key != null) {
+        final byKey = remaining.indexWhere(
+          (e) => _productFingerprint(e.product) == key,
+        );
+        if (byKey >= 0) return remaining.removeAt(byKey);
+      }
+      if (remaining.isNotEmpty) return remaining.removeAt(0);
+      return null;
+    }
+
+    for (final entry in live) {
+      if (entry.isSectionDivider) {
+        result.add(entry);
+        continue;
+      }
+      if (entry.type != OrderDisplayEntryType.product) {
+        result.add(entry);
+        continue;
+      }
+      final match = takeMatch(entry);
+      if (match == null) continue;
+      result.add(
+        OrderDisplayEntry.product(
+          product: match.product ?? entry.product!,
+          lineIndex: lineIndex++,
+          sectionIndex: entry.sectionIndex ?? 0,
+          courseNumber: match.courseNumber ?? entry.courseNumber,
+          itemId: match.itemId ?? entry.itemId,
+        ),
+      );
+    }
+    return result;
   }
 
   static SessionOrder _stripSuppressedItems(
@@ -1778,6 +1877,12 @@ class OrderMapper {
       }
     }
 
+    // First course never shows À SUIVRE unless the waiter opened a suite.
+    // API follow-up courses must not invent a leading À SUIVRE after clear/re-add.
+    if (!applyKitchenDemande && effectiveSuivreCount == 0) {
+      entries = limitSuivreSeparatorCount(entries, 0);
+    }
+
     if (previousDisplayEntries != null && previousDisplayEntries.isNotEmpty) {
       if (applyKitchenDemande) {
         // Keep DEMANDÉE from kitchen send — do not reconcile back to À SUIVRE.
@@ -1798,6 +1903,9 @@ class OrderMapper {
           previous: previousDisplayEntries,
           next: entries,
         );
+        if (previousSuivreCount == 0) {
+          entries = limitSuivreSeparatorCount(entries, 0);
+        }
       }
     }
 
@@ -5319,7 +5427,8 @@ class OrderMapper {
       }
       result.add(entry);
     }
-    return result;
+    // Drop empty À SUIVRE left after removing the last item in a suite.
+    return _normalizeSuivreLayout(result, keepTrailingEmptySuivre: false);
   }
 
   static String _sumFormattedPrices(List<OrderProduct> products) {

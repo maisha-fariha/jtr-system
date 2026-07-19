@@ -670,29 +670,8 @@ class SessionController extends GetxController {
       if (incoming.products.isEmpty && incoming.displayEntries.isEmpty) {
         return incoming;
       }
-      // Forced replace is the new local truth — only restore À SUIVRE the
-      // mutation accidentally dropped. Never undo a kitchen DEMANDÉE.
-      final incomingSuivre =
-          OrderMapper.suivreSeparatorCount(incoming.displayEntries);
-      final previousSuivre =
-          OrderMapper.suivreSeparatorCount(previous.displayEntries);
-      final incomingDividers =
-          OrderMapper.sectionDividerCount(incoming.displayEntries);
-      final previousDividers =
-          OrderMapper.sectionDividerCount(previous.displayEntries);
-      final incomingDemande =
-          OrderMapper.demandeSeparatorCount(incoming.displayEntries);
-      if (previousSuivre > incomingSuivre &&
-          previousDividers > incomingDividers &&
-          incomingDemande == 0 &&
-          incoming.products.isNotEmpty) {
-        return incoming.copyWith(
-          displayEntries: OrderMapper.reconcileSuivreDisplay(
-            previous: previous.displayEntries,
-            next: incoming.displayEntries,
-          ),
-        );
-      }
+      // Forced replace is authoritative — suite/line deletes intentionally have
+      // fewer À SUIVRE / products. Never reconcile previous suites back in.
       return incoming;
     }
 

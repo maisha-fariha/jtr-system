@@ -728,4 +728,138 @@ void main() {
     expect(before, ['A', 'B', 'C']);
     expect(after, ['D']);
   });
+
+  test('finalize strips API À SUIVRE when waiter never opened a suite', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'table': {'table_number': 1},
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': <dynamic>[],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                {
+                  'id': 10,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 1, 'name': 'A'},
+                  'sub_total': 5,
+                },
+                {
+                  'id': 11,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 2, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: [
+        _product(0, 'A', itemId: 10),
+        _product(1, 'B', itemId: 11),
+      ],
+      suivreCountHint: 0,
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(entries), 0);
+    expect(entries.first.isSectionDivider, isFalse);
+    expect(
+      [
+        for (final e in entries)
+          if (e.type == OrderDisplayEntryType.product) e.product!.name,
+      ],
+      ['A', 'B'],
+    );
+  });
+
+  test('merge keeps thinner live ticket after delete (no resurrect)', () {
+    final live = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+    final server = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 2),
+        _product(2, 'C', itemId: 3),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(3, 'D', itemId: 4),
+      ],
+    );
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: server,
+      live: live,
+      suppressItemIds: {3, 4},
+    );
+
+    expect(OrderMapper.productEntryCount(merged.displayEntries), 2);
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 0);
+    expect(
+      [
+        for (final e in merged.displayEntries)
+          if (e.type == OrderDisplayEntryType.product) e.itemId,
+      ],
+      [1, 2],
+    );
+  });
+
+  test('stabilizeLiveLayoutWithServer keeps live order', () {
+    final live = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+    ];
+    final server = [
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(0, 'B', itemId: 2),
+      _product(1, 'A', itemId: 1),
+    ];
+
+    final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
+      live: live,
+      server: server,
+    );
+
+    expect(stabilized.first.isSectionDivider, isFalse);
+    expect(
+      [
+        for (final e in stabilized)
+          if (e.type == OrderDisplayEntryType.product) e.product!.name,
+      ],
+      ['A', 'B'],
+    );
+    expect(stabilized.last.type, OrderDisplayEntryType.suivreSeparator);
+  });
+
+  test('predict cancel strips empty À SUIVRE after last suite item', () {
+    final current = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    final predicted = OrderMapper.predictAfterCancelLineAtIndex(current, 1);
+
+    expect(OrderMapper.suivreSeparatorCount(predicted.displayEntries), 0);
+    expect(predicted.products.length, 1);
+    expect(predicted.products.first.name, 'A');
+  });
 }

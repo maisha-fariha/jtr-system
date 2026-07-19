@@ -437,6 +437,13 @@ class SessionController extends GetxController {
         OrderMapper.suivreSeparatorCount(incoming.displayEntries);
     final previousSuivre =
         OrderMapper.suivreSeparatorCount(previous.displayEntries);
+    final incomingDividers =
+        OrderMapper.sectionDividerCount(incoming.displayEntries);
+    final previousDividers =
+        OrderMapper.sectionDividerCount(previous.displayEntries);
+    // Pending À SUIVRE → DEMANDÉE is not a thinner ticket.
+    final lostPendingSuivre = incomingSuivre < previousSuivre &&
+        incomingDividers < previousDividers;
 
     // Lightweight / stale background rows must not demote a richer ticket.
     final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
@@ -444,10 +451,10 @@ class SessionController extends GetxController {
             previousLines > 0 &&
             incomingLines < previousLines) ||
         (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0) ||
-        (incomingSuivre < previousSuivre && previousLines > 0);
+        (lostPendingSuivre && previousLines > 0);
 
     if (incomingThinner) {
-      final keptDisplay = incomingSuivre < previousSuivre &&
+      final keptDisplay = lostPendingSuivre &&
               incoming.products.isNotEmpty &&
               incoming.products.length >= previous.products.length
           ? OrderMapper.reconcileSuivreDisplay(
@@ -664,12 +671,19 @@ class SessionController extends GetxController {
         return incoming;
       }
       // Forced replace is the new local truth — only restore À SUIVRE the
-      // mutation accidentally dropped.
+      // mutation accidentally dropped. Do not undo À SUIVRE → DEMANDÉE after
+      // send-all / kitchen request.
       final incomingSuivre =
           OrderMapper.suivreSeparatorCount(incoming.displayEntries);
       final previousSuivre =
           OrderMapper.suivreSeparatorCount(previous.displayEntries);
-      if (previousSuivre > incomingSuivre && incoming.products.isNotEmpty) {
+      final incomingDividers =
+          OrderMapper.sectionDividerCount(incoming.displayEntries);
+      final previousDividers =
+          OrderMapper.sectionDividerCount(previous.displayEntries);
+      if (previousSuivre > incomingSuivre &&
+          previousDividers > incomingDividers &&
+          incoming.products.isNotEmpty) {
         return incoming.copyWith(
           displayEntries: OrderMapper.reconcileSuivreDisplay(
             previous: previous.displayEntries,

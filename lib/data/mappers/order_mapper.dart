@@ -1210,6 +1210,17 @@ class OrderMapper {
         .length;
   }
 
+  static int demandeSeparatorCount(List<OrderDisplayEntry> entries) {
+    return entries
+        .where((entry) => entry.type == OrderDisplayEntryType.demandeSeparator)
+        .length;
+  }
+
+  /// À SUIVRE + DEMANDÉE rows (follow-up course slots on the ticket).
+  static int sectionDividerCount(List<OrderDisplayEntry> entries) {
+    return entries.where((entry) => entry.isSectionDivider).length;
+  }
+
   static List<int> _mergeSuivreSplitPositions({
     required List<int> extracted,
     List<int> hints = const [],
@@ -1312,8 +1323,13 @@ class OrderMapper {
     final serverCount = productEntryCount(server.displayEntries);
     final liveSuivre = suivreSeparatorCount(live.displayEntries);
     final serverSuivre = suivreSeparatorCount(server.displayEntries);
+    final liveDividers = sectionDividerCount(live.displayEntries);
+    final serverDividers = sectionDividerCount(server.displayEntries);
+    // Pending À SUIVRE converted to DEMANDÉE is not "live ahead".
+    final liveHasExtraPendingSuivre =
+        liveSuivre > serverSuivre && liveDividers > serverDividers;
     final liveAhead = liveCount > serverCount ||
-        liveSuivre > serverSuivre ||
+        liveHasExtraPendingSuivre ||
         hasOptimisticProductEntries(live.displayEntries);
 
     List<OrderDisplayEntry> display;
@@ -1330,7 +1346,8 @@ class OrderMapper {
         );
         // If server is still missing optimistic lines, fall back to live.
         if (productEntryCount(display) < liveCount ||
-            suivreSeparatorCount(display) < liveSuivre) {
+            (suivreSeparatorCount(display) < liveSuivre &&
+                sectionDividerCount(display) < liveDividers)) {
           display = live.displayEntries;
         }
       }
@@ -1350,7 +1367,8 @@ class OrderMapper {
         previous: live.displayEntries,
         next: display,
       );
-      if (liveSuivre > suivreSeparatorCount(display)) {
+      if (liveSuivre > suivreSeparatorCount(display) &&
+          liveDividers > sectionDividerCount(display)) {
         display = ensureSuivreSeparatorCount(
           display,
           liveSuivre,
@@ -1426,6 +1444,9 @@ class OrderMapper {
   }
 
   /// Keeps À SUIVRE rows when a refresh returns fewer separators than before.
+  ///
+  /// À SUIVRE → DEMANDÉE after kitchen send must not be treated as a lost suite
+  /// (rebuild would wipe DEMANDÉE back to À SUIVRE).
   static List<OrderDisplayEntry> reconcileSuivreDisplay({
     required List<OrderDisplayEntry> previous,
     required List<OrderDisplayEntry> next,
@@ -1434,11 +1455,19 @@ class OrderMapper {
     final nextSplits = suivreSplitPositions(next);
     final previousCount = suivreSeparatorCount(previous);
     final nextCount = suivreSeparatorCount(next);
+    final previousDividers = sectionDividerCount(previous);
+    final nextDividers = sectionDividerCount(next);
+
+    // Same (or more) follow-up slots already present — e.g. send-all converted
+    // pending À SUIVRE into DEMANDÉE. Keep [next] as authoritative.
+    if (nextDividers >= previousDividers && nextCount < previousCount) {
+      return next;
+    }
 
     var result = next;
 
     if (previousSplits.isNotEmpty &&
-        (nextSplits.length < previousSplits.length || nextCount < previousCount)) {
+        nextSplits.length < previousSplits.length) {
       final mergedSplits = _mergeSuivreSplitPositions(
         extracted: nextSplits,
         hints: previousSplits,
@@ -1446,7 +1475,8 @@ class OrderMapper {
       result = _rebuildEntriesWithSuivreSplits(next, mergedSplits);
     }
 
-    if (previousCount > suivreSeparatorCount(result)) {
+    if (previousCount > suivreSeparatorCount(result) &&
+        sectionDividerCount(result) < previousDividers) {
       result = ensureSuivreSeparatorCount(
         result,
         previousCount,
@@ -1482,7 +1512,7 @@ class OrderMapper {
   }) {
     var entries = extractOrderDisplayEntries(data);
     entries = applyDemandeSeparatorsFromApi(data, entries);
-    final apiSuivreCount = suivreSeparatorCount(entries);
+    final apiFollowUpSlots = sectionDividerCount(entries);
     final previousSuivreCount = previousDisplayEntries == null
         ? 0
         : suivreSeparatorCount(previousDisplayEntries);
@@ -1491,8 +1521,9 @@ class OrderMapper {
         : previousSuivreCount;
 
     // Only overlay local À SUIVRE rows that are not yet reflected by API courses.
-    if (effectiveSuivreCount > apiSuivreCount) {
-      var pending = effectiveSuivreCount - apiSuivreCount;
+    // DEMANDÉE already occupies a follow-up slot — do not append À SUIVRE again.
+    if (effectiveSuivreCount > apiFollowUpSlots) {
+      var pending = effectiveSuivreCount - apiFollowUpSlots;
       while (pending > 0) {
         final force = entries.isNotEmpty && _isSectionDivider(entries.last);
         entries = appendSuivreSeparatorAfterRequest(entries, force: force);
@@ -1515,7 +1546,7 @@ class OrderMapper {
 
     return _normalizeSuivreLayout(
       entries,
-      keepTrailingEmptySuivre: effectiveSuivreCount > apiSuivreCount,
+      keepTrailingEmptySuivre: effectiveSuivreCount > apiFollowUpSlots,
     );
   }
 

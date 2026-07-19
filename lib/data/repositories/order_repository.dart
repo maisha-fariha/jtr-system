@@ -3235,7 +3235,12 @@ class OrderRepository {
       print(lastKitchenSendLog);
       debugPrint(lastKitchenSendLog!);
 
-      return OrderMapper.fromOrderDetail(updated);
+      // Map DEMANDÉE from API; persist layout so Hive suivre hints cannot
+      // resurrect À SUIVRE after send-all.
+      final order = OrderMapper.fromOrderDetail(updated);
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+      await _sessionLocal.upsertOpenOrderInList(updated);
+      return order;
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

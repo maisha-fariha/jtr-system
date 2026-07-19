@@ -154,4 +154,66 @@ void main() {
     expect(merged.displayEntries, isEmpty);
     expect(merged.total, '0,00 €');
   });
+
+  test('reconcile does not restore À SUIVRE over DEMANDÉE after send-all', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(2, 'C', itemId: 3),
+      _product(3, 'D', itemId: 4),
+    ];
+    final afterSend = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '11:58:00',
+      ),
+      _product(2, 'C', itemId: 3),
+      _product(3, 'D', itemId: 4),
+    ];
+
+    final reconciled = OrderMapper.reconcileSuivreDisplay(
+      previous: previous,
+      next: afterSend,
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(reconciled), 1);
+    expect(OrderMapper.suivreSeparatorCount(reconciled), 0);
+    expect(
+      reconciled.any((e) => e.type == OrderDisplayEntryType.demandeSeparator),
+      isTrue,
+    );
+  });
+
+  test('merge prefers DEMANDÉE from server over live À SUIVRE', () {
+    final live = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+    final server = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.demande(
+          sectionIndex: 1,
+          courseNumber: 1,
+          demandeTimeLabel: '12:00:00',
+        ),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: server,
+      live: live,
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(merged.displayEntries), 1);
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 0);
+  });
 }

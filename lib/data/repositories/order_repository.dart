@@ -279,6 +279,11 @@ class OrderRepository {
     if (orderId > 0) _pendingLocalDeleteOrderIds.add(orderId);
   }
 
+  /// Clear the in-flight delete flag without dropping suppressed item ids.
+  void clearPendingLocalDeleteFlag(int orderId) {
+    if (orderId > 0) _pendingLocalDeleteOrderIds.remove(orderId);
+  }
+
   /// Drop suppress for one item (undo) or all items on an order.
   void clearSuppressedOrderItemIds(int orderId, {int? itemId}) {
     if (orderId <= 0) return;
@@ -1508,7 +1513,41 @@ class OrderRepository {
       }
 
       apiLog.writeln('── GET /api/orders/$orderId ──');
-      var detail = await _remote.fetchOrderDetail(orderId);
+      Map<String, dynamic> detail;
+      try {
+        detail = await _remote.fetchOrderDetail(orderId);
+      } on ApiException catch (e) {
+        if (_isOrderNotFoundError(e)) {
+          apiLog.writeln(
+            '── Order $orderId missing on add — recreate with product ──',
+          );
+          final cached = cachedOrderDetail(orderId) ??
+              <String, dynamic>{
+                'id': orderId,
+                'status': 'cancelled',
+                'seat_orders': [
+                  {
+                    'seat_number': 1,
+                    'courses': [
+                      {'id': 0, 'course_number': 1, 'items': <dynamic>[]},
+                    ],
+                  },
+                ],
+              };
+          return _recreateOrderWithSimpleProduct(
+            oldOrderId: orderId,
+            detail: cached,
+            productId: productId,
+            unitPrice: unitPrice,
+            qty: qty,
+            comment: comment,
+            tableNumber: tableNumber,
+            waiterId: waiterId,
+            apiLog: apiLog,
+          );
+        }
+        rethrow;
+      }
 
       // Prefer the seed we planted on empty create; else detect lone free seed line.
       final plantedSeedId = lastEmptyOrderSeedProductId;
@@ -2131,9 +2170,8 @@ class OrderRepository {
       );
     }
 
-    // Close best-effort, but keep going even if close is rejected.
-    await _retireDeadOrderShell(oldOrderId, apiLog: apiLog);
-
+    // Do NOT retire the old shell before create — that leaves the table with
+    // no usable order id (ORDER ID not found). Retire only after success.
     try {
       final created = await createOrderWithFirstSimpleProduct(
         tableNumber: resolvedTable,
@@ -2145,6 +2183,9 @@ class OrderRepository {
         numberOfGuests: guests,
       );
       apiLog.writeln('── New order id=${created.id} ──');
+      if (created.id > 0 && created.id != oldOrderId) {
+        unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+      }
       lastAddItemLog = apiLog.toString();
       return created;
     } on ApiException catch (createError) {
@@ -2167,6 +2208,9 @@ class OrderRepository {
           comment: comment,
           apiLog: apiLog,
         );
+        if (activeId != oldOrderId) {
+          unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+        }
         lastAddItemLog = apiLog.toString();
         return revived;
       }
@@ -2490,8 +2534,8 @@ class OrderRepository {
       );
     }
 
-    await _retireDeadOrderShell(oldOrderId, apiLog: apiLog);
-
+    // Do NOT retire before create — keep a usable table order until replacement
+    // succeeds (same race as simple-product recreate).
     try {
       final created = await createOrderWithFirstComposedProduct(
         tableNumber: resolvedTable,
@@ -2503,6 +2547,9 @@ class OrderRepository {
         numberOfGuests: guests,
       );
       apiLog.writeln('── New order id=${created.id} ──');
+      if (created.id > 0 && created.id != oldOrderId) {
+        unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+      }
       lastAddItemLog = apiLog.toString();
       return created;
     } on ApiException catch (createError) {
@@ -2523,6 +2570,9 @@ class OrderRepository {
           comment: comment,
           apiLog: apiLog,
         );
+        if (activeId != oldOrderId) {
+          unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+        }
         lastAddItemLog = apiLog.toString();
         return revived;
       }
@@ -2743,6 +2793,11 @@ class OrderRepository {
         orderDetail: localMutated,
         lineIndices: lineIndices.toSet(),
       );
+      if (OrderMapper.orderDetailHasNoVisibleItems(localMutated)) {
+        payload['status'] = 'open';
+        payload['payment_status'] = 'not_paid';
+        payload['payment_status_detailed'] = 'not_paid';
+      }
 
       final updated = await _putOrderUpdate(
         orderId: orderId,
@@ -2769,11 +2824,262 @@ class OrderRepository {
     }
   }
 
+  /// One PUT that empties the ticket while keeping the order **open**.
+  ///
+  /// Critical: do **not** cancel every line — on this API that auto-cancels the
+  /// whole order and later calls fail with "ORDER ID not found". Strip items
+  /// (same path as empty-seed clear), reopen if needed, recreate only as last
+  /// resort and return the live order id.
+  Future<SessionOrder> cancelAllVisibleLines({
+    required int orderId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    String? tableNumber,
+  }) async {
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      throw ApiException(
+        message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Vider ticket (strip keep-open, not cancel-all) ──');
+    apiLog.writeln('order_id=$orderId');
+
+    Map<String, dynamic>? detail;
+    try {
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      detail = await _remote.fetchOrderDetail(orderId);
+    } on ApiException catch (e) {
+      apiLog.writeln('GET failed: ${e.message}');
+      final message = e.message.toLowerCase();
+      if (e.statusCode == 404 ||
+          message.contains('not found') ||
+          message.contains('introuvable')) {
+        final kept = await _recreateEmptyOpenOrderForTable(
+          oldOrderId: orderId,
+          detail: cachedOrderDetail(orderId),
+          tableNumberHint: tableNumber,
+          apiLog: apiLog,
+        );
+        lastAddItemLog = apiLog.toString();
+        _rememberEmptyShellDisplay(kept.id);
+        clearPendingLocalDeleteFlag(kept.id);
+        clearPendingLocalDeleteFlag(orderId);
+        clearSuppressedOrderItemIds(orderId);
+        await _persistSuivreLayoutHints(kept.id, const []);
+        return kept;
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+
+    // Strip lines (items:[]) + force open — does not cancel the order.
+    final sourceDetail = detail as Map<String, dynamic>;
+    Map<String, dynamic> working;
+    try {
+      working = await _clearVisibleItemsKeepOpen(orderId, sourceDetail, apiLog);
+    } on ApiException catch (e) {
+      final message = e.message.toLowerCase();
+      if (e.statusCode == 404 ||
+          message.contains('not found') ||
+          message.contains('introuvable')) {
+        apiLog.writeln('── Strip hit missing order — recreate ──');
+        final kept = await _recreateEmptyOpenOrderForTable(
+          oldOrderId: orderId,
+          detail: sourceDetail,
+          tableNumberHint: tableNumber,
+          apiLog: apiLog,
+        );
+        lastAddItemLog = apiLog.toString();
+        _rememberEmptyShellDisplay(kept.id);
+        clearPendingLocalDeleteFlag(kept.id);
+        if (kept.id != orderId) {
+          clearPendingLocalDeleteFlag(orderId);
+          clearSuppressedOrderItemIds(orderId);
+          _forgetEmptyShellDisplay(orderId);
+        }
+        await _persistSuivreLayoutHints(kept.id, const []);
+        return kept;
+      }
+      lastAddItemLog = apiLog.toString();
+      rethrow;
+    }
+
+    if (OrderMapper.isOrderClosedOrCancelled(working) ||
+        OrderMapper.isOrderFullyPaid(working) ||
+        !OrderMapper.isActiveDayOpenOrder(working)) {
+      apiLog.writeln(
+        '── Still cancelled/closed after strip — reopen / recreate ──',
+      );
+      final kept = await _reopenOrRecreateEmptyOrder(
+        orderId: orderId,
+        detail: working,
+        apiLog: apiLog,
+        tableNumberHint: tableNumber,
+      );
+      lastAddItemLog = apiLog.toString();
+      _rememberEmptyShellDisplay(kept.id);
+      clearPendingLocalDeleteFlag(kept.id);
+      if (kept.id != orderId) {
+        clearPendingLocalDeleteFlag(orderId);
+        clearSuppressedOrderItemIds(orderId);
+        _forgetEmptyShellDisplay(orderId);
+      }
+      await _persistSuivreLayoutHints(kept.id, const []);
+      return kept;
+    }
+
+    final shell = OrderMapper.asOpenEmptyOrderShell(working);
+    shell['status'] = 'open';
+    shell['payment_status'] = 'not_paid';
+    shell['payment_status_detailed'] = 'not_paid';
+    await _local.saveOrderDetail(orderId, shell);
+    await _sessionLocal.upsertOpenOrderInList(shell);
+    _rememberEmptyShellDisplay(orderId);
+    clearPendingLocalDeleteFlag(orderId);
+    await _persistSuivreLayoutHints(orderId, const []);
+    lastAddItemLog = apiLog.toString();
+
+    return OrderMapper.fromOrderDetail(shell).copyWith(
+      id: orderId,
+      products: const [],
+      displayEntries: const [],
+      itemCount: 0,
+      total: OrderMapper.formatPrice('0'),
+    );
+  }
+
+  /// Reopen the emptied shell; if the API still considers it cancelled/closed,
+  /// create a new empty open order for the same table.
+  Future<SessionOrder> _reopenOrRecreateEmptyOrder({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required StringBuffer apiLog,
+    String? tableNumberHint,
+  }) async {
+    // 1) Reopen same id (preferred — keeps order id stable).
+    try {
+      var shell = OrderMapper.asOpenEmptyOrderShell(detail);
+      final reopenPayload = OrderMapper.buildOrderUpdatePayload(
+        shell,
+        keepOpenWhenEmpty: true,
+      );
+      reopenPayload['status'] = 'open';
+      reopenPayload['payment_status'] = 'not_paid';
+      reopenPayload['payment_status_detailed'] = 'not_paid';
+      apiLog.writeln('── PUT reopen empty order $orderId ──');
+      var updated = await _remote.updateOrder(orderId, reopenPayload);
+      try {
+        updated = await _remote.fetchOrderDetail(orderId);
+      } catch (_) {}
+      if (!OrderMapper.isOrderClosedOrCancelled(updated) &&
+          !OrderMapper.isOrderFullyPaid(updated) &&
+          OrderMapper.isActiveDayOpenOrder(updated)) {
+        shell = OrderMapper.asOpenEmptyOrderShell(updated);
+        shell['status'] = 'open';
+        await _local.saveOrderDetail(orderId, shell);
+        await _sessionLocal.upsertOpenOrderInList(shell);
+        return OrderMapper.fromOrderDetail(shell).copyWith(
+          id: orderId,
+          products: const [],
+          displayEntries: const [],
+          itemCount: 0,
+          total: OrderMapper.formatPrice('0'),
+        );
+      }
+      apiLog.writeln(
+        '── Reopen left status=${updated['status']} — will recreate ──',
+      );
+    } catch (e) {
+      apiLog.writeln('── Reopen failed: $e ──');
+    }
+
+    // 2) Recreate / adopt a live open order for this table.
+    return _recreateEmptyOpenOrderForTable(
+      oldOrderId: orderId,
+      detail: detail,
+      tableNumberHint: tableNumberHint,
+      apiLog: apiLog,
+    );
+  }
+
+  Future<SessionOrder> _recreateEmptyOpenOrderForTable({
+    required int oldOrderId,
+    required Map<String, dynamic>? detail,
+    required StringBuffer apiLog,
+    String? tableNumberHint,
+  }) async {
+    final source = detail ?? cachedOrderDetail(oldOrderId);
+    if (source != null) {
+      final replacement = await _ensureRemoteEmptyOpenOrder(
+        oldOrderId: oldOrderId,
+        detail: source,
+        tableNumberHint: tableNumberHint,
+      );
+      if (replacement != null) return replacement;
+    }
+
+    // Resolve table from hint when cache is gone (404 after cancel).
+    final tableKey = tableNumberHint ??
+        (source == null
+            ? null
+            : OrderMapper.displayKey(
+                orderId: oldOrderId,
+                tableNumber: OrderMapper.tableNumberFromDetail(source),
+              ));
+    if (tableKey != null && tableKey.isNotEmpty) {
+      final activeId = await resolveOrderIdForTableNumber(tableKey);
+      if (activeId != null && activeId > 0) {
+        final adopted = await _adoptActiveOrderAsEmptyShell(
+          orderId: activeId,
+          apiLog: apiLog,
+        );
+        if (adopted != null) return adopted;
+      }
+    }
+
+    // Local placeholder — next add will revive/recreate via empty-shell path.
+    final local = OrderMapper.asOpenEmptyOrderShell(
+      source ??
+          <String, dynamic>{
+            'id': oldOrderId,
+            'status': 'open',
+            'payment_status': 'not_paid',
+            'seat_orders': [
+              {
+                'seat_number': 1,
+                'courses': [
+                  {
+                    'id': 0,
+                    'course_number': 1,
+                    'items': <dynamic>[],
+                  },
+                ],
+              },
+            ],
+          },
+    );
+    local['status'] = 'open';
+    await _local.saveOrderDetail(oldOrderId, local);
+    await _sessionLocal.upsertOpenOrderInList(local);
+    return OrderMapper.fromOrderDetail(local).copyWith(
+      id: oldOrderId,
+      products: const [],
+      displayEntries: const [],
+      itemCount: 0,
+      total: OrderMapper.formatPrice('0'),
+    );
+  }
+
   Future<SessionOrder> cancelOrderLineAtIndex({
     required int orderId,
     required int lineIndex,
     int? itemId,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    String? tableNumber,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -2821,12 +3127,27 @@ class OrderRepository {
         );
       }
 
+      // Last visible line: strip keep-open (never cancel-all lines — that
+      // auto-cancels the order on this API → ORDER ID not found).
+      if (OrderMapper.orderDetailHasNoVisibleItems(localMutated)) {
+        apiLog.writeln(
+          '── Last line → strip keep-open / recreate (not cancel) ──',
+        );
+        lastAddItemLog = apiLog.toString();
+        return cancelAllVisibleLines(
+          orderId: orderId,
+          previousDisplayEntries: const [],
+          tableNumber: tableNumber ??
+              OrderMapper.displayKey(
+                orderId: orderId,
+                tableNumber: OrderMapper.tableNumberFromDetail(detail),
+              ),
+        );
+      }
+
       if (!cancelled) {
         // Already gone on server — do not PUT / error; return mapped empty/current.
         lastAddItemLog = apiLog.toString();
-        if (OrderMapper.orderDetailHasNoVisibleItems(localMutated)) {
-          _rememberEmptyShellDisplay(orderId);
-        }
         return _persistOrderAfterItemMutation(
           orderId: orderId,
           detail: localMutated,
@@ -2849,14 +3170,8 @@ class OrderRepository {
         orderId: orderId,
         detail: updated,
         previousDisplayEntries: previousDisplayEntries,
-        keepLinesIfApiEmpty:
-            OrderMapper.orderDetailHasNoVisibleItems(localMutated)
-                ? null
-                : localMutated,
+        keepLinesIfApiEmpty: localMutated,
       );
-      if (persisted.products.isEmpty) {
-        _rememberEmptyShellDisplay(orderId);
-      }
       return persisted;
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
@@ -2864,6 +3179,18 @@ class OrderRepository {
         apiLog.writeln(_remote.lastApiLog);
       }
       lastAddItemLog = apiLog.toString();
+      if (_isOrderNotFoundError(e)) {
+        final kept = await _recreateEmptyOpenOrderForTable(
+          oldOrderId: orderId,
+          detail: cachedOrderDetail(orderId),
+          tableNumberHint: tableNumber,
+          apiLog: apiLog,
+        );
+        lastAddItemLog = apiLog.toString();
+        _rememberEmptyShellDisplay(kept.id);
+        clearPendingLocalDeleteFlag(kept.id);
+        return kept;
+      }
       rethrow;
     }
   }
@@ -3068,51 +3395,27 @@ class OrderRepository {
         !OrderMapper.orderDetailHasNoVisibleItems(keepLinesIfApiEmpty)) {
       working = keepLinesIfApiEmpty;
     } else if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
-      // Backend often marks emptied orders closed/fully_paid — that removes
-      // them from the remote list. Replace with a real empty open order.
+      // Backend often marks emptied orders cancelled/closed. Reopen same id,
+      // or recreate / adopt the table's active order so re-add keeps working.
       if (OrderMapper.shouldRecreateOrderForAdd(working) ||
-          !OrderMapper.isActiveDayOpenOrder(working)) {
-        final replacement = await _ensureRemoteEmptyOpenOrder(
-          oldOrderId: orderId,
+          !OrderMapper.isActiveDayOpenOrder(working) ||
+          OrderMapper.isOrderClosedOrCancelled(working) ||
+          OrderMapper.isOrderFullyPaid(working)) {
+        final apiLog = StringBuffer('── Persist empty shell reopen/recreate ──\n');
+        final kept = await _reopenOrRecreateEmptyOrder(
+          orderId: orderId,
           detail: working,
+          apiLog: apiLog,
+          tableNumberHint: OrderMapper.displayKey(
+            orderId: orderId,
+            tableNumber: OrderMapper.tableNumberFromDetail(working),
+          ),
         );
-        if (replacement != null) {
-          return replacement;
-        }
+        lastAddItemLog = '${lastAddItemLog ?? ''}\n$apiLog';
+        return kept;
       }
 
       working = OrderMapper.asOpenEmptyOrderShell(working);
-
-      // If the API still auto-closed despite keep-open status, try one reopen PUT.
-      if (OrderMapper.isOrderClosedOrCancelled(detail) ||
-          OrderMapper.isOrderClosedOrCancelled(working) ||
-          OrderMapper.isOrderFullyPaid(working)) {
-        try {
-          final reopenPayload = OrderMapper.buildOrderUpdatePayload(
-            working,
-            keepOpenWhenEmpty: true,
-          );
-          working = await _remote.updateOrder(orderId, reopenPayload);
-          working = OrderMapper.asOpenEmptyOrderShell(working);
-
-          // Reopen failed to keep it listable — create a new empty remote order.
-          if (OrderMapper.shouldRecreateOrderForAdd(working) ||
-              !OrderMapper.isActiveDayOpenOrder(working)) {
-            final replacement = await _ensureRemoteEmptyOpenOrder(
-              oldOrderId: orderId,
-              detail: working,
-            );
-            if (replacement != null) return replacement;
-          }
-        } catch (_) {
-          final replacement = await _ensureRemoteEmptyOpenOrder(
-            oldOrderId: orderId,
-            detail: working,
-          );
-          if (replacement != null) return replacement;
-          working = OrderMapper.asOpenEmptyOrderShell(working);
-        }
-      }
     }
 
     await _local.saveOrderDetail(orderId, working);
@@ -3152,9 +3455,13 @@ class OrderRepository {
 
   /// After the backend auto-closes/pays an emptied order, open a fresh empty
   /// remote order so it stays in GET /api/orders / the session list.
+  ///
+  /// Never retire [oldOrderId] until a usable replacement exists — closing
+  /// first leaves the table with no order id and causes "ORDER ID not found".
   Future<SessionOrder?> _ensureRemoteEmptyOpenOrder({
     required int oldOrderId,
     required Map<String, dynamic> detail,
+    String? tableNumberHint,
   }) async {
     final apiLog = StringBuffer();
     apiLog.writeln(
@@ -3162,7 +3469,10 @@ class OrderRepository {
     );
 
     final tableId = (detail['table_id'] as num?)?.toInt();
-    final tableNumber = OrderMapper.tableNumberFromDetail(detail);
+    final tableNumber = OrderMapper.tableNumberFromDetail(detail) ??
+        int.tryParse(
+          (tableNumberHint ?? '').replaceFirst(RegExp(r'^T'), '').trim(),
+        );
     final waiterId = OrderMapper.waiterIdFromOrderMap(detail);
     final guests = (detail['number_of_guests'] as num?)?.toInt() ?? 1;
     final salesZoneId = (detail['sales_zone_id'] as num?)?.toInt() ??
@@ -3171,18 +3481,51 @@ class OrderRepository {
                 ?.toInt()
             : null);
 
-    if (tableId == null ||
-        tableId <= 0 ||
-        waiterId == null ||
-        waiterId <= 0 ||
-        tableNumber == null ||
-        tableNumber <= 0) {
-      apiLog.writeln('── Missing table/waiter — cannot recreate empty order ──');
+    if (tableNumber == null || tableNumber <= 0) {
+      apiLog.writeln('── Missing table number — cannot recreate empty order ──');
       lastAddItemLog = apiLog.toString();
       return null;
     }
 
-    await _retireDeadOrderShell(oldOrderId, apiLog: apiLog);
+    // 1) Prefer adopting whatever the table already considers active.
+    final existingActive =
+        await resolveOrderIdForTableNumber('$tableNumber');
+    if (existingActive != null &&
+        existingActive > 0 &&
+        existingActive != oldOrderId) {
+      apiLog.writeln(
+        '── Table already has active order $existingActive — adopt ──',
+      );
+      final adopted = await _adoptActiveOrderAsEmptyShell(
+        orderId: existingActive,
+        apiLog: apiLog,
+      );
+      if (adopted != null) {
+        unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+        lastAddItemLog = apiLog.toString();
+        return adopted;
+      }
+    }
+
+    if (tableId == null ||
+        tableId <= 0 ||
+        waiterId == null ||
+        waiterId <= 0) {
+      // Still try adopt the same id (reopen) if create metadata is missing.
+      if (existingActive != null && existingActive > 0) {
+        final adopted = await _adoptActiveOrderAsEmptyShell(
+          orderId: existingActive,
+          apiLog: apiLog,
+        );
+        if (adopted != null) {
+          lastAddItemLog = apiLog.toString();
+          return adopted;
+        }
+      }
+      apiLog.writeln('── Missing table/waiter — cannot recreate empty order ──');
+      lastAddItemLog = apiLog.toString();
+      return null;
+    }
 
     final table = ResolvedTable(
       id: tableId,
@@ -3197,17 +3540,58 @@ class OrderRepository {
       apiLog: apiLog,
     );
 
-    final createdPayload = await _postCreateEmptyOrderRecord(
-      table: table,
-      waiterId: waiterId,
-      numberOfGuests: guests < 1 ? 1 : guests,
-      salesZoneId: salesZoneId,
-      apiLog: apiLog,
-    );
+    // 2) Create a new empty open order WITHOUT retiring the old shell first.
+    Map<String, dynamic>? createdPayload;
+    try {
+      createdPayload = await _postCreateEmptyOrderRecord(
+        table: table,
+        waiterId: waiterId,
+        numberOfGuests: guests < 1 ? 1 : guests,
+        salesZoneId: salesZoneId,
+        apiLog: apiLog,
+      );
+    } on ApiException catch (e) {
+      if (_isTableHasActiveOrderError(e)) {
+        apiLog.writeln(
+          '── Create empty hit active order — adopt + reopen ──',
+        );
+        final activeId = await resolveOrderIdForTableNumber('$tableNumber');
+        if (activeId != null && activeId > 0) {
+          final adopted = await _adoptActiveOrderAsEmptyShell(
+            orderId: activeId,
+            apiLog: apiLog,
+          );
+          if (adopted != null) {
+            if (adopted.id != oldOrderId) {
+              unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+            }
+            lastAddItemLog = apiLog.toString();
+            return adopted;
+          }
+        }
+      }
+      lastAddItemLog = apiLog.toString();
+      return null;
+    }
+
     final newId = createdPayload == null
         ? null
         : OrderMapper.extractOrderIdFromPayload(createdPayload);
     if (newId == null || newId <= 0) {
+      final activeId = await resolveOrderIdForTableNumber('$tableNumber');
+      if (activeId != null && activeId > 0) {
+        final adopted = await _adoptActiveOrderAsEmptyShell(
+          orderId: activeId,
+          apiLog: apiLog,
+        );
+        if (adopted != null) {
+          if (adopted.id != oldOrderId) {
+            unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+          }
+          lastAddItemLog = apiLog.toString();
+          return adopted;
+        }
+      }
       lastAddItemLog = apiLog.toString();
       return null;
     }
@@ -3221,8 +3605,16 @@ class OrderRepository {
     }
 
     final shell = OrderMapper.asOpenEmptyOrderShell(fresh);
+    shell['status'] = 'open';
+    shell['payment_status'] = 'not_paid';
+    shell['payment_status_detailed'] = 'not_paid';
     await _local.saveOrderDetail(newId, shell);
     await _sessionLocal.upsertOpenOrderInList(shell);
+
+    // 3) Only now drop the dead shell — replacement is already usable.
+    if (newId != oldOrderId) {
+      unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
+    }
 
     final order = OrderMapper.fromOrderDetail(shell).copyWith(
       id: newId,
@@ -3233,6 +3625,46 @@ class OrderRepository {
     apiLog.writeln('── Empty remote order ready id=$newId ──');
     lastAddItemLog = apiLog.toString();
     return order;
+  }
+
+  /// Reopen [orderId] as an empty open shell (no recreate — avoids loops).
+  Future<SessionOrder?> _adoptActiveOrderAsEmptyShell({
+    required int orderId,
+    required StringBuffer apiLog,
+  }) async {
+    try {
+      var detail = await _remote.fetchOrderDetail(orderId);
+      var shell = OrderMapper.asOpenEmptyOrderShell(detail);
+      final reopenPayload = OrderMapper.buildOrderUpdatePayload(
+        shell,
+        keepOpenWhenEmpty: true,
+      );
+      reopenPayload['status'] = 'open';
+      reopenPayload['payment_status'] = 'not_paid';
+      reopenPayload['payment_status_detailed'] = 'not_paid';
+      apiLog.writeln('── PUT adopt/reopen active order $orderId ──');
+      var updated = await _remote.updateOrder(orderId, reopenPayload);
+      try {
+        updated = await _remote.fetchOrderDetail(orderId);
+      } catch (_) {}
+      shell = OrderMapper.asOpenEmptyOrderShell(updated);
+      // Force open locally even if API lags.
+      shell['status'] = 'open';
+      shell['payment_status'] = 'not_paid';
+      shell['payment_status_detailed'] = 'not_paid';
+      await _local.saveOrderDetail(orderId, shell);
+      await _sessionLocal.upsertOpenOrderInList(shell);
+      return OrderMapper.fromOrderDetail(shell).copyWith(
+        id: orderId,
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+    } catch (e) {
+      apiLog.writeln('── Adopt active order failed: $e ──');
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>> _clearVisibleItemsKeepOpen(
@@ -3261,12 +3693,24 @@ class OrderRepository {
         if (!OrderMapper.orderDetailHasNoVisibleItems(working)) {
           try {
             working = await _remote.fetchOrderDetail(orderId);
+          } on ApiException catch (e) {
+            if (_isOrderNotFoundError(e)) rethrow;
           } catch (_) {}
         }
+      } on ApiException catch (e) {
+        apiLog.writeln('── strip attempt $attempt failed: $e ──');
+        if (_isOrderNotFoundError(e)) rethrow;
+        try {
+          working = await _remote.fetchOrderDetail(orderId);
+        } on ApiException catch (fetchError) {
+          if (_isOrderNotFoundError(fetchError)) rethrow;
+        } catch (_) {}
       } catch (e) {
         apiLog.writeln('── strip attempt $attempt failed: $e ──');
         try {
           working = await _remote.fetchOrderDetail(orderId);
+        } on ApiException catch (fetchError) {
+          if (_isOrderNotFoundError(fetchError)) rethrow;
         } catch (_) {}
       }
 
@@ -3279,14 +3723,21 @@ class OrderRepository {
               OrderMapper.asOpenEmptyOrderShell(working),
               keepOpenWhenEmpty: true,
             );
+            reopen['status'] = 'open';
+            reopen['payment_status'] = 'not_paid';
+            reopen['payment_status_detailed'] = 'not_paid';
             working = await _remote.updateOrder(orderId, reopen);
             if (!OrderMapper.orderDetailHasNoVisibleItems(working) ||
                 OrderMapper.isOrderClosedOrCancelled(working) ||
                 OrderMapper.isOrderFullyPaid(working)) {
               try {
                 working = await _remote.fetchOrderDetail(orderId);
+              } on ApiException catch (e) {
+                if (_isOrderNotFoundError(e)) rethrow;
               } catch (_) {}
             }
+          } on ApiException catch (e) {
+            if (_isOrderNotFoundError(e)) rethrow;
           } catch (_) {}
         }
         return OrderMapper.asOpenEmptyOrderShell(working);
@@ -3300,6 +3751,14 @@ class OrderRepository {
       );
     }
     return OrderMapper.asOpenEmptyOrderShell(working);
+  }
+
+  bool _isOrderNotFoundError(ApiException error) {
+    final message = error.message.toLowerCase();
+    return error.statusCode == 404 ||
+        message.contains('not found') ||
+        message.contains('introuvable') ||
+        message.contains('order id');
   }
 
   /// After qty/offer-style mutations: refresh from API but never empty-shell /

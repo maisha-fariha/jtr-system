@@ -121,7 +121,17 @@ class TableDetailsController extends GetxController {
   /// Local ticket wins while deletes/adds race. Suppressed item ids are always
   /// stripped from whatever the API returns before it touches the UI.
   void _applySyncedOrder(SessionOrder updated) {
-    if (updated.id > 0) orderId = updated.id;
+    // Always adopt a real server id from sync — delete-all may recreate the
+    // order and a stale live.id must not win (causes ORDER ID not found).
+    if (updated.id > 0) {
+      final previousId = orderId ?? _rawSessionOrder?.id ?? 0;
+      orderId = updated.id;
+      if (previousId > 0 && previousId != updated.id) {
+        _orderRepository.clearSuppressedOrderItemIds(previousId);
+        _orderRepository.clearPendingLocalDeleteFlag(previousId);
+        _orderRepository.clearEmptyShellDisplay(previousId);
+      }
+    }
 
     final live = _rawSessionOrder;
     final suppress = _suppressDeletedItemIds;
@@ -136,6 +146,7 @@ class TableDetailsController extends GetxController {
 
     // No-op when the visible ticket already matches — avoid GetX rebuild storms.
     if (live != null &&
+        live.id == updated.id &&
         liveCount == updatedCount &&
         suppress.isEmpty &&
         !pendingDelete &&
@@ -155,7 +166,8 @@ class TableDetailsController extends GetxController {
     if (liveCount == 0 &&
         (suppress.isNotEmpty || pendingDelete || emptyShell) &&
         updatedCount > 0) {
-      final empty = (live ?? updated).copyWith(
+      // Keep the sync id (may be recreated) even while locking empty UI.
+      final empty = updated.copyWith(
         products: const [],
         displayEntries: const [],
         itemCount: 0,
@@ -172,7 +184,8 @@ class TableDetailsController extends GetxController {
       return;
     }
     if (liveCount == 0 && (suppress.isNotEmpty || pendingDelete || emptyShell)) {
-      final empty = (live ?? updated).copyWith(
+      // Prefer updated id so recreate-after-delete-all sticks in the session.
+      final empty = updated.copyWith(
         products: const [],
         displayEntries: const [],
         itemCount: 0,
@@ -184,6 +197,7 @@ class TableDetailsController extends GetxController {
       if (updatedCount == 0) {
         _releaseDeletedLinesConfirmedBy(updated);
         _orderRepository.clearSuppressedOrderItemIds(orderKey);
+        _orderRepository.clearPendingLocalDeleteFlag(orderKey);
       }
       _syncOrderInSession(
         empty,
@@ -294,6 +308,7 @@ class TableDetailsController extends GetxController {
     final id = orderId ?? _rawSessionOrder?.id ?? seedOrder?.id;
     if (id == null || id <= 0) return;
     _orderRepository.clearEmptyShellDisplay(id);
+    _orderRepository.clearPendingLocalDeleteFlag(id);
     _orderRepository.bumpDetailRevision(id);
   }
 
@@ -1988,7 +2003,23 @@ class TableDetailsController extends GetxController {
   }
 
   Future<int?> _resolveOrderIdForBackgroundSync() async {
+    final live = _rawSessionOrder;
+    final liveEmpty = live == null || live.products.isEmpty;
     final fast = _fastResolvedOrderId;
+
+    // After delete-all the cached id may be cancelled/gone. Prefer the table's
+    // live active order so re-add / Demande use a real id.
+    if (liveEmpty || fast == null || fast <= 0) {
+      final resolved =
+          await _orderRepository.resolveOrderIdForTableNumber(orderNumber);
+      if (resolved != null && resolved > 0) {
+        if (orderId != resolved) {
+          orderId = resolved;
+        }
+        return resolved;
+      }
+    }
+
     if (fast != null && fast > 0) return fast;
 
     // Local session-only shell (id <= 0): create with the first selected item
@@ -2369,10 +2400,84 @@ class TableDetailsController extends GetxController {
       displayEntriesOverride: predicted.displayEntries,
     );
 
+    // Clearing the ticket: one cancel-all that keeps/recreates an open order.
+    // Per-line cancels let the API cancel the whole order → "ORDER ID not found".
+    if (predicted.products.isEmpty) {
+      _syncCancelAllInBackground(rollbackSnapshot: snapshot);
+      return;
+    }
+
     _syncCancelLineInBackground(
       lineIndex: productIndex,
       itemId: deletedItemId,
       rollbackSnapshot: snapshot,
+    );
+  }
+
+  void _syncCancelAllInBackground({
+    required SessionOrder rollbackSnapshot,
+  }) {
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: rollbackSnapshot,
+      apply: (updated) {
+        if (updated.id > 0) orderId = updated.id;
+        _applySyncedOrder(updated);
+      },
+      sync: () async {
+        final id = await _resolveOrderIdForBackgroundSync();
+        if (id == null || id <= 0) {
+          return _rawSessionOrder ?? rollbackSnapshot;
+        }
+        orderId = id;
+        final updated = await _orderRepository.cancelAllVisibleLines(
+          orderId: id,
+          previousDisplayEntries: const [],
+          tableNumber: orderNumber,
+        );
+        if (updated.id > 0) orderId = updated.id;
+        final live = _rawSessionOrder;
+        // Waiter already re-added while cancel-all ran — keep those lines.
+        if (live != null && live.products.isNotEmpty) {
+          _orderRepository.clearEmptyShellDisplay(
+            updated.id > 0 ? updated.id : id,
+          );
+          _orderRepository.clearPendingLocalDeleteFlag(
+            updated.id > 0 ? updated.id : id,
+          );
+          return OrderMapper.mergeLiveOptimisticDetail(
+            server: updated,
+            live: live,
+            suppressItemIds: _orderRepository.suppressedItemIdsFor(
+              updated.id > 0 ? updated.id : id,
+            ),
+          );
+        }
+        return updated;
+      },
+      recover: (snap) async {
+        final id = _fastResolvedOrderId ?? snap.id;
+        final live = _rawSessionOrder;
+        if (live != null) return live;
+        if (id > 0) {
+          return _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        }
+        return snap;
+      },
+      onError: (error) {
+        if (error is ApiException) {
+          final msg = error.message.toLowerCase();
+          if (error.statusCode == 404 ||
+              msg.contains('not found') ||
+              msg.contains('introuvable')) {
+            return;
+          }
+        }
+        _showOptimisticMutationError('annuler les articles', error);
+      },
     );
   }
 
@@ -2398,26 +2503,38 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
-        // Always hint the current optimistic layout (may already be empty after
-        // delete-all). Never pass the pre-delete snapshot — that resurrects lines.
         final liveLayout = _rawSessionOrder?.displayEntries ?? const [];
-        final updated = await _orderRepository.cancelOrderLineAtIndex(
-          orderId: id,
-          lineIndex: lineIndex,
-          itemId: itemId,
-          previousDisplayEntries: liveLayout,
-        );
-        if (updated.id > 0) orderId = updated.id;
-        // Return the thinner of API result vs live ticket so apply cannot
-        // re-expand a delete-all.
+        // If the waiter already cleared the ticket, use cancel-all (keep open /
+        // recreate) instead of another single-line cancel that would cancel
+        // the order on the API.
         final live = _rawSessionOrder;
-        if (live != null &&
-            OrderMapper.productEntryCount(live.displayEntries) <
+        final SessionOrder updated;
+        if (live != null && live.products.isEmpty) {
+          updated = await _orderRepository.cancelAllVisibleLines(
+            orderId: id,
+            previousDisplayEntries: const [],
+            tableNumber: orderNumber,
+          );
+        } else {
+          updated = await _orderRepository.cancelOrderLineAtIndex(
+            orderId: id,
+            lineIndex: lineIndex,
+            itemId: itemId,
+            previousDisplayEntries: liveLayout,
+            tableNumber: orderNumber,
+          );
+        }
+        if (updated.id > 0) orderId = updated.id;
+        final liveAfter = _rawSessionOrder;
+        if (liveAfter != null &&
+            OrderMapper.productEntryCount(liveAfter.displayEntries) <
                 OrderMapper.productEntryCount(updated.displayEntries)) {
           return OrderMapper.mergeLiveOptimisticDetail(
             server: updated,
-            live: live,
-            suppressItemIds: _orderRepository.suppressedItemIdsFor(id),
+            live: liveAfter,
+            suppressItemIds: _orderRepository.suppressedItemIdsFor(
+              updated.id > 0 ? updated.id : id,
+            ),
           );
         }
         return updated;

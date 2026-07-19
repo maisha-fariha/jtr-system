@@ -415,6 +415,191 @@ void main() {
     },
   );
 
+  test('writable suivre course skips empty shell after suite delete', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'SIDI'},
+                  'sub_total': 30,
+                },
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 30, 'name': 'ORANGE'},
+                  'sub_total': 1,
+                },
+              ],
+            },
+            {
+              'id': 11,
+              'course_number': 2,
+              'status': 'to_be_continued',
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    // Demande still thinks target is course 2 (divider.courseNumber + 1).
+    expect(
+      OrderMapper.resolveWritableSuivreCourseNumber(
+        detail,
+        preferredCourseNumber: 2,
+      ),
+      3,
+    );
+
+    final layout = [
+      _product(0, 'SIDI', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'ORANGE', itemId: 3),
+    ];
+    final rebaked = OrderMapper.rebakeSuivreSectionOntoCourse(
+      detail,
+      layout: layout,
+      sectionIndex: 1,
+      targetCourseNumber: 3,
+    );
+    expect(rebaked.changed, isTrue);
+
+    final course1 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 1)!;
+    final course3 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 3)!;
+    expect(
+      [
+        for (final item in (course1['items'] as List))
+          if (item is Map && item['status'] != 'cancelled') item['id'],
+      ],
+      [1],
+    );
+    course3['id'] = 12;
+    course3['status'] = 'to_be_continued';
+    expect(
+      OrderMapper.extractRequestableCourseIdsForSuivreSection(
+        rebaked.detail,
+        courseNumber: 3,
+      ),
+      [12],
+    );
+  });
+
+  test('convertSuivreSectionToDemande flips only the demanded section', () {
+    final entries = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+    ];
+    final converted = OrderMapper.convertSuivreSectionToDemande(
+      entries,
+      sectionIndex: 1,
+      demandeTimeLabel: '16:07:00',
+    );
+    expect(OrderMapper.suivreSeparatorCount(converted), 0);
+    expect(OrderMapper.demandeSeparatorCount(converted), 1);
+    expect(converted[1].demandeTimeLabel, '16:07:00');
+  });
+
+  test(
+    'applyDemande after rebake converts when later course was requested',
+    () {
+      final pending = [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 2),
+      ];
+      // Course 2 empty shell; suite items demanded on course 3.
+      final detail = <String, dynamic>{
+        'id': 1,
+        'seat_orders': [
+          {
+            'seat_number': 1,
+            'courses': [
+              {
+                'course_number': 1,
+                'items': [
+                  {'id': 1, 'qty': 1, 'status': 'active'},
+                ],
+              },
+              {
+                'course_number': 2,
+                'items': <dynamic>[],
+              },
+              {
+                'course_number': 3,
+                'requested_at': '2026-07-19T14:07:00Z',
+                'status': 'requested',
+                'items': [
+                  {'id': 2, 'qty': 1, 'status': 'active'},
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      final onKitchen = OrderMapper.applyDemandeSeparatorsFromApi(
+        detail,
+        pending,
+        applyKitchenDemande: true,
+      );
+      expect(OrderMapper.demandeSeparatorCount(onKitchen), 1);
+      expect(OrderMapper.suivreSeparatorCount(onKitchen), 0);
+    },
+  );
+
+  test('append after suite delete skips empty shell course', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 1, 'name': 'A'},
+                  'sub_total': 1,
+                },
+              ],
+            },
+            {
+              'id': 11,
+              'course_number': 2,
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+    ];
+    final course = OrderMapper.resolveAppendCourse(
+      detail,
+      layoutHints: layout,
+    );
+    expect(course.number, 3);
+  });
+
   test('removeSuivreSectionFromDisplay drops divider and its items', () {
     final entries = [
       _product(0, 'A', itemId: 1),

@@ -975,20 +975,34 @@ class OrderMapper {
         continue;
       }
 
-      // À SUIVRE stores the course above; DEMANDÉE when follow-up was fired.
-      final courseNext = courseNumber > 0
-          ? findCourseInOrderDetail(data, courseNumber + 1)
-          : null;
-      if (courseNext == null) {
+      // À SUIVRE stores the course above; DEMANDÉE when the follow-up was fired.
+      // After delete/rebake the suite may sit on course N+2 while the divider
+      // still points at N — also accept the next requested course with items.
+      Map<String, dynamic>? courseFired;
+      if (courseNumber > 0) {
+        final courseNext = findCourseInOrderDetail(data, courseNumber + 1);
+        if (courseNext != null &&
+            (formatDemandeTime(courseNext['requested_at']) != null ||
+                (applyKitchenDemande &&
+                    _courseWasRequestedToKitchen(courseNext)))) {
+          courseFired = courseNext;
+        } else if (applyKitchenDemande) {
+          courseFired = _findNextRequestedCourseWithItems(
+            data,
+            afterCourseNumber: courseNumber,
+          );
+        }
+      }
+      if (courseFired == null) {
         result.add(entry);
         continue;
       }
 
-      var timeLabel = formatDemandeTime(courseNext['requested_at']);
+      var timeLabel = formatDemandeTime(courseFired['requested_at']);
       // Explicit kitchen send: accept status even if timestamp is missing.
       if (timeLabel == null &&
           applyKitchenDemande &&
-          _courseWasRequestedToKitchen(courseNext)) {
+          _courseWasRequestedToKitchen(courseFired)) {
         timeLabel = formatDemandeTime(DateTime.now().toUtc().toIso8601String());
       }
       if (timeLabel == null) {
@@ -1006,6 +1020,60 @@ class OrderMapper {
     }
 
     return result;
+  }
+
+  /// Next course after [afterCourseNumber] that has items and was kitchen-fired.
+  static Map<String, dynamic>? _findNextRequestedCourseWithItems(
+    Map<String, dynamic> data, {
+    required int afterCourseNumber,
+  }) {
+    Map<String, dynamic>? best;
+    var bestNumber = 1 << 30;
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final number = (course['course_number'] as num?)?.toInt() ?? 0;
+        if (number <= afterCourseNumber) continue;
+        if (_visibleItemCountInCourse(course) <= 0) continue;
+        if (!_courseWasRequestedToKitchen(course)) continue;
+        if (number < bestNumber) {
+          bestNumber = number;
+          best = course;
+        }
+      }
+    }
+    return best;
+  }
+
+  /// Force À SUIVRE → DEMANDÉE for one section after an explicit Demande success.
+  static List<OrderDisplayEntry> convertSuivreSectionToDemande(
+    List<OrderDisplayEntry> entries, {
+    required int sectionIndex,
+    String? demandeTimeLabel,
+  }) {
+    if (sectionIndex <= 0) return entries;
+    final label = demandeTimeLabel ??
+        formatDemandeTime(DateTime.now().toUtc().toIso8601String()) ??
+        '--:--:--';
+
+    return [
+      for (final entry in entries)
+        if (entry.type == OrderDisplayEntryType.suivreSeparator &&
+            entry.sectionIndex == sectionIndex)
+          OrderDisplayEntry.demande(
+            sectionIndex: sectionIndex,
+            courseNumber: entry.courseNumber ?? sectionIndex,
+            demandeTimeLabel: label,
+          )
+        else
+          entry,
+    ];
   }
 
   /// Keep live pending À SUIVRE when a sync wrongly returns DEMANDÉE.
@@ -2790,6 +2858,257 @@ class OrderMapper {
     return fallbackId != null ? [fallbackId] : const [];
   }
 
+  /// Highest `course_number` on the order (including empty shells).
+  static int maxCourseNumberInDetail(Map<String, dynamic> detail) {
+    var maxNumber = 0;
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return 0;
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final number = (course['course_number'] as num?)?.toInt() ?? 0;
+        if (number > maxNumber) maxNumber = number;
+      }
+    }
+    return maxNumber;
+  }
+
+  /// Course that can receive new suite lines / a Demande.
+  ///
+  /// After delete-suite the old follow-up course often remains as an **empty
+  /// shell**. Reusing it makes Demande report "aucun article". Skip empty
+  /// shells and open the next free course number.
+  static int resolveWritableSuivreCourseNumber(
+    Map<String, dynamic> detail, {
+    required int preferredCourseNumber,
+  }) {
+    if (preferredCourseNumber <= 0) {
+      return maxCourseNumberInDetail(detail) + 1;
+    }
+
+    final existing = findCourseInOrderDetail(detail, preferredCourseNumber);
+    if (existing == null) return preferredCourseNumber;
+
+    if (_visibleItemCountInCourse(existing) <= 0) {
+      return maxCourseNumberInDetail(detail) + 1;
+    }
+    if (_courseWasRequestedToKitchen(existing) &&
+        !_courseNeedsKitchenSend(existing)) {
+      return maxCourseNumberInDetail(detail) + 1;
+    }
+    return preferredCourseNumber;
+  }
+
+  /// Product rows displayed under a given À SUIVRE / DEMANDÉE section.
+  static List<OrderDisplayEntry> productEntriesUnderSection(
+    List<OrderDisplayEntry> entries,
+    int sectionIndex,
+  ) {
+    final under = <OrderDisplayEntry>[];
+    var inSection = false;
+    for (final entry in entries) {
+      if (entry.isSectionDivider) {
+        if (inSection) break;
+        inSection = entry.sectionIndex == sectionIndex;
+        continue;
+      }
+      if (!inSection) continue;
+      if (entry.type == OrderDisplayEntryType.product) under.add(entry);
+    }
+    return under;
+  }
+
+  static List<({Map<String, dynamic> item, int courseNumber})>
+      _visibleItemsWithCourseNumbers(
+    Map<String, dynamic> detail, {
+    required int seatNumber,
+  }) {
+    final located = <({Map<String, dynamic> item, int courseNumber})>[];
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return located;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      if ((seat['seat_number'] as num?)?.toInt() != seatNumber) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final courseNumber =
+            (course['course_number'] as num?)?.toInt() ?? 0;
+        for (final item in _visibleItemsInStableAddOrder(course['items'])) {
+          located.add((item: item, courseNumber: courseNumber));
+        }
+      }
+    }
+    return located;
+  }
+
+  static ({Map<String, dynamic> item, int courseNumber})? _takeMatchedOrderItem(
+    List<({Map<String, dynamic> item, int courseNumber})> remaining,
+    OrderDisplayEntry entry,
+  ) {
+    final id = entry.itemId ?? 0;
+    if (id > 0) {
+      final byId = remaining.indexWhere(
+        (row) => (row.item['id'] as num?)?.toInt() == id,
+      );
+      if (byId >= 0) return remaining.removeAt(byId);
+    }
+    final key = _productFingerprint(entry.product);
+    if (key != null) {
+      final byKey = remaining.indexWhere((row) {
+        final product = orderProductFromItem(row.item);
+        return _productFingerprint(product) == key;
+      });
+      if (byKey >= 0) return remaining.removeAt(byKey);
+    }
+    if (remaining.isNotEmpty) return remaining.removeAt(0);
+    return null;
+  }
+
+  /// Course ids from items shown under a suite (ignores stale courseNumber+1).
+  static List<int> extractRequestableCourseIdsForSuivreLayout(
+    Map<String, dynamic> data, {
+    required List<OrderDisplayEntry> layout,
+    required int sectionIndex,
+  }) {
+    final under = productEntriesUnderSection(layout, sectionIndex);
+    if (under.isEmpty) return const [];
+
+    final above = <OrderDisplayEntry>[];
+    for (final entry in layout) {
+      if (entry.isSectionDivider && entry.sectionIndex == sectionIndex) break;
+      if (entry.type == OrderDisplayEntryType.product) above.add(entry);
+    }
+
+    final seatNumber = resolveDefaultSeatNumber(data);
+    final remaining = _visibleItemsWithCourseNumbers(
+      data,
+      seatNumber: seatNumber,
+    );
+    for (final entry in above) {
+      _takeMatchedOrderItem(remaining, entry);
+    }
+
+    final underCourseNumbers = <int>{};
+    final underItemIds = <int>{};
+    for (final entry in under) {
+      final match = _takeMatchedOrderItem(remaining, entry);
+      if (match == null) continue;
+      if (match.courseNumber > 0) underCourseNumbers.add(match.courseNumber);
+      final id = (match.item['id'] as num?)?.toInt() ?? 0;
+      if (id > 0) underItemIds.add(id);
+    }
+    if (underCourseNumbers.length != 1 || underItemIds.isEmpty) {
+      return const [];
+    }
+
+    final courseNumber = underCourseNumbers.single;
+    final course = findCourseInOrderDetail(data, courseNumber);
+    if (course == null || !_courseNeedsKitchenSend(course)) return const [];
+
+    // Only fire when that course holds solely the suite lines.
+    final items = course['items'];
+    if (items is List) {
+      for (final item in items) {
+        if (item is! Map<String, dynamic>) continue;
+        if (item['status'] == 'cancelled') continue;
+        final id = (item['id'] as num?)?.toInt() ?? 0;
+        if (id > 0 && !underItemIds.contains(id)) return const [];
+      }
+    }
+
+    final courseId = _courseRecordId(course);
+    return courseId != null ? [courseId] : const [];
+  }
+
+  /// Cancel suite lines and recreate them on [targetCourseNumber].
+  ///
+  /// Needed after delete-suite: UI shows items under À SUIVRE but the API still
+  /// has them on course 1 while Demande targets an empty follow-up shell.
+  /// Moving rows is unreliable; cancel + re-add matches the normal add path.
+  static ({Map<String, dynamic> detail, bool changed})
+      rebakeSuivreSectionOntoCourse(
+    Map<String, dynamic> orderDetail, {
+    required List<OrderDisplayEntry> layout,
+    required int sectionIndex,
+    required int targetCourseNumber,
+  }) {
+    if (sectionIndex <= 0 || targetCourseNumber <= 0) {
+      return (detail: orderDetail, changed: false);
+    }
+
+    final under = productEntriesUnderSection(layout, sectionIndex);
+    if (under.isEmpty) return (detail: orderDetail, changed: false);
+
+    final above = <OrderDisplayEntry>[];
+    for (final entry in layout) {
+      if (entry.isSectionDivider && entry.sectionIndex == sectionIndex) break;
+      if (entry.type == OrderDisplayEntryType.product) above.add(entry);
+    }
+
+    final working = copyOrderDetail(orderDetail);
+    final seatNumber = resolveDefaultSeatNumber(working);
+    final remaining = _visibleItemsWithCourseNumbers(
+      working,
+      seatNumber: seatNumber,
+    );
+    for (final entry in above) {
+      _takeMatchedOrderItem(remaining, entry);
+    }
+
+    final recipes = <Map<String, dynamic>>[];
+    final cancelIds = <int>{};
+    for (final entry in under) {
+      final match = _takeMatchedOrderItem(remaining, entry);
+      if (match == null) continue;
+      if (match.courseNumber == targetCourseNumber) continue;
+      final id = (match.item['id'] as num?)?.toInt() ?? 0;
+      if (id > 0) cancelIds.add(id);
+      recipes.add(match.item);
+    }
+    if (recipes.isEmpty) return (detail: working, changed: false);
+
+    for (final id in cancelIds) {
+      cancelOrderLineByItemId(working, id);
+    }
+
+    final targetCourse = findCourseInOrderDetail(working, targetCourseNumber);
+    final targetCourseId =
+        targetCourse == null ? 0 : (_courseRecordId(targetCourse) ?? 0);
+
+    for (final item in recipes) {
+      final newItem = _buildNewItemPayload(
+        seatNumber: seatNumber,
+        courseId: targetCourseId,
+        productId: _itemProductId(item),
+        qty: (item['qty'] as num?)?.toInt() ?? 1,
+        subTotal: _parseMoney(item['sub_total']),
+        status: 'to_be_continued',
+        comment: item['comment'] as String? ?? '',
+        menuSelections: item['menu_selections'] is List
+            ? (item['menu_selections'] as List)
+                .whereType<Map<String, dynamic>>()
+                .toList()
+            : const [],
+        isStillMenuMissing: item['is_still_menu_missing'] == true,
+        forCreate: false,
+      );
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: targetCourseNumber,
+        newItem: newItem,
+      );
+    }
+
+    return (detail: working, changed: true);
+  }
+
   static String describeWhySuivreSectionNotRequestable(
     Map<String, dynamic> data, {
     required int courseNumber,
@@ -2805,6 +3124,13 @@ class OrderMapper {
 
     if (_visibleItemCountInCourse(course) <= 0) {
       return 'Ce service ne contient aucun article à envoyer en cuisine.';
+    }
+
+    if (_courseNeedsKitchenSend(course)) {
+      if (_courseRecordId(course) == null) {
+        return 'Identifiant du service introuvable.';
+      }
+      return 'Aucun service à demander pour cette section.';
     }
 
     if (_courseWasRequestedToKitchen(course)) {
@@ -2823,8 +3149,7 @@ class OrderMapper {
       return 'Ce service n\'est pas demandable (statut: $status).';
     }
 
-    final courseId = course['id'];
-    if (courseId == null) {
+    if (_courseRecordId(course) == null) {
       return 'Identifiant du service introuvable.';
     }
 
@@ -2850,22 +3175,20 @@ class OrderMapper {
         if (course is! Map<String, dynamic>) continue;
         final number = (course['course_number'] as num?)?.toInt();
         if (number != courseNumber) continue;
-        if (_visibleItemCountInCourse(course) <= 0) continue;
-        if (_courseWasRequestedToKitchen(course)) return null;
+        // Allow re-demande when a shell still has unsent lines.
+        if (!_courseNeedsKitchenSend(course)) continue;
 
-        if (requireKnownStatus) {
+        if (requireKnownStatus && !_courseWasRequestedToKitchen(course)) {
           final status = course['status'] as String?;
-          if (status != 'to_be_continued' &&
+          if (status != null &&
+              status != 'to_be_continued' &&
               status != 'pending' &&
               status != 'in_progress') {
             continue;
           }
         }
 
-        final courseId = course['id'];
-        final courseIdInt = courseId is int
-            ? courseId
-            : (courseId is num ? courseId.toInt() : null);
+        final courseIdInt = _courseRecordId(course);
         if (courseIdInt != null) return courseIdInt;
       }
     }
@@ -3309,7 +3632,12 @@ class OrderMapper {
     if (layoutHints != null && layoutHints.isNotEmpty) {
       final fromLayout = resolveAppendCourseNumberFromLayout(layoutHints);
       if (fromLayout != null && fromLayout > 0) {
-        return _resolveCourseTarget(courses, fromLayout);
+        // Skip empty shells left after suite delete.
+        final writable = resolveWritableSuivreCourseNumber(
+          detail,
+          preferredCourseNumber: fromLayout,
+        );
+        return _resolveCourseTarget(courses, writable);
       }
     }
 

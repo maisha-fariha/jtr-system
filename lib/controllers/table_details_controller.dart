@@ -1483,11 +1483,16 @@ class TableDetailsController extends GetxController {
       onConfirm: () async {
         isAddingProduct.value = true;
         try {
+          // Ensure suite lines are on the server before Demande.
+          _flushQueuedSimpleAddsNow();
+          await _optimisticSync.waitUntilIdle(_optimisticSyncKey);
+
           final orderSnapshot = order;
           final updated = await _orderRepository.requestCourseForSuivreSection(
             id,
             courseNumber: demandeCourseNumber,
             previousDisplayEntries: orderSnapshot?.displayEntries,
+            suivreSectionIndex: sectionIndex,
           );
           if (selectedSuivreSection.value == sectionIndex) {
             selectedSuivreSection.value = null;

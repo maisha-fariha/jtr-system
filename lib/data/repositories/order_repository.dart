@@ -1201,6 +1201,7 @@ class OrderRepository {
     int orderId, {
     required int courseNumber,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    int? suivreSectionIndex,
   }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
@@ -1208,26 +1209,154 @@ class OrderRepository {
       );
     }
 
-    final detail = await _remote.fetchOrderDetail(orderId);
-    final courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+    final apiLog = StringBuffer('── Demande À SUIVRE course=$courseNumber ──\n');
+    var detail = await _remote.fetchOrderDetail(orderId);
+    var courseIds = <int>[];
+
+    // Suite lines already alone on a real course → fire that id.
+    if (previousDisplayEntries != null &&
+        suivreSectionIndex != null &&
+        suivreSectionIndex > 0) {
+      courseIds = OrderMapper.extractRequestableCourseIdsForSuivreLayout(
+        detail,
+        layout: previousDisplayEntries,
+        sectionIndex: suivreSectionIndex,
+      );
+      if (courseIds.isNotEmpty) {
+        apiLog.writeln('suite already on course_ids=${courseIds.join(',')}');
+      }
+    }
+
+    // After delete-suite: preferred course is often an empty shell while items
+    // still sit on course 1. Rebake (cancel + re-add) onto a fresh course.
+    var targetCourseNumber = OrderMapper.resolveWritableSuivreCourseNumber(
       detail,
-      courseNumber: courseNumber,
+      preferredCourseNumber: courseNumber,
     );
+    if (targetCourseNumber != courseNumber) {
+      apiLog.writeln(
+        'preferred course $courseNumber not writable → $targetCourseNumber',
+      );
+    }
+
+    if (courseIds.isEmpty &&
+        previousDisplayEntries != null &&
+        suivreSectionIndex != null &&
+        suivreSectionIndex > 0) {
+      final rebaked = OrderMapper.rebakeSuivreSectionOntoCourse(
+        detail,
+        layout: previousDisplayEntries,
+        sectionIndex: suivreSectionIndex,
+        targetCourseNumber: targetCourseNumber,
+      );
+      if (rebaked.changed) {
+        apiLog.writeln('── Rebake suite → course $targetCourseNumber ──');
+        detail = await _putOrderUpdate(
+          orderId: orderId,
+          payload: OrderMapper.buildOrderUpdatePayload(rebaked.detail),
+          apiLog: apiLog,
+        );
+        await _local.saveOrderDetail(orderId, detail);
+        detail = await _remote.fetchOrderDetail(orderId);
+        await _local.saveOrderDetail(orderId, detail);
+
+        targetCourseNumber = OrderMapper.resolveWritableSuivreCourseNumber(
+          detail,
+          preferredCourseNumber: targetCourseNumber,
+        );
+        // Prefer course-number lookup after rebake (new item ids).
+        courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+          detail,
+          courseNumber: targetCourseNumber,
+        );
+        if (courseIds.isEmpty) {
+          courseIds = OrderMapper.extractRequestableCourseIdsForSuivreLayout(
+            detail,
+            layout: previousDisplayEntries,
+            sectionIndex: suivreSectionIndex,
+          );
+        }
+      }
+    }
+
     if (courseIds.isEmpty) {
+      courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+        detail,
+        courseNumber: targetCourseNumber,
+      );
+    }
+    if (courseIds.isEmpty) {
+      detail = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, detail);
+      courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
+        detail,
+        courseNumber: targetCourseNumber,
+      );
+    }
+    if (courseIds.isEmpty) {
+      lastKitchenSendLog = apiLog.toString();
       throw ApiException(
         message: OrderMapper.describeWhySuivreSectionNotRequestable(
           detail,
-          courseNumber: courseNumber,
+          courseNumber: targetCourseNumber,
         ),
       );
     }
 
+    apiLog.writeln('course_ids=${courseIds.join(',')}');
     await _remote.requestCourses(orderId, courseIds);
-    return getOrderDetail(
+    if (_remote.lastApiLog != null) {
+      apiLog.writeln(_remote.lastApiLog);
+    }
+    lastKitchenSendLog = apiLog.toString();
+
+    // Prefer pre-demande layout for product order, but kitchen mapping must win
+    // for À SUIVRE → DEMANDÉE (rebake may fire course N+2 while divider says N).
+    var order = await getOrderDetail(
       orderId,
       previousDisplayEntries: previousDisplayEntries,
       applyKitchenDemande: true,
     );
+
+    if (suivreSectionIndex != null && suivreSectionIndex > 0) {
+      final timeLabel = OrderMapper.formatDemandeTime(
+            DateTime.now().toUtc().toIso8601String(),
+          ) ??
+          '--:--:--';
+      var display = order.displayEntries;
+      final stillSuivre = display.any(
+        (entry) =>
+            entry.type == OrderDisplayEntryType.suivreSeparator &&
+            entry.sectionIndex == suivreSectionIndex,
+      );
+      if (stillSuivre) {
+        display = OrderMapper.convertSuivreSectionToDemande(
+          display,
+          sectionIndex: suivreSectionIndex,
+          demandeTimeLabel: timeLabel,
+        );
+      } else if (previousDisplayEntries != null &&
+          !display.any(
+            (entry) =>
+                entry.isSectionDivider &&
+                entry.sectionIndex == suivreSectionIndex,
+          )) {
+        // Pin dropped the divider — restore from pre-demande layout as DEMANDÉE.
+        display = OrderMapper.convertSuivreSectionToDemande(
+          previousDisplayEntries,
+          sectionIndex: suivreSectionIndex,
+          demandeTimeLabel: timeLabel,
+        );
+        display = OrderMapper.stabilizeLiveLayoutWithServer(
+          live: display,
+          server: order.displayEntries,
+        );
+      }
+      order = order.copyWith(displayEntries: display);
+      await _persistSuivreLayoutHints(orderId, display);
+    }
+
+    return order;
   }
 
   Future<SessionOrder> markOrderPrinted(

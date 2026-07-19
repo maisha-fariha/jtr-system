@@ -72,20 +72,6 @@ class TableDetailsController extends GetxController {
   final suivreUiRevision = 0.obs;
   final orderUiRevision = 0.obs;
 
-  /// Undo banner after a line delete, e.g. `1 PIZZA TONNO supprimé(e)`.
-  final undoDeleteLabel = RxnString();
-  Timer? _pendingDeleteTimer;
-  SessionOrder? _pendingDeleteSnapshot;
-  int? _pendingDeleteLineIndex;
-  int? _pendingDeleteItemId;
-  int _pendingDeleteGeneration = 0;
-
-  /// Item ids cancelled locally (pending + recently committed) so sync merge
-  /// cannot resurrect a ghost line after delete-all.
-  final Set<int> _locallyCancelledItemIds = <int>{};
-
-  static const _undoDeleteDuration = Duration(seconds: 5);
-
   /// Rapid simple-product taps are UI-immediate; network uses one coalesced
   /// `PUT` with every line queued since the last flush (not one PUT per tap).
   final List<CatalogProductModel> _queuedSimpleAdds = [];
@@ -95,87 +81,53 @@ class TableDetailsController extends GetxController {
   static const _simpleAddBatchWindow = Duration(milliseconds: 500);
 
   Set<int> get _suppressDeletedItemIds {
-    final ids = <int>{..._locallyCancelledItemIds};
-    final pending = _pendingDeleteItemId;
-    if (pending != null && pending > 0) ids.add(pending);
-    return ids;
+    final orderKey = orderId ?? _rawSessionOrder?.id ?? 0;
+    if (orderKey <= 0) return const {};
+    return _orderRepository.suppressedItemIdsFor(orderKey);
   }
 
-  /// Apply a background sync result without flashing stale/thinner server data.
+  void _suppressDeletedLine(int? itemId, {required int orderId}) {
+    if (orderId <= 0) return;
+    _orderRepository.markPendingLocalDelete(orderId);
+    _orderRepository.bumpDetailRevision(orderId);
+    if (itemId != null && itemId > 0) {
+      _orderRepository.suppressOrderItemIds(orderId, [itemId]);
+    }
+  }
+
+  void _releaseDeletedLinesConfirmedBy(SessionOrder server) {
+    if (server.id <= 0) return;
+    final stillOnServer = OrderMapper.productItemIds(server.displayEntries);
+    for (final id in _orderRepository.suppressedItemIdsFor(server.id)) {
+      if (!stillOnServer.contains(id)) {
+        _orderRepository.clearSuppressedOrderItemIds(server.id, itemId: id);
+      }
+    }
+    if (_orderRepository.suppressedItemIdsFor(server.id).isEmpty) {
+      _orderRepository.clearSuppressedOrderItemIds(server.id);
+    }
+  }
+
+  /// Apply a background sync result without flashing stale server data.
+  ///
+  /// Model: local ticket is source of truth while deletes/adds are in flight.
+  /// Suppressed item ids are stripped until the API confirms they are gone.
   void _applySyncedOrder(SessionOrder updated) {
     if (updated.id > 0) orderId = updated.id;
 
-    final live = order;
-    // After delete-all, never re-show create-seed / stale server lines.
-    if (live != null &&
-        live.products.isEmpty &&
-        _suppressDeletedItemIds.isNotEmpty) {
-      if (updated.id > 0) {
-        _orderRepository.rememberEmptyShellDisplay(updated.id);
-      }
-      final empty = updated.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
-      if (updated.products.isEmpty) {
-        _locallyCancelledItemIds.clear();
-      }
-      _syncOrderInSession(
-        empty,
-        orderNumber,
-        displayEntriesOverride: empty.displayEntries,
-      );
-      return;
-    }
+    final live = _rawSessionOrder;
+    final suppress = _suppressDeletedItemIds;
+    final liveHasLines = live != null &&
+        (live.products.isNotEmpty || live.displayEntries.isNotEmpty);
 
-    // Delete in flight: never flash server lines back — keep live layout and
-    // only refresh ids/prices for rows that are still on the ticket.
-    if (live != null &&
-        _suppressDeletedItemIds.isNotEmpty &&
-        OrderMapper.productEntryCount(live.displayEntries) <=
-            OrderMapper.productEntryCount(updated.displayEntries)) {
-      var display = OrderMapper.stabilizeLiveLayoutWithServer(
-        live: live.displayEntries,
-        server: updated.displayEntries,
-      );
-      display = [
-        for (final entry in display)
-          if (entry.type != OrderDisplayEntryType.product)
-            entry
-          else if ((entry.itemId ?? 0) <= 0 ||
-              !_suppressDeletedItemIds.contains(entry.itemId))
-            entry,
-      ];
-      display = OrderMapper.reindexDisplayEntries(display);
-      final products = [
-        for (final entry in display)
-          if (entry.type == OrderDisplayEntryType.product &&
-              entry.product != null)
-            entry.product!,
-      ];
-      if (products.isEmpty) {
-        _locallyCancelledItemIds.clear();
-        if (updated.id > 0) {
-          _orderRepository.rememberEmptyShellDisplay(updated.id);
-        }
-      } else {
-        _locallyCancelledItemIds.removeWhere(
-          (id) => !OrderMapper.productItemIds(display).contains(id),
-        );
-      }
+    // Cancel finished on an empty server, but waiter already added again.
+    if (updated.products.isEmpty && liveHasLines) {
+      _orderRepository.clearEmptyShellDisplay(live.id);
+      _releaseDeletedLinesConfirmedBy(updated);
       _syncOrderInSession(
-        updated.copyWith(
-          products: products,
-          displayEntries: display,
-          itemCount: products.length,
-          total: products.isEmpty
-              ? OrderMapper.formatPrice('0')
-              : updated.total,
-        ),
+        live,
         orderNumber,
-        displayEntriesOverride: display,
+        displayEntriesOverride: live.displayEntries,
       );
       return;
     }
@@ -183,11 +135,9 @@ class TableDetailsController extends GetxController {
     final merged = OrderMapper.mergeLiveOptimisticDetail(
       server: updated,
       live: live,
-      suppressItemIds: _suppressDeletedItemIds,
+      suppressItemIds: suppress,
     );
 
-    // Smooth path: keep the live layout when the visible ticket shape matches
-    // so sync only refreshes ids/prices without reordering rows.
     SessionOrder toShow = merged;
     if (live != null &&
         OrderMapper.productEntryCount(live.displayEntries) ==
@@ -213,21 +163,40 @@ class TableDetailsController extends GetxController {
       );
     }
 
-    if (toShow.products.isEmpty) {
-      _locallyCancelledItemIds.clear();
-      if (toShow.id > 0) {
-        _orderRepository.rememberEmptyShellDisplay(toShow.id);
-      }
-    } else {
-      _locallyCancelledItemIds.removeWhere(
-        (id) => !OrderMapper.productItemIds(toShow.displayEntries).contains(id),
-      );
+    if (toShow.products.isEmpty && toShow.id > 0) {
+      // Hide create-seed flash only when the ticket is truly empty.
+      _orderRepository.rememberEmptyShellDisplay(toShow.id);
+    } else if (toShow.id > 0) {
+      _orderRepository.clearEmptyShellDisplay(toShow.id);
     }
+
+    _releaseDeletedLinesConfirmedBy(updated);
     _syncOrderInSession(
       toShow,
       orderNumber,
       displayEntriesOverride: toShow.displayEntries,
     );
+  }
+
+  /// Session row without empty-shell masking (sync/merge must see real lines).
+  SessionOrder? get _rawSessionOrder {
+    if (Get.isRegistered<SessionController>()) {
+      final raw = Get.find<SessionController>().findOrder(
+        orderNumber: orderNumber,
+        orderId: orderId,
+      );
+      if (raw != null) return raw;
+    }
+    return seedOrder;
+  }
+
+  /// Lift empty-shell lock before an optimistic add.
+  void _prepareForNewAdd() {
+    final id = orderId ?? _rawSessionOrder?.id ?? seedOrder?.id;
+    if (id != null && id > 0) {
+      _orderRepository.clearEmptyShellDisplay(id);
+      _orderRepository.bumpDetailRevision(id);
+    }
   }
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
@@ -457,9 +426,13 @@ class TableDetailsController extends GetxController {
       _flushQueuedSimpleAddsNow();
     }
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
-    // Undo window / delete commit in flight — keep the optimistic ticket stable.
-    if (_pendingDeleteSnapshot != null) return;
-    if (_pendingDeleteItemId != null) return;
+    // Local delete still syncing — don't pull a fatter stale ticket over it.
+    final liveId = orderId ?? _rawSessionOrder?.id;
+    if (liveId != null &&
+        liveId > 0 &&
+        _orderRepository.hasPendingLocalDelete(liveId)) {
+      return;
+    }
     if (isAddingProduct.value) return;
     if (!Get.isRegistered<SessionController>()) return;
 
@@ -483,20 +456,18 @@ class TableDetailsController extends GetxController {
 
   /// Presentation-only: hide create-seed while the ticket is still empty.
   ///
-  /// While the empty-shell lock is set, always hide lines — the API seed must
-  /// not flash (and must not mark a menu product as selected). The lock is
-  /// cleared only when a real item is added / line-edited.
+  /// While the empty-shell lock is set, hide API seed lines. If the session
+  /// already has waiter-added products (optimistic add after delete-all), lift
+  /// the lock immediately — never mask a non-empty ticket.
   SessionOrder forDisplay(SessionOrder raw) {
     if (raw.id > 0 &&
         Get.isRegistered<OrderRepository>() &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
-      if (raw.products.isEmpty && raw.displayEntries.isEmpty) return raw;
-      return raw.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
+      final hasLines = raw.products.isNotEmpty || raw.displayEntries.isNotEmpty;
+      if (!hasLines) return raw;
+      // Optimistic add already wrote lines — do not hide them again.
+      _orderRepository.clearEmptyShellDisplay(raw.id);
+      return raw;
     }
     return raw;
   }
@@ -1426,6 +1397,7 @@ class TableDetailsController extends GetxController {
     );
 
     selectedProductId.value = product.id;
+    _prepareForNewAdd();
 
     if (product.isComposed) {
       // Flush any pending simple batch before opening the menu composer.
@@ -1628,11 +1600,20 @@ class TableDetailsController extends GetxController {
   }
 
   void _applyAddSimpleProductToUi(CatalogProductModel product) {
-    var current = order;
+    _prepareForNewAdd();
+    // Use unmasked session so empty-shell never blocks predict-after-delete.
+    var current = _rawSessionOrder;
     if (current == null) {
       current = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: _parsedTableNumber,
         numberOfGuests: 1,
+      );
+    }
+    if (current.products.isEmpty) {
+      current = current.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
       );
     }
 
@@ -1669,11 +1650,19 @@ class TableDetailsController extends GetxController {
     required List<Map<String, dynamic>> menuSelections,
     List<OrderDisplayEntry>? layoutHints,
   }) {
-    var current = order;
+    _prepareForNewAdd();
+    var current = _rawSessionOrder;
     if (current == null) {
       current = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: _parsedTableNumber,
         numberOfGuests: 1,
+      );
+    }
+    if (current.products.isEmpty) {
+      current = current.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
       );
     }
 
@@ -1825,18 +1814,19 @@ class TableDetailsController extends GetxController {
     if (!Get.isRegistered<SessionController>()) return;
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
-    // Qty/add syncs must not stay trapped behind the empty-create-shell flag.
-    if (updated.id > 0 &&
-        (updated.products.isNotEmpty || displayEntries.isNotEmpty)) {
-      _orderRepository.bumpDetailRevision(updated.id);
-      _orderRepository.clearEmptyShellDisplay(updated.id);
-    }
-
-    final synced = forDisplay(
-      updated.copyWith(
-        displayEntries: displayEntries,
-      ),
+    final synced = updated.copyWith(
+      displayEntries: displayEntries,
+      itemCount: updated.products.isNotEmpty
+          ? updated.products.length
+          : updated.itemCount,
     );
+    // Always write the real ticket; never mask an optimistic add/delete.
+    if (synced.id > 0) {
+      _orderRepository.bumpDetailRevision(synced.id);
+      if (synced.products.isNotEmpty || displayEntries.isNotEmpty) {
+        _orderRepository.clearEmptyShellDisplay(synced.id);
+      }
+    }
 
     // Keep seed in sync so back-navigation always has the latest total.
     if (seedOrder != null &&
@@ -1976,8 +1966,7 @@ class TableDetailsController extends GetxController {
     for (final entry in currentOrder.displayEntries) {
       if (entry.type != OrderDisplayEntryType.product) continue;
       if ((entry.sectionIndex ?? 0) != sectionIndex) continue;
-      final itemId = entry.itemId ?? 0;
-      if (itemId > 0) _locallyCancelledItemIds.add(itemId);
+      _suppressDeletedLine(entry.itemId, orderId: id);
     }
 
     collapsedSuivreSections.remove(sectionIndex);
@@ -2068,10 +2057,8 @@ class TableDetailsController extends GetxController {
     unawaited(_cancelOrderLine(productIndex));
   }
 
+  /// Optimistic remove locally, then cancel on the API in the background.
   Future<void> _cancelOrderLine(int productIndex) async {
-    // Finish any previous deferred delete before starting a new one.
-    await _commitPendingDeleteIfAny();
-
     final currentOrder = order;
     if (currentOrder == null ||
         productIndex < 0 ||
@@ -2102,17 +2089,11 @@ class TableDetailsController extends GetxController {
       currentOrder,
       productIndex,
     );
-    _pendingDeleteItemId =
-        (deletedItemId != null && deletedItemId > 0) ? deletedItemId : null;
-    if (_pendingDeleteItemId != null) {
-      _locallyCancelledItemIds.add(_pendingDeleteItemId!);
-    }
-    if (predicted.products.isEmpty) {
-      final id = orderId ?? currentOrder.id;
-      if (id > 0) {
-        _orderRepository.rememberEmptyShellDisplay(id);
-        unawaited(_orderRepository.persistSuivreLayoutHints(id, const []));
-      }
+    final activeId = orderId ?? currentOrder.id;
+    _suppressDeletedLine(deletedItemId, orderId: activeId);
+    if (predicted.products.isEmpty && activeId > 0) {
+      _orderRepository.rememberEmptyShellDisplay(activeId);
+      unawaited(_orderRepository.persistSuivreLayoutHints(activeId, const []));
     }
     _syncOrderInSession(
       predicted,
@@ -2120,58 +2101,8 @@ class TableDetailsController extends GetxController {
       displayEntriesOverride: predicted.displayEntries,
     );
 
-    final qtyLabel = line.quantity.trim().isEmpty ? '1' : line.quantity.trim();
-    undoDeleteLabel.value =
-        '$qtyLabel ${line.name.trim().toUpperCase()} supprimé(e)';
-
-    _pendingDeleteSnapshot = snapshot;
-    _pendingDeleteLineIndex = productIndex;
-    final generation = ++_pendingDeleteGeneration;
-    _pendingDeleteTimer?.cancel();
-    _pendingDeleteTimer = Timer(_undoDeleteDuration, () {
-      if (generation != _pendingDeleteGeneration) return;
-      unawaited(_commitPendingDeleteIfAny());
-    });
-  }
-
-  void undoPendingDelete() {
-    final snapshot = _pendingDeleteSnapshot;
-    if (snapshot == null) return;
-
-    final undoneId = _pendingDeleteItemId;
-    _pendingDeleteTimer?.cancel();
-    _pendingDeleteTimer = null;
-    _pendingDeleteSnapshot = null;
-    _pendingDeleteLineIndex = null;
-    _pendingDeleteItemId = null;
-    _pendingDeleteGeneration++;
-    undoDeleteLabel.value = null;
-    if (undoneId != null && undoneId > 0) {
-      _locallyCancelledItemIds.remove(undoneId);
-    }
-
-    _syncOrderInSession(snapshot, orderNumber);
-  }
-
-  Future<void> _commitPendingDeleteIfAny() async {
-    final lineIndex = _pendingDeleteLineIndex;
-    final snapshot = _pendingDeleteSnapshot;
-    final deletedItemId = _pendingDeleteItemId;
-    if (lineIndex == null || snapshot == null) return;
-
-    _pendingDeleteTimer?.cancel();
-    _pendingDeleteTimer = null;
-    _pendingDeleteLineIndex = null;
-    _pendingDeleteSnapshot = null;
-    undoDeleteLabel.value = null;
-    // Keep suppress id until cancel sync apply finishes.
-    _pendingDeleteItemId = deletedItemId;
-    if (deletedItemId != null && deletedItemId > 0) {
-      _locallyCancelledItemIds.add(deletedItemId);
-    }
-
-    await _syncCancelLineInBackground(
-      lineIndex: lineIndex,
+    _syncCancelLineInBackground(
+      lineIndex: productIndex,
       itemId: deletedItemId,
       rollbackSnapshot: snapshot,
     );
@@ -2179,49 +2110,31 @@ class TableDetailsController extends GetxController {
 
   @override
   void onClose() {
-    _pendingDeleteTimer?.cancel();
-    // Flush pending rapid adds before leaving the table.
     _flushQueuedSimpleAddsNow();
-    // Persist the delete if the waiter leaves before the undo window ends.
-    final lineIndex = _pendingDeleteLineIndex;
-    final snapshot = _pendingDeleteSnapshot;
-    final deletedItemId = _pendingDeleteItemId;
-    _pendingDeleteLineIndex = null;
-    _pendingDeleteSnapshot = null;
-    undoDeleteLabel.value = null;
-    _pendingDeleteItemId = deletedItemId;
-    if (lineIndex != null && snapshot != null) {
-      unawaited(
-        _syncCancelLineInBackground(
-          lineIndex: lineIndex,
-          itemId: deletedItemId,
-          rollbackSnapshot: snapshot,
-        ),
-      );
-    }
     super.onClose();
   }
 
-  Future<void> _syncCancelLineInBackground({
+  void _syncCancelLineInBackground({
     required int lineIndex,
     required SessionOrder rollbackSnapshot,
     int? itemId,
-  }) async {
+  }) {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
-      apply: (updated) {
-        _pendingDeleteItemId = null;
-        _applySyncedOrder(updated);
-      },
+      apply: _applySyncedOrder,
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
-          return order ?? rollbackSnapshot;
+          return _rawSessionOrder ?? rollbackSnapshot;
         }
 
         orderId = id;
-        final liveLayout = order?.displayEntries ?? rollbackSnapshot.displayEntries;
+        final liveLayout = _rawSessionOrder?.displayEntries ??
+            OrderMapper.predictAfterCancelLineAtIndex(
+              rollbackSnapshot,
+              lineIndex,
+            ).displayEntries;
         final updated = await _orderRepository.cancelOrderLineAtIndex(
           orderId: id,
           lineIndex: lineIndex,
@@ -2232,22 +2145,27 @@ class TableDetailsController extends GetxController {
         return updated;
       },
       recover: (snap) async {
-        _pendingDeleteItemId = null;
-        if (itemId != null && itemId > 0) {
-          _locallyCancelledItemIds.remove(itemId);
+        final id = _fastResolvedOrderId ?? snap.id;
+        if (itemId != null && itemId > 0 && id > 0) {
+          _orderRepository.clearSuppressedOrderItemIds(id, itemId: itemId);
+        } else if (id > 0) {
+          _orderRepository.clearSuppressedOrderItemIds(id);
         }
-        final id = _fastResolvedOrderId;
-        if (id != null && id > 0) {
+        if (id > 0) {
           return _orderRepository.getOrderDetail(
             id,
-            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
+            previousDisplayEntries:
+                _rawSessionOrder?.displayEntries ?? snap.displayEntries,
           );
         }
         return snap;
       },
       onError: (error) {
-        if (itemId != null && itemId > 0) {
-          _locallyCancelledItemIds.remove(itemId);
+        final id = rollbackSnapshot.id;
+        if (itemId != null && itemId > 0 && id > 0) {
+          _orderRepository.clearSuppressedOrderItemIds(id, itemId: itemId);
+        } else if (id > 0) {
+          _orderRepository.clearSuppressedOrderItemIds(id);
         }
         _showOptimisticMutationError('annuler l\'article', error);
       },

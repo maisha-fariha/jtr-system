@@ -58,6 +58,14 @@ class OrderRepository {
   /// Orders opened as empty tables — UI must not flash API create-seed lines.
   final Set<int> _emptyShellDisplayOrderIds = <int>{};
 
+  /// Item ids the waiter deleted locally — background GET/enrich must not
+  /// resurrect them until cancel is confirmed (or undo restores them).
+  final Map<int, Set<int>> _suppressedItemIdsByOrderId = <int, Set<int>>{};
+
+  /// Orders with a local delete still in the undo / cancel window. Blocks
+  /// background enrich from adopting a fatter API snapshot.
+  final Set<int> _pendingLocalDeleteOrderIds = <int>{};
+
   /// Monotonic local detail revision. Background enrich that started before a
   /// qty/add mutation must discard its result when this bumps mid-flight.
   final Map<int, int> _detailRevisionByOrderId = <int, int>{};
@@ -163,13 +171,23 @@ class OrderRepository {
         if (keepCached != null) {
           detail = keepCached;
           _forgetEmptyShellDisplay(orderId);
-        } else {
+        } else if (markedEmptyShell) {
+          // Still in create / delete-all empty mode — keep hiding seed.
           _rememberEmptyShellDisplay(orderId);
           final stripLog = StringBuffer(
             '── getOrderDetail: hide+strip create seed order=$orderId ──',
           );
           unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
           detail = OrderMapper.asOpenEmptyOrderShell(detail);
+        } else {
+          // Lock was cleared (optimistic add after delete-all). Do NOT re-lock
+          // on a seed-only GET — that would hide the waiter's new lines.
+          if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+            final stripLog = StringBuffer(
+              '── getOrderDetail: strip seed, keep unlocked order=$orderId ──',
+            );
+            unawaited(_stripCreateSeedInBackground(orderId, detail, stripLog));
+          }
         }
       } else {
         if (markedEmptyShell) {
@@ -244,6 +262,54 @@ class OrderRepository {
   /// Keep table details empty after delete-all (hides create-seed flash).
   void rememberEmptyShellDisplay(int orderId) =>
       _rememberEmptyShellDisplay(orderId);
+
+  /// Suppress deleted line ids so stale GETs cannot flash them back.
+  void suppressOrderItemIds(int orderId, Iterable<int> itemIds) {
+    if (orderId <= 0) return;
+    _pendingLocalDeleteOrderIds.add(orderId);
+    final next =
+        _suppressedItemIdsByOrderId.putIfAbsent(orderId, () => <int>{});
+    for (final id in itemIds) {
+      if (id > 0) next.add(id);
+    }
+  }
+
+  /// Mark a local delete in flight even when the line has no stable item id yet.
+  void markPendingLocalDelete(int orderId) {
+    if (orderId > 0) _pendingLocalDeleteOrderIds.add(orderId);
+  }
+
+  /// Drop suppress for one item (undo) or all items on an order.
+  void clearSuppressedOrderItemIds(int orderId, {int? itemId}) {
+    if (orderId <= 0) return;
+    if (itemId != null) {
+      final set = _suppressedItemIdsByOrderId[orderId];
+      if (set != null) {
+        set.remove(itemId);
+        if (set.isEmpty) {
+          _suppressedItemIdsByOrderId.remove(orderId);
+        }
+      }
+      if (!_suppressedItemIdsByOrderId.containsKey(orderId)) {
+        _pendingLocalDeleteOrderIds.remove(orderId);
+      }
+      return;
+    }
+    _suppressedItemIdsByOrderId.remove(orderId);
+    _pendingLocalDeleteOrderIds.remove(orderId);
+  }
+
+  /// Item ids currently suppressed for [orderId] (delete undo / cancel in flight).
+  Set<int> suppressedItemIdsFor(int orderId) {
+    if (orderId <= 0) return const {};
+    final set = _suppressedItemIdsByOrderId[orderId];
+    if (set == null || set.isEmpty) return const {};
+    return Set<int>.from(set);
+  }
+
+  /// True while a local line delete has not been confirmed/undone yet.
+  bool hasPendingLocalDelete(int orderId) =>
+      orderId > 0 && _pendingLocalDeleteOrderIds.contains(orderId);
 
   /// Current local detail revision for [orderId] (0 if never bumped).
   int detailRevision(int orderId) =>

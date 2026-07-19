@@ -492,6 +492,17 @@ class SessionController extends GetxController {
       return incoming.copyWith(itemCount: previous.itemCount);
     }
 
+    // Local delete in flight: never adopt a fatter API ticket.
+    if (previous.id > 0 &&
+        _orderRepository.hasPendingLocalDelete(previous.id) &&
+        incomingLines > previousLines) {
+      return OrderMapper.mergeLiveOptimisticDetail(
+        server: incoming,
+        live: previous,
+        suppressItemIds: _orderRepository.suppressedItemIdsFor(previous.id),
+      );
+    }
+
     return incoming;
   }
 
@@ -558,13 +569,20 @@ class SessionController extends GetxController {
             );
             // Keep brand-new tables empty until a real line is added — do not
             // clear the lock just because cache still holds the API seed.
+            // If the session already has optimistic lines, lift the lock.
             if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
-              detail = detail.copyWith(
-                products: const [],
-                displayEntries: const [],
-                itemCount: 0,
-                total: OrderMapper.formatPrice('0'),
-              );
+              if (previous != null &&
+                  (previous.products.isNotEmpty ||
+                      previous.displayEntries.isNotEmpty)) {
+                _orderRepository.clearEmptyShellDisplay(summary.id);
+              } else {
+                detail = detail.copyWith(
+                  products: const [],
+                  displayEntries: const [],
+                  itemCount: 0,
+                  total: OrderMapper.formatPrice('0'),
+                );
+              }
             }
           } else {
             detail = await _orderRepository.getOrderDetail(summary.id);
@@ -575,10 +593,14 @@ class SessionController extends GetxController {
               _orderRepository.detailRevision(summary.id)) {
             return;
           }
-          // Allow empty-shell to replace a brief seed flash already in memory.
+          // Empty-shell may replace a brief seed flash — never wipe a ticket
+          // that already shows waiter-added lines (add after delete-all).
           final emptyShellOverride =
               _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
-                  detail.products.isEmpty;
+                  detail.products.isEmpty &&
+                  (previous == null ||
+                      (previous.products.isEmpty &&
+                          previous.displayEntries.isEmpty));
           if (!emptyShellOverride &&
               _wouldDowngradeDetail(detail, previous)) {
             return;
@@ -597,7 +619,8 @@ class SessionController extends GetxController {
   bool _stillInList(int orderId) =>
       orders.any((order) => order.id == orderId);
 
-  /// True when applying [incoming] would erase lines the UI already shows.
+  /// True when applying [incoming] would erase lines the UI already shows,
+  /// or resurrect lines the waiter already deleted (suppress in flight).
   bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
     if (previous == null) return false;
     if (incoming.products.isEmpty && previous.products.isNotEmpty) {
@@ -611,6 +634,13 @@ class SessionController extends GetxController {
     if (incoming.displayEntries.isEmpty &&
         previous.displayEntries.isNotEmpty &&
         previous.products.isNotEmpty) {
+      return true;
+    }
+    // Fatter server snapshot during local delete undo / cancel — keep thinner.
+    if (previous.id > 0 &&
+        _orderRepository.hasPendingLocalDelete(previous.id) &&
+        OrderMapper.productEntryCount(incoming.displayEntries) >
+            OrderMapper.productEntryCount(previous.displayEntries)) {
       return true;
     }
     return false;
@@ -650,16 +680,22 @@ class SessionController extends GetxController {
     var forceReplace = replaceDetail;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
-      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
+      // A forced non-empty replace is a real add after delete-all — lift the lock.
+      if (forceReplace &&
+          (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+        _orderRepository.clearEmptyShellDisplay(order.id);
+      } else if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
         safeOrder = order.copyWith(
           products: const [],
           displayEntries: const [],
           itemCount: 0,
           total: OrderMapper.formatPrice('0'),
         );
+        // PreferDetailed would otherwise keep a seed that already leaked in.
+        forceReplace = true;
+      } else {
+        forceReplace = true;
       }
-      // PreferDetailed would otherwise keep a seed that already leaked in.
-      forceReplace = true;
     }
 
     SessionOrder merged(SessionOrder incoming, SessionOrder previous) {
@@ -830,9 +866,11 @@ class SessionController extends GetxController {
       final freshIdx = orders.indexWhere((order) => order.id == existing.id);
       if (freshIdx >= 0) {
         final live = orders[freshIdx];
+        // Stale GET during delete undo must not flash removed lines back.
         orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
           server: detail,
           live: live,
+          suppressItemIds: _orderRepository.suppressedItemIdsFor(existing.id),
         );
         orders.refresh();
       }

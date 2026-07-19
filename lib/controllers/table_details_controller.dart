@@ -2421,7 +2421,10 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
       apply: (updated) {
-        if (updated.id > 0) orderId = updated.id;
+        if (updated.id > 0) {
+          orderId = updated.id;
+          _orderRepository.rememberEmptyShellDisplay(updated.id);
+        }
         _applySyncedOrder(updated);
       },
       sync: () async {
@@ -2435,7 +2438,10 @@ class TableDetailsController extends GetxController {
           previousDisplayEntries: const [],
           tableNumber: orderNumber,
         );
-        if (updated.id > 0) orderId = updated.id;
+        if (updated.id > 0) {
+          orderId = updated.id;
+          seedOrder = updated;
+        }
         final live = _rawSessionOrder;
         // Waiter already re-added while cancel-all ran — keep those lines.
         if (live != null && live.products.isNotEmpty) {

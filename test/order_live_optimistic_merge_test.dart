@@ -415,7 +415,8 @@ void main() {
     },
   );
 
-  test('writable suivre course skips empty shell after suite delete', () {
+  test('writable suivre reuses empty shell with server id after suite delete',
+      () {
     final detail = <String, dynamic>{
       'id': 1,
       'seat_orders': [
@@ -454,13 +455,13 @@ void main() {
       ],
     };
 
-    // Demande still thinks target is course 2 (divider.courseNumber + 1).
+    // Empty shell with real API id must be reused (not skipped to course 3).
     expect(
       OrderMapper.resolveWritableSuivreCourseNumber(
         detail,
         preferredCourseNumber: 2,
       ),
-      3,
+      2,
     );
 
     final layout = [
@@ -472,12 +473,12 @@ void main() {
       detail,
       layout: layout,
       sectionIndex: 1,
-      targetCourseNumber: 3,
+      targetCourseNumber: 2,
     );
     expect(rebaked.changed, isTrue);
 
     final course1 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 1)!;
-    final course3 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 3)!;
+    final course2 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 2)!;
     expect(
       [
         for (final item in (course1['items'] as List))
@@ -485,14 +486,98 @@ void main() {
       ],
       [1],
     );
-    course3['id'] = 12;
-    course3['status'] = 'to_be_continued';
     expect(
       OrderMapper.extractRequestableCourseIdsForSuivreSection(
         rebaked.detail,
-        courseNumber: 3,
+        courseNumber: 2,
       ),
-      [12],
+      [11],
+    );
+    expect(
+      [
+        for (final item in (course2['items'] as List))
+          if (item is Map && item['status'] != 'cancelled') item,
+      ].length,
+      1,
+    );
+  });
+
+  test('PUT payload omits courses with empty items arrays', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'waiter_id': 5,
+      'number_of_guests': 2,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'A'},
+                  'sub_total': 10,
+                },
+              ],
+            },
+            {
+              'id': 11,
+              'course_number': 2,
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    final payload = OrderMapper.buildOrderUpdatePayload(detail);
+    final seats = payload['seat_orders'] as List;
+    final courses = (seats.first as Map)['courses'] as List;
+    expect(courses.length, 1);
+    expect((courses.first as Map)['course_number'], 1);
+    expect(((courses.first as Map)['items'] as List).isNotEmpty, isTrue);
+  });
+
+  test('writable suivre skips empty shell without server id', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'A'},
+                  'sub_total': 10,
+                },
+              ],
+            },
+            {
+              'id': 0,
+              'course_number': 2,
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(
+      OrderMapper.resolveWritableSuivreCourseNumber(
+        detail,
+        preferredCourseNumber: 2,
+      ),
+      3,
     );
   });
 
@@ -560,7 +645,7 @@ void main() {
     },
   );
 
-  test('append after suite delete skips empty shell course', () {
+  test('append after suite delete reuses empty shell with server id', () {
     final detail = <String, dynamic>{
       'id': 1,
       'seat_orders': [
@@ -597,7 +682,8 @@ void main() {
       detail,
       layoutHints: layout,
     );
-    expect(course.number, 3);
+    expect(course.number, 2);
+    expect(course.id, 11);
   });
 
   test('removeSuivreSectionFromDisplay drops divider and its items', () {

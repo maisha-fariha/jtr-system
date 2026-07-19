@@ -13,11 +13,13 @@ typedef OrderApply = void Function(SessionOrder order);
 ///   loop between jobs so frames can paint.
 /// - While more mutations are queued, intermediate API results are **not**
 ///   applied to the UI (avoids rebuild storms). The last job applies.
-/// - Controllers must keep optimistic UI + suppress/epoch guards so skipping
-///   intermediate applies cannot resurrect deleted lines.
+/// - A generation token drops stale applies so deleted lines do not flash back.
+/// - Applies run inline after yields (no microtask defer) to close the race
+///   where a newer optimistic delete landed before a deferred apply ran.
 class OrderOptimisticSync {
   final Map<int, Future<void>> _queues = {};
   final Map<int, int> _pending = {};
+  final Map<int, int> _generation = {};
 
   void enqueue({
     required int syncKey,
@@ -28,6 +30,7 @@ class OrderOptimisticSync {
     void Function(Object error)? onError,
   }) {
     _pending[syncKey] = (_pending[syncKey] ?? 0) + 1;
+    _generation[syncKey] = (_generation[syncKey] ?? 0) + 1;
 
     final task = (_queues[syncKey] ?? Future<void>.value())
         .catchError((_) {})
@@ -52,7 +55,6 @@ class OrderOptimisticSync {
     required Future<SessionOrder> Function(SessionOrder snapshot) recover,
     void Function(Object error)? onError,
   }) async {
-    // Let the UI process taps/frames before starting network + JSON work.
     await Future<void>.delayed(Duration.zero);
 
     SessionOrder? reconciled;
@@ -63,7 +65,6 @@ class OrderOptimisticSync {
       error = e;
     }
 
-    // Yield again before touching GetX/UI state.
     await Future<void>.delayed(Duration.zero);
 
     final remaining = (_pending[syncKey] ?? 1) - 1;
@@ -73,56 +74,60 @@ class OrderOptimisticSync {
       _pending[syncKey] = remaining;
     }
 
+    final applyGeneration = _generation[syncKey] ?? 0;
+
     if (error != null) {
-      // Only the last mutation recovers the UI.
       if (remaining <= 0) {
         try {
           final recovered = await recover(snapshot);
-          _applyAsync(apply, recovered);
+          _safeApply(
+            syncKey: syncKey,
+            applyGeneration: applyGeneration,
+            apply: apply,
+            order: recovered,
+          );
         } catch (_) {
-          _applyAsync(apply, snapshot);
+          // Never apply the pre-delete snapshot — that resurrects lines.
         }
       }
       onError?.call(error);
       return;
     }
 
-    // Skip intermediate applies while more work is queued — prevents ANR from
-    // rapid add/delete rebuild storms. The final job applies once.
     if (remaining > 0) return;
 
     if (reconciled != null) {
-      _applyAsync(apply, reconciled);
+      _safeApply(
+        syncKey: syncKey,
+        applyGeneration: applyGeneration,
+        apply: apply,
+        order: reconciled,
+      );
     }
   }
 
-  /// Apply on a later event-loop turn so the current call stack can finish
-  /// painting / handling input first.
-  void _applyAsync(OrderApply apply, SessionOrder order) {
-    scheduleMicrotask(() {
-      try {
-        apply(order);
-      } catch (_) {
-        // Never let a bad apply crash the sync queue.
-      }
-    });
+  void _safeApply({
+    required int syncKey,
+    required int applyGeneration,
+    required OrderApply apply,
+    required SessionOrder order,
+  }) {
+    if ((_pending[syncKey] ?? 0) > 0) return;
+    if ((_generation[syncKey] ?? 0) != applyGeneration) return;
+    try {
+      apply(order);
+    } catch (_) {}
   }
 
   bool hasPending(int syncKey) => (_pending[syncKey] ?? 0) > 0;
 
-  /// Waits until every queued mutation for [syncKey] has finished (and its
-  /// microtask apply has been scheduled). Used before kitchen send so a
-  /// still-in-flight batch add cannot land after DEMANDÉE.
   Future<void> waitUntilIdle(int syncKey) async {
     final pending = _queues[syncKey];
     if (pending != null) {
       try {
         await pending;
-      } catch (_) {
-        // Queue errors are handled inside the runner; idle is what matters.
-      }
+      } catch (_) {}
     }
-    // Let the final scheduleMicrotask apply run before callers read live UI.
     await Future<void>.delayed(Duration.zero);
     await Future<void>.delayed(Duration.zero);
   }

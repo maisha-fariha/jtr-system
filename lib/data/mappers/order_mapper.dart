@@ -2879,8 +2879,9 @@ class OrderMapper {
   /// Course that can receive new suite lines / a Demande.
   ///
   /// After delete-suite the old follow-up course often remains as an **empty
-  /// shell**. Reusing it makes Demande report "aucun article". Skip empty
-  /// shells and open the next free course number.
+  /// shell**. Prefer reusing a shell that still has a real server `id` so adds /
+  /// Demande land on it — skipping it created a second empty course and Laravel
+  /// rejected the PUT (`courses.N.items field is required`).
   static int resolveWritableSuivreCourseNumber(
     Map<String, dynamic> detail, {
     required int preferredCourseNumber,
@@ -2892,7 +2893,10 @@ class OrderMapper {
     final existing = findCourseInOrderDetail(detail, preferredCourseNumber);
     if (existing == null) return preferredCourseNumber;
 
+    final serverId = (existing['id'] as num?)?.toInt() ?? 0;
     if (_visibleItemCountInCourse(existing) <= 0) {
+      // Reuse empty shell with a real API id (place items / rebake onto it).
+      if (serverId > 0) return preferredCourseNumber;
       return maxCourseNumberInDetail(detail) + 1;
     }
     if (_courseWasRequestedToKitchen(existing) &&
@@ -3028,9 +3032,12 @@ class OrderMapper {
 
   /// Cancel suite lines and recreate them on [targetCourseNumber].
   ///
-  /// Needed after delete-suite: UI shows items under À SUIVRE but the API still
-  /// has them on course 1 while Demande targets an empty follow-up shell.
-  /// Moving rows is unreliable; cancel + re-add matches the normal add path.
+  /// Needed when the UI shows items under À SUIVRE but the API still has them
+  /// on course 1 while Demande targets an empty follow-up shell.
+  ///
+  /// Matching is **count-based** (first N stay above, next M move) — never
+  /// name-match, or duplicate products above/below À SUIVRE steal the wrong
+  /// rows and Demande still sees an empty shell.
   static ({Map<String, dynamic> detail, bool changed})
       rebakeSuivreSectionOntoCourse(
     Map<String, dynamic> orderDetail, {
@@ -3053,31 +3060,99 @@ class OrderMapper {
 
     final working = copyOrderDetail(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
-    final remaining = _visibleItemsWithCourseNumbers(
+    final allVisible = _visibleItemsWithCourseNumbers(
       working,
       seatNumber: seatNumber,
     );
+    if (allVisible.isEmpty) return (detail: working, changed: false);
+
+    // Pin "above" by item id first, then fill remaining above slots from the
+    // front of the pool (stable ticket order). No name matching.
+    final pool = List<({Map<String, dynamic> item, int courseNumber})>.from(
+      allVisible,
+    );
+    var pinnedAbove = 0;
     for (final entry in above) {
-      _takeMatchedOrderItem(remaining, entry);
+      final id = entry.itemId ?? 0;
+      if (id <= 0) continue;
+      final idx = pool.indexWhere(
+        (row) => (row.item['id'] as num?)?.toInt() == id,
+      );
+      if (idx < 0) continue;
+      pool.removeAt(idx);
+      pinnedAbove++;
+    }
+    while (pinnedAbove < above.length && pool.isNotEmpty) {
+      pool.removeAt(0);
+      pinnedAbove++;
     }
 
+    // Suite rows: id match against [under], then take from the front of pool.
     final recipes = <Map<String, dynamic>>[];
     final cancelIds = <int>{};
-    for (final entry in under) {
-      final match = _takeMatchedOrderItem(remaining, entry);
-      if (match == null) continue;
-      if (match.courseNumber == targetCourseNumber) continue;
+    final targetHasServerId = () {
+      final course = findCourseInOrderDetail(working, targetCourseNumber);
+      return course != null && (_courseRecordId(course) ?? 0) > 0;
+    }();
+
+    void consider(({Map<String, dynamic> item, int courseNumber}) match) {
+      if (match.courseNumber == targetCourseNumber && targetHasServerId) {
+        return;
+      }
       final id = (match.item['id'] as num?)?.toInt() ?? 0;
       if (id > 0) cancelIds.add(id);
-      recipes.add(match.item);
+      recipes.add(Map<String, dynamic>.from(match.item));
     }
+
+    for (final entry in under) {
+      final id = entry.itemId ?? 0;
+      if (id <= 0) continue;
+      final idx = pool.indexWhere(
+        (row) => (row.item['id'] as num?)?.toInt() == id,
+      );
+      if (idx < 0) continue;
+      consider(pool.removeAt(idx));
+    }
+    while (recipes.length < under.length && pool.isNotEmpty) {
+      consider(pool.removeAt(0));
+    }
+
     if (recipes.isEmpty) return (detail: working, changed: false);
 
     for (final id in cancelIds) {
       cancelOrderLineByItemId(working, id);
     }
 
-    final targetCourse = findCourseInOrderDetail(working, targetCourseNumber);
+    // Ensure target course exists and can accept new lines (re-open empty
+    // previously-demanded shells).
+    var targetCourse = findCourseInOrderDetail(working, targetCourseNumber);
+    if (targetCourse == null) {
+      final seatOrders = working['seat_orders'];
+      if (seatOrders is List) {
+        for (final seat in seatOrders) {
+          if (seat is! Map<String, dynamic>) continue;
+          if ((seat['seat_number'] as num?)?.toInt() != seatNumber) continue;
+          final courses = seat['courses'];
+          final list = courses is List
+              ? courses.whereType<Map<String, dynamic>>().toList()
+              : <Map<String, dynamic>>[];
+          list.add({
+            'id': 0,
+            'course_number': targetCourseNumber,
+            'seat_number': seatNumber,
+            'status': 'to_be_continued',
+            'items': <dynamic>[],
+          });
+          seat['courses'] = list;
+          break;
+        }
+      }
+      targetCourse = findCourseInOrderDetail(working, targetCourseNumber);
+    } else {
+      targetCourse['status'] = 'to_be_continued';
+      targetCourse.remove('requested_at');
+    }
+
     final targetCourseId =
         targetCourse == null ? 0 : (_courseRecordId(targetCourse) ?? 0);
 
@@ -5243,13 +5318,22 @@ class OrderMapper {
   ) {
     final copy = Map<String, dynamic>.from(seat);
     final courses = seat['courses'];
+    // Laravel: `courses.*.items` is `required` — empty `[]` fails validation.
+    // Drop empty course shells (typical leftover after delete À SUIVRE).
     copy['courses'] = courses is List
         ? courses
             .whereType<Map<String, dynamic>>()
             .map(_sanitizeCourseForUpdate)
+            .where(_coursePayloadHasItems)
             .toList()
         : <dynamic>[];
     return copy;
+  }
+
+  /// True when a sanitized course still has an `items` list Laravel will accept.
+  static bool _coursePayloadHasItems(Map<String, dynamic> course) {
+    final items = course['items'];
+    return items is List && items.isNotEmpty;
   }
 
   static Map<String, dynamic> _sanitizeCourseForUpdate(
@@ -5262,6 +5346,7 @@ class OrderMapper {
       copy['id'] = 0;
     }
     final items = course['items'];
+    // Always emit `items` as a list (never omit the key on kept courses).
     copy['items'] = items is List
         ? items
             .whereType<Map<String, dynamic>>()

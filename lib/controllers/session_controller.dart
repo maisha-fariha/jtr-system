@@ -671,8 +671,7 @@ class SessionController extends GetxController {
         return incoming;
       }
       // Forced replace is the new local truth — only restore À SUIVRE the
-      // mutation accidentally dropped. Do not undo À SUIVRE → DEMANDÉE after
-      // send-all / kitchen request.
+      // mutation accidentally dropped. Never undo a kitchen DEMANDÉE.
       final incomingSuivre =
           OrderMapper.suivreSeparatorCount(incoming.displayEntries);
       final previousSuivre =
@@ -681,8 +680,11 @@ class SessionController extends GetxController {
           OrderMapper.sectionDividerCount(incoming.displayEntries);
       final previousDividers =
           OrderMapper.sectionDividerCount(previous.displayEntries);
+      final incomingDemande =
+          OrderMapper.demandeSeparatorCount(incoming.displayEntries);
       if (previousSuivre > incomingSuivre &&
           previousDividers > incomingDividers &&
+          incomingDemande == 0 &&
           incoming.products.isNotEmpty) {
         return incoming.copyWith(
           displayEntries: OrderMapper.reconcileSuivreDisplay(

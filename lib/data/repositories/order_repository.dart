@@ -116,6 +116,7 @@ class OrderRepository {
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,
+    bool applyKitchenDemande = false,
   }) async {
     final online = await _connectivity.isOnline;
     final seedId = await _resolveSeedProductIdForDisplay();
@@ -201,6 +202,7 @@ class OrderRepository {
         previousDisplayEntries: layoutHints,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
+        applyKitchenDemande: applyKitchenDemande,
       );
 
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
@@ -223,6 +225,7 @@ class OrderRepository {
         previousDisplayEntries: layoutHints,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
+        applyKitchenDemande: applyKitchenDemande,
       );
     }
 
@@ -1124,6 +1127,7 @@ class OrderRepository {
     return getOrderDetail(
       orderId,
       previousDisplayEntries: previousDisplayEntries,
+      applyKitchenDemande: true,
     );
   }
 
@@ -1156,6 +1160,7 @@ class OrderRepository {
     return getOrderDetail(
       orderId,
       previousDisplayEntries: previousDisplayEntries,
+      applyKitchenDemande: true,
     );
   }
 
@@ -2493,13 +2498,13 @@ class OrderRepository {
       await _local.saveOrderDetail(orderId, detail);
     }
 
-    final displayEntries = OrderMapper.applyDemandeSeparatorsFromApi(
-      detail,
-      trimmedDisplay,
+    // Keep the waiter-trimmed layout (À SUIVRE already removed).
+    final base = OrderMapper.fromOrderDetail(detail);
+    final displayEntries = OrderMapper.applyTrimmedSuivreLayout(
+      products: base.products,
+      trimmedLayout: trimmedDisplay,
     );
-    final order = OrderMapper.fromOrderDetail(detail).copyWith(
-      displayEntries: displayEntries,
-    );
+    final order = base.copyWith(displayEntries: displayEntries);
 
     await _persistSuivreLayoutHints(orderId, displayEntries);
     return order;
@@ -3235,9 +3240,11 @@ class OrderRepository {
       print(lastKitchenSendLog);
       debugPrint(lastKitchenSendLog!);
 
-      // Map DEMANDÉE from API; persist layout so Hive suivre hints cannot
-      // resurrect À SUIVRE after send-all.
-      final order = OrderMapper.fromOrderDetail(updated);
+      // Explicit Envoyer — allow À SUIVRE → DEMANDÉE from kitchen timestamps.
+      final order = OrderMapper.fromOrderDetail(
+        updated,
+        applyKitchenDemande: true,
+      );
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
       await _sessionLocal.upsertOpenOrderInList(updated);
       return order;

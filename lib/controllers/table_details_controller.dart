@@ -1027,7 +1027,13 @@ class TableDetailsController extends GetxController {
         isAddingProduct.value = true;
         try {
           final updated = await _orderRepository.requestAllCourses(id);
-          _syncOrderInSession(updated, orderNumber);
+          selectedSuivreSection.value = null;
+          // Use kitchen-mapped layout (DEMANDÉE) as the only display source.
+          _syncOrderInSession(
+            updated,
+            orderNumber,
+            displayEntriesOverride: updated.displayEntries,
+          );
           // requestAllCourses already prints the raw request/response log,
           // but we mirror it here so it is visible even if logs are filtered.
           if (_orderRepository.lastKitchenSendLog != null) {
@@ -1182,11 +1188,13 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    final beforeCount =
-        OrderMapper.suivreSeparatorCount(currentOrder.displayEntries);
-    final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(
+    // Drop empty À SUIVRE ghosts left after delete/sync so create adds exactly one.
+    final cleaned = OrderMapper.stripEmptySuivreSectionsForCreate(
       currentOrder.displayEntries,
     );
+
+    final beforeCount = OrderMapper.suivreSeparatorCount(cleaned);
+    final displayEntries = OrderMapper.appendSuivreSeparatorAfterRequest(cleaned);
     final afterCount = OrderMapper.suivreSeparatorCount(displayEntries);
 
     if (afterCount <= beforeCount) {
@@ -1292,11 +1300,16 @@ class TableDetailsController extends GetxController {
             courseNumber: demandeCourseNumber,
             previousDisplayEntries: orderSnapshot?.displayEntries,
           );
-          _syncOrderInSession(updated, orderNumber);
-          await _refreshOrder();
           if (selectedSuivreSection.value == sectionIndex) {
             selectedSuivreSection.value = null;
           }
+          // Kitchen response already has DEMANDÉE — do not refresh over it with
+          // stale À SUIVRE layout hints.
+          _syncOrderInSession(
+            updated,
+            orderNumber,
+            displayEntriesOverride: updated.displayEntries,
+          );
           AppSnackbar.show(
             'Demande envoyée',
             'Le service a été envoyé en cuisine.',
@@ -1557,7 +1570,12 @@ class TableDetailsController extends GetxController {
       suivreSectionCount: suivreCount,
       suivreSplitHints: suivreSplits,
     );
-    _syncOrderInSession(predicted, orderNumber);
+    // Keep predicted layout (incl. À SUIVRE) as the sync source of truth.
+    _syncOrderInSession(
+      predicted,
+      orderNumber,
+      displayEntriesOverride: predicted.displayEntries,
+    );
   }
 
   void _applyAddComposedProductToUi({
@@ -1591,7 +1609,11 @@ class TableDetailsController extends GetxController {
       suivreSplitHints: suivreSplits,
       layoutHints: hints,
     );
-    _syncOrderInSession(predicted, orderNumber);
+    _syncOrderInSession(
+      predicted,
+      orderNumber,
+      displayEntriesOverride: predicted.displayEntries,
+    );
     if (predicted.products.isNotEmpty) {
       final newLineIndex = predicted.products.length - 1;
       expandedMenuLineIndices.add(newLineIndex);
@@ -1866,37 +1888,65 @@ class TableDetailsController extends GetxController {
 
     collapsedSuivreSections.remove(sectionIndex);
     collapsedSuivreSections.refresh();
+    if (selectedSuivreSection.value == sectionIndex) {
+      selectedSuivreSection.value = null;
+    }
     suivreUiRevision.value++;
     if (selectedOrderLineIndex.value != null &&
         lineIndices.contains(selectedOrderLineIndex.value)) {
       selectedOrderLineIndex.value = null;
     }
 
+    // Optimistic: remove items + the À SUIVRE row immediately.
+    final optimisticProducts = [
+      for (final entry in trimmedDisplay)
+        if (entry.type == OrderDisplayEntryType.product && entry.product != null)
+          entry.product!,
+    ];
+    _syncOrderInSession(
+      currentOrder.copyWith(
+        products: optimisticProducts,
+        displayEntries: trimmedDisplay,
+        itemCount: optimisticProducts.length,
+        total: optimisticProducts.isEmpty
+            ? OrderMapper.formatPrice('0')
+            : currentOrder.total,
+      ),
+      orderNumber,
+      displayEntriesOverride: trimmedDisplay,
+    );
+
     isAddingProduct.value = true;
     try {
+      SessionOrder updated;
       if (lineIndices.isNotEmpty) {
-        final updated = await _orderRepository.cancelOrderLinesAtIndices(
+        updated = await _orderRepository.cancelOrderLinesAtIndices(
           orderId: id,
           lineIndices: lineIndices,
           previousDisplayEntries: trimmedDisplay,
         );
-        if (updated.id > 0) orderId = updated.id;
-        _syncOrderInSession(
-          updated,
-          orderNumber,
-          displayEntriesOverride: updated.displayEntries,
+      } else {
+        updated = await _orderRepository.syncDisplayFromTrimmedLayout(
+          id,
+          trimmedDisplay: trimmedDisplay,
         );
-        return;
       }
+      if (updated.id > 0) orderId = updated.id;
 
-      final refreshed = await _orderRepository.syncDisplayFromTrimmedLayout(
-        id,
-        trimmedDisplay: trimmedDisplay,
+      // Force trimmed layout — empty API follow-up courses must not resurrect
+      // the deleted À SUIVRE row.
+      final cleanedDisplay = OrderMapper.applyTrimmedSuivreLayout(
+        products: updated.products,
+        trimmedLayout: trimmedDisplay,
       );
+      await _orderRepository.persistSuivreLayoutHints(id, cleanedDisplay);
       _syncOrderInSession(
-        refreshed,
+        updated.copyWith(
+          displayEntries: cleanedDisplay,
+          itemCount: updated.products.length,
+        ),
         orderNumber,
-        displayEntriesOverride: refreshed.displayEntries,
+        displayEntriesOverride: cleanedDisplay,
       );
     } on ApiException catch (e) {
       debugPrint(_orderRepository.lastAddItemLog);

@@ -155,7 +155,7 @@ void main() {
     expect(merged.total, '0,00 €');
   });
 
-  test('reconcile does not restore À SUIVRE over DEMANDÉE after send-all', () {
+  test('reconcile keeps pending À SUIVRE over false DEMANDÉE from add sync', () {
     final previous = [
       _product(0, 'A', itemId: 1),
       _product(1, 'B', itemId: 2),
@@ -163,7 +163,7 @@ void main() {
       _product(2, 'C', itemId: 3),
       _product(3, 'D', itemId: 4),
     ];
-    final afterSend = [
+    final afterAdd = [
       _product(0, 'A', itemId: 1),
       _product(1, 'B', itemId: 2),
       const OrderDisplayEntry.demande(
@@ -177,18 +177,14 @@ void main() {
 
     final reconciled = OrderMapper.reconcileSuivreDisplay(
       previous: previous,
-      next: afterSend,
+      next: afterAdd,
     );
 
-    expect(OrderMapper.demandeSeparatorCount(reconciled), 1);
-    expect(OrderMapper.suivreSeparatorCount(reconciled), 0);
-    expect(
-      reconciled.any((e) => e.type == OrderDisplayEntryType.demandeSeparator),
-      isTrue,
-    );
+    expect(OrderMapper.suivreSeparatorCount(reconciled), 1);
+    expect(OrderMapper.demandeSeparatorCount(reconciled), 0);
   });
 
-  test('merge prefers DEMANDÉE from server over live À SUIVRE', () {
+  test('merge keeps live À SUIVRE when add sync returns DEMANDÉE', () {
     final live = _order(
       display: [
         _product(0, 'A', itemId: 1),
@@ -213,7 +209,523 @@ void main() {
       live: live,
     );
 
-    expect(OrderMapper.demandeSeparatorCount(merged.displayEntries), 1);
-    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 0);
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 1);
+    expect(OrderMapper.demandeSeparatorCount(merged.displayEntries), 0);
+  });
+
+  test('applyDemande converts only on explicit kitchen send', () {
+    final pending = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+    ];
+    final detail = <String, dynamic>{
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {'id': 1, 'qty': 1, 'status': 'active'},
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {'id': 2, 'qty': 1, 'status': 'active'},
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final onAdd = OrderMapper.applyDemandeSeparatorsFromApi(
+      detail,
+      pending,
+      preservePendingSuivreFrom: pending,
+    );
+    expect(OrderMapper.suivreSeparatorCount(onAdd), 1);
+    expect(OrderMapper.demandeSeparatorCount(onAdd), 0);
+
+    final onKitchen = OrderMapper.applyDemandeSeparatorsFromApi(
+      detail,
+      pending,
+      preservePendingSuivreFrom: pending,
+      applyKitchenDemande: true,
+    );
+    expect(OrderMapper.demandeSeparatorCount(onKitchen), 1);
+    expect(OrderMapper.suivreSeparatorCount(onKitchen), 0);
+  });
+
+  test('finalize after kitchen send keeps DEMANDÉE (no revert to À SUIVRE)', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+    ];
+    final detail = <String, dynamic>{
+      'id': 1,
+      'table': {'table_number': 1},
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 10, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 11, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: previous,
+      suivreCountHint: 1,
+      applyKitchenDemande: true,
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(entries), 1);
+    expect(OrderMapper.suivreSeparatorCount(entries), 0);
+  });
+
+  test('removeSuivreSectionFromDisplay drops divider and its items', () {
+    final entries = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+
+    final trimmed = OrderMapper.removeSuivreSectionFromDisplay(entries, 1);
+
+    expect(OrderMapper.suivreSeparatorCount(trimmed), 0);
+    expect(
+      [
+        for (final e in trimmed)
+          if (e.type == OrderDisplayEntryType.product) e.itemId,
+      ],
+      [1],
+    );
+  });
+
+  test('applyTrimmedSuivreLayout preserves DEMANDÉE when later suite removed', () {
+    final trimmed = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+      _product(1, 'B', itemId: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+    final products = [
+      for (final e in trimmed)
+        if (e.type == OrderDisplayEntryType.product && e.product != null)
+          e.product!,
+    ];
+
+    final rebuilt = OrderMapper.applyTrimmedSuivreLayout(
+      products: products,
+      trimmedLayout: trimmed,
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(rebuilt), 1);
+    expect(OrderMapper.suivreSeparatorCount(rebuilt), 0);
+    expect(rebuilt[1].type, OrderDisplayEntryType.demandeSeparator);
+  });
+
+  test('append course stays in suite for optimistic product without courseNumber', () {
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 1,
+        // courseNumber intentionally null (optimistic)
+      ),
+    ];
+
+    expect(OrderMapper.resolveAppendCourseNumberFromLayout(layout), 2);
+  });
+
+  test('empty API follow-up course does not auto-insert À SUIVRE', () {
+    final detail = <String, dynamic>{
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'sub_total': 5,
+                  'status': 'to_be_continued',
+                  'product': {'id': 10, 'name': 'A'},
+                },
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'sub_total': 5,
+                  'status': 'to_be_continued',
+                  'product': {'id': 11, 'name': 'B'},
+                },
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'sub_total': 5,
+                  'status': 'to_be_continued',
+                  'product': {'id': 12, 'name': 'C'},
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.extractOrderDisplayEntries(detail);
+    expect(OrderMapper.sectionDividerCount(entries), 0);
+    expect(
+      [
+        for (final e in entries)
+          if (e.type == OrderDisplayEntryType.product) e.product!.name,
+      ],
+      ['A', 'B', 'C'],
+    );
+  });
+
+  test('pin keeps pre-suivre items above when API moves them to course 2', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      _product(2, 'C', itemId: 3),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'D', price: '5'),
+        lineIndex: 3,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 4,
+      ),
+    ];
+    // API wrongly put B+C into course 2 with D.
+    final next = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 2,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'C', price: '5'),
+        lineIndex: 2,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 3,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'D', price: '5'),
+        lineIndex: 3,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 4,
+      ),
+    ];
+
+    final pinned = OrderMapper.pinProductsRelativeToDividers(
+      previous: previous,
+      next: next,
+    );
+
+    final before = <String>[];
+    final after = <String>[];
+    var seenDivider = false;
+    for (final e in pinned) {
+      if (e.isSectionDivider) {
+        seenDivider = true;
+        continue;
+      }
+      if (e.product == null) continue;
+      (seenDivider ? after : before).add(e.product!.name);
+    }
+    expect(before, ['A', 'B', 'C']);
+    expect(after, ['D']);
+  });
+
+  test('pin keeps pre-suivre items above when optimistic itemId is 0', () {
+    final previous = [
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'A', price: '5'),
+        lineIndex: 0,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 0,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 0,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'C', price: '5'),
+        lineIndex: 2,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 0,
+      ),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+    ];
+    // Sync put everything under À SUIVRE (leading divider).
+    final next = [
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'A', price: '5'),
+        lineIndex: 0,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 10,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 11,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'C', price: '5'),
+        lineIndex: 2,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 12,
+      ),
+    ];
+
+    final pinned = OrderMapper.pinProductsRelativeToDividers(
+      previous: previous,
+      next: next,
+    );
+
+    expect(pinned.first.isSectionDivider, isFalse);
+    final before = <String>[];
+    final after = <String>[];
+    var seenDivider = false;
+    for (final e in pinned) {
+      if (e.isSectionDivider) {
+        seenDivider = true;
+        continue;
+      }
+      if (e.product == null) continue;
+      (seenDivider ? after : before).add(e.product!.name);
+    }
+    expect(before, ['A', 'B', 'C']);
+    expect(after, isEmpty);
+    expect(OrderMapper.suivreSeparatorCount(pinned), 1);
+  });
+
+  test('create suivre then reconcile keeps items above empty suite', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      _product(2, 'C', itemId: 3),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+    ];
+    final next = [
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(0, 'A', itemId: 1),
+      _product(1, 'B', itemId: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+
+    final reconciled = OrderMapper.reconcileSuivreDisplay(
+      previous: previous,
+      next: next,
+    );
+
+    expect(reconciled.first.isSectionDivider, isFalse);
+    expect(
+      [
+        for (final e in reconciled)
+          if (e.type == OrderDisplayEntryType.product) e.product!.name,
+      ],
+      ['A', 'B', 'C'],
+    );
+    expect(reconciled.last.type, OrderDisplayEntryType.suivreSeparator);
+  });
+
+  test('append course stays under DEMANDÉE after kitchen send', () {
+    final withItemsUnder = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 1,
+        courseNumber: 2,
+        itemId: 2,
+      ),
+    ];
+    expect(OrderMapper.resolveAppendCourseNumberFromLayout(withItemsUnder), 2);
+
+    final trailingDemande = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+    ];
+    expect(OrderMapper.resolveAppendCourseNumberFromLayout(trailingDemande), 2);
+  });
+
+  test('reconcile does not resurrect deleted À SUIVRE from API', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+    ];
+    final next = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+      _product(2, 'C', itemId: 3),
+      const OrderDisplayEntry.suivre(sectionIndex: 3, courseNumber: 3),
+      _product(3, 'D', itemId: 4),
+    ];
+
+    final reconciled = OrderMapper.reconcileSuivreDisplay(
+      previous: previous,
+      next: next,
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(reconciled), 1);
+    expect(OrderMapper.demandeSeparatorCount(reconciled), 1);
+  });
+
+  test('create suite after DEMANDÉE adds exactly one À SUIVRE', () {
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '12:00:00',
+      ),
+      _product(1, 'B', itemId: 2),
+      // Ghost empty À SUIVRE left after delete/sync
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+    ];
+
+    final cleaned = OrderMapper.stripEmptySuivreSectionsForCreate(layout);
+    expect(OrderMapper.suivreSeparatorCount(cleaned), 0);
+
+    final created = OrderMapper.appendSuivreSeparatorAfterRequest(cleaned);
+    expect(OrderMapper.suivreSeparatorCount(created), 1);
+    expect(created.last.type, OrderDisplayEntryType.suivreSeparator);
+  });
+
+  test('predict add after suivre keeps first items above divider', () {
+    final layout = [
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'A', price: '5'),
+        lineIndex: 0,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 1,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'B', price: '5'),
+        lineIndex: 1,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 2,
+      ),
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'C', price: '5'),
+        lineIndex: 2,
+        sectionIndex: 0,
+        courseNumber: 1,
+        itemId: 3,
+      ),
+    ];
+    final withSuivre = OrderMapper.appendSuivreSeparatorAfterRequest(layout);
+    final current = _order(display: withSuivre);
+
+    final predicted = OrderMapper.predictAfterAppendSimpleProduct(
+      current: current,
+      productId: 99,
+      productName: 'D',
+      unitPrice: 5,
+      suivreSectionCount: OrderMapper.suivreSeparatorCount(withSuivre),
+      suivreSplitHints: OrderMapper.suivreSplitPositions(withSuivre),
+    );
+
+    final before = <String>[];
+    final after = <String>[];
+    var seenDivider = false;
+    for (final e in predicted.displayEntries) {
+      if (e.isSectionDivider) {
+        seenDivider = true;
+        continue;
+      }
+      if (e.product == null) continue;
+      (seenDivider ? after : before).add(e.product!.name);
+    }
+    expect(before, ['A', 'B', 'C']);
+    expect(after, ['D']);
   });
 }

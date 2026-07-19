@@ -224,6 +224,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _lastRowKey = GlobalKey();
   int _lastProductCount = -1;
+  int _lastDisplayRowCount = -1;
   String? _lastUndoLabel;
 
   TableDetailsController get controller => Get.find<TableDetailsController>();
@@ -240,19 +241,24 @@ class _OrderSummaryState extends State<_OrderSummary> {
     final lineCount = order.displayEntries
         .where((entry) => entry.type == OrderDisplayEntryType.product)
         .length;
+    final rowCount = order.displayEntries.length;
 
     if (_lastProductCount < 0) {
       _lastProductCount = lineCount;
+      _lastDisplayRowCount = rowCount;
       return;
     }
 
-    if (lineCount <= _lastProductCount) {
-      _lastProductCount = lineCount;
-      return;
-    }
+    // Scroll on new product, or when À SUIVRE is created (rows grow, products don't).
+    final shouldScroll =
+        lineCount > _lastProductCount || rowCount > _lastDisplayRowCount;
 
     _lastProductCount = lineCount;
-    _scrollToLastRow();
+    _lastDisplayRowCount = rowCount;
+
+    if (shouldScroll) {
+      _scrollToLastRow();
+    }
   }
 
   /// Undo banner steals vertical space from the list; keep the last line in view.

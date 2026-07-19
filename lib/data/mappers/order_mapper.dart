@@ -248,6 +248,7 @@ class OrderMapper {
     Map<String, dynamic> orderDetail,
   ) {
     final copy = withAllCourseItemsCleared(orderDetail);
+    ensureMinimalSeatCourseStructure(copy);
     copy['status'] = preserveOpenOrderStatus(orderDetail);
     copy['payment_status'] = 'not_paid';
     copy['payment_status_detailed'] = 'not_paid';
@@ -257,6 +258,42 @@ class OrderMapper {
     copy['total_tva'] = copy['total_tva'] ?? '0';
     copy['total_paid'] = '0';
     return copy;
+  }
+
+  /// Guarantees seat 1 / course 1 exist so re-add after delete-all can PUT.
+  static void ensureMinimalSeatCourseStructure(Map<String, dynamic> detail) {
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List || seatOrders.isEmpty) {
+      detail['seat_orders'] = [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 0,
+              'course_number': 1,
+              'seat_number': 1,
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ];
+      return;
+    }
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is List && courses.isNotEmpty) return;
+      seat['courses'] = [
+        {
+          'id': 0,
+          'course_number': 1,
+          'seat_number': (seat['seat_number'] as num?)?.toInt() ?? 1,
+          'items': <dynamic>[],
+        },
+      ];
+      return;
+    }
   }
 
   /// Session / table-details presentation: hide create-seed-only tickets.
@@ -1018,14 +1055,9 @@ class OrderMapper {
             courseIndex > 0 || courseNumber > firstCourseNumber;
         var activeSection = 0;
 
-        if (isFollowUpCourse && visibleItems.isEmpty) {
-          continue;
-        }
-
-        // Only real API follow-up courses get À SUIVRE — never mid-course
-        // splits on course_id / to_be_continued (menu after softs used to
-        // inject a fake divider even when the waiter never opened suivre).
-        if (isFollowUpCourse && visibleItems.isNotEmpty) {
+        // Real API follow-up courses get À SUIVRE — including empty ones so a
+        // freshly opened suite still shows after reopen / sync.
+        if (isFollowUpCourse) {
           suivreSectionIndex++;
           activeSection = suivreSectionIndex;
           final demandCourseNumber = courseIndex > 0
@@ -1037,6 +1069,9 @@ class OrderMapper {
             sectionIndex: activeSection,
             courseNumber: demandCourseNumber,
           );
+          if (visibleItems.isEmpty) {
+            continue;
+          }
         }
 
         for (final item in visibleItems) {
@@ -1056,24 +1091,50 @@ class OrderMapper {
     return entries;
   }
 
-  static Map<String, dynamic> buildSeatOrderItemsPostPayload({
-    required int courseNumber,
+  /// One line for `POST …/seat-orders/:seat/items` (API accepts many per call).
+  static Map<String, dynamic> seatOrderItemPayload({
     required int productId,
     required int qty,
     required double subTotal,
     String comment = '',
   }) {
     return {
-      'course_number': courseNumber,
-      'items': [
-        {
-          'product_id': productId,
-          'qty': qty,
-          'sub_total': subTotal,
-          'comment': comment,
-        },
-      ],
+      'product_id': productId,
+      'qty': qty,
+      'sub_total': subTotal,
+      'comment': comment,
     };
+  }
+
+  static Map<String, dynamic> buildSeatOrderItemsPostPayload({
+    required int courseNumber,
+    required List<Map<String, dynamic>> items,
+  }) {
+    return {
+      'course_number': courseNumber,
+      'items': items,
+    };
+  }
+
+  /// Convenience for a single-item POST body.
+  static Map<String, dynamic> buildSeatOrderItemPostPayload({
+    required int courseNumber,
+    required int productId,
+    required int qty,
+    required double subTotal,
+    String comment = '',
+  }) {
+    return buildSeatOrderItemsPostPayload(
+      courseNumber: courseNumber,
+      items: [
+        seatOrderItemPayload(
+          productId: productId,
+          qty: qty,
+          subTotal: subTotal,
+          comment: comment,
+        ),
+      ],
+    );
   }
 
   static List<int> suivreSplitPositions(List<OrderDisplayEntry> entries) {
@@ -1160,6 +1221,208 @@ class OrderMapper {
     }
     final sorted = merged.toList()..sort();
     return sorted;
+  }
+
+  /// Empty layout lists must not suppress Hive suivre hints (treat as absent).
+  static List<OrderDisplayEntry>? coalesceLayoutHints(
+    List<OrderDisplayEntry>? entries,
+  ) {
+    if (entries == null || entries.isEmpty) return null;
+    return entries;
+  }
+
+  static Set<int> productItemIds(List<OrderDisplayEntry> entries) {
+    final ids = <int>{};
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      final id = entry.itemId ?? 0;
+      if (id > 0) ids.add(id);
+    }
+    return ids;
+  }
+
+  static int productEntryCount(List<OrderDisplayEntry> entries) {
+    var count = 0;
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.product) count++;
+    }
+    return count;
+  }
+
+  static bool hasOptimisticProductEntries(List<OrderDisplayEntry> entries) {
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.product &&
+          (entry.itemId ?? 0) <= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static List<OrderDisplayEntry> _reindexDisplayEntries(
+    List<OrderDisplayEntry> entries,
+  ) {
+    var lineIndex = 0;
+    return [
+      for (final entry in entries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!,
+            lineIndex: lineIndex++,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+  }
+
+  /// Merge a server snapshot with the live optimistic ticket so background
+  /// sync cannot flash blank, restore deleted lines, or drop local À SUIVRE.
+  static SessionOrder mergeLiveOptimisticDetail({
+    required SessionOrder server,
+    required SessionOrder? live,
+    Set<int> suppressItemIds = const {},
+  }) {
+    if (live == null) {
+      return _stripSuppressedItems(server, suppressItemIds);
+    }
+
+    // Never replace a non-empty ticket with an empty server flash.
+    if (server.products.isEmpty &&
+        live.products.isNotEmpty &&
+        suppressItemIds.isEmpty) {
+      return live;
+    }
+
+    final liveCount = productEntryCount(live.displayEntries);
+    // Waiter already cleared the ticket (optimistic delete-all). Do not re-adopt
+    // server/create-seed lines while cancelled ids are still suppressed.
+    if (liveCount == 0 && suppressItemIds.isNotEmpty) {
+      return server.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: formatPrice('0'),
+      );
+    }
+
+    final serverCount = productEntryCount(server.displayEntries);
+    final liveSuivre = suivreSeparatorCount(live.displayEntries);
+    final serverSuivre = suivreSeparatorCount(server.displayEntries);
+    final liveAhead = liveCount > serverCount ||
+        liveSuivre > serverSuivre ||
+        hasOptimisticProductEntries(live.displayEntries);
+
+    List<OrderDisplayEntry> display;
+    if (liveAhead) {
+      // Keep the waiter's current view; pull server ids/order where possible.
+      display = live.displayEntries;
+      if (server.displayEntries.isNotEmpty) {
+        display = preservePreviousProductOrder(
+          previous: live.displayEntries,
+          next: reconcileSuivreDisplay(
+            previous: live.displayEntries,
+            next: server.displayEntries,
+          ),
+        );
+        // If server is still missing optimistic lines, fall back to live.
+        if (productEntryCount(display) < liveCount ||
+            suivreSeparatorCount(display) < liveSuivre) {
+          display = live.displayEntries;
+        }
+      }
+    } else if (liveCount < serverCount && liveCount > 0) {
+      // Live deleted some lines the server still returns — keep live's id set.
+      // (liveCount == 0 is a lightweight session row / fresh open: adopt server.)
+      final liveIds = productItemIds(live.displayEntries);
+      display = [
+        for (final entry in server.displayEntries)
+          if (entry.type != OrderDisplayEntryType.product)
+            entry
+          else if ((entry.itemId ?? 0) <= 0 ||
+              liveIds.contains(entry.itemId))
+            entry,
+      ];
+      display = reconcileSuivreDisplay(
+        previous: live.displayEntries,
+        next: display,
+      );
+      if (liveSuivre > suivreSeparatorCount(display)) {
+        display = ensureSuivreSeparatorCount(
+          display,
+          liveSuivre,
+          forceAppend: true,
+        );
+      }
+    } else {
+      display = server.displayEntries;
+      if (live.displayEntries.isNotEmpty) {
+        display = reconcileSuivreDisplay(
+          previous: live.displayEntries,
+          next: display.isEmpty ? live.displayEntries : display,
+        );
+        display = preservePreviousProductOrder(
+          previous: live.displayEntries,
+          next: display,
+        );
+      }
+    }
+
+    if (suppressItemIds.isNotEmpty) {
+      display = [
+        for (final entry in display)
+          if (entry.type != OrderDisplayEntryType.product)
+            entry
+          else if ((entry.itemId ?? 0) <= 0 ||
+              !suppressItemIds.contains(entry.itemId))
+            entry,
+      ];
+    }
+
+    display = _reindexDisplayEntries(display);
+    final products = [
+      for (final entry in display)
+        if (entry.type == OrderDisplayEntryType.product && entry.product != null)
+          entry.product!,
+    ];
+
+    return server.copyWith(
+      products: products,
+      displayEntries: display,
+      itemCount: products.length,
+      total: products.isEmpty
+          ? formatPrice('0')
+          : (server.products.isNotEmpty ? server.total : live.total),
+    );
+  }
+
+  static SessionOrder _stripSuppressedItems(
+    SessionOrder order,
+    Set<int> suppressItemIds,
+  ) {
+    if (suppressItemIds.isEmpty) return order;
+    final display = _reindexDisplayEntries([
+      for (final entry in order.displayEntries)
+        if (entry.type != OrderDisplayEntryType.product)
+          entry
+        else if ((entry.itemId ?? 0) <= 0 ||
+            !suppressItemIds.contains(entry.itemId))
+          entry,
+    ]);
+    final products = [
+      for (final entry in display)
+        if (entry.type == OrderDisplayEntryType.product && entry.product != null)
+          entry.product!,
+    ];
+    return order.copyWith(
+      products: products,
+      displayEntries: display,
+      itemCount: products.length,
+      total: products.isEmpty ? formatPrice('0') : order.total,
+    );
   }
 
   /// Keeps À SUIVRE rows when a refresh returns fewer separators than before.
@@ -3161,6 +3424,36 @@ class OrderMapper {
     return buildOrderUpdatePayload(orderDetail, keepOpenWhenEmpty: true);
   }
 
+  /// Cancels a visible line by backend item id. Returns `false` if already gone.
+  static bool cancelOrderLineByItemId(
+    Map<String, dynamic> orderDetail,
+    int itemId,
+  ) {
+    if (itemId <= 0) return false;
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          final id = (item['id'] as num?)?.toInt() ?? 0;
+          if (id != itemId) continue;
+          item['status'] = 'cancelled';
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   static Map<String, dynamic> adjustLineQuantityAtIndex({
     required Map<String, dynamic> orderDetail,
     required int lineIndex,
@@ -3665,40 +3958,77 @@ class OrderMapper {
     List<int> suivreSplitHints = const [],
     List<OrderDisplayEntry>? layoutHints,
   }) {
-    final working = Map<String, dynamic>.from(orderDetail);
-    final seatNumber = resolveDefaultSeatNumber(working);
-    final course = resolveAppendCourse(
-      working,
-      seatNumber: seatNumber,
+    return appendSimpleItems(
+      orderDetail: orderDetail,
+      items: [
+        (
+          productId: productId,
+          unitPrice: unitPrice,
+          qty: qty,
+          comment: comment,
+        ),
+      ],
       suivreSectionCount: suivreSectionCount,
       suivreSplitHints: suivreSplitHints,
       layoutHints: layoutHints,
     );
-    final itemStatus = _resolveAppendItemStatus(
-      working,
-      seatNumber: seatNumber,
-      courseNumber: course.number,
-    );
+  }
 
-    final newItem = _buildNewItemPayload(
-      seatNumber: seatNumber,
-      courseId: course.id,
-      productId: productId,
-      qty: qty,
-      subTotal: unitPrice * qty,
-      status: itemStatus,
-      comment: comment,
-      forCreate: false,
-    );
+  /// Append many simple lines locally, then build **one** PUT payload.
+  static Map<String, dynamic> appendSimpleItems({
+    required Map<String, dynamic> orderDetail,
+    required List<
+            ({
+              int productId,
+              double unitPrice,
+              int qty,
+              String comment,
+            })>
+        items,
+    int suivreSectionCount = 0,
+    List<int> suivreSplitHints = const [],
+    List<OrderDisplayEntry>? layoutHints,
+  }) {
+    final working = copyOrderDetail(orderDetail);
+    if (items.isEmpty) {
+      return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    }
 
-    _appendItemToSeatOrders(
-      working,
-      seatNumber: seatNumber,
-      courseNumber: course.number,
-      newItem: newItem,
-    );
+    for (final line in items) {
+      final seatNumber = resolveDefaultSeatNumber(working);
+      final course = resolveAppendCourse(
+        working,
+        seatNumber: seatNumber,
+        suivreSectionCount: suivreSectionCount,
+        suivreSplitHints: suivreSplitHints,
+        layoutHints: layoutHints,
+      );
+      final itemStatus = _resolveAppendItemStatus(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: course.number,
+      );
 
-    return buildOrderUpdatePayload(working);
+      final newItem = _buildNewItemPayload(
+        seatNumber: seatNumber,
+        courseId: course.id,
+        productId: line.productId,
+        qty: line.qty,
+        subTotal: line.unitPrice * line.qty,
+        status: itemStatus,
+        comment: line.comment,
+        forCreate: false,
+      );
+
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: course.number,
+        newItem: newItem,
+      );
+    }
+
+    return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
   static Map<String, dynamic> appendComposedItem({

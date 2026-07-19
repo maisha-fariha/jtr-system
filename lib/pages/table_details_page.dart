@@ -224,6 +224,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _lastRowKey = GlobalKey();
   int _lastProductCount = -1;
+  String? _lastUndoLabel;
 
   TableDetailsController get controller => Get.find<TableDetailsController>();
 
@@ -251,6 +252,17 @@ class _OrderSummaryState extends State<_OrderSummary> {
     }
 
     _lastProductCount = lineCount;
+    _scrollToLastRow();
+  }
+
+  /// Undo banner steals vertical space from the list; keep the last line in view.
+  void _scrollWhenUndoBannerAppears(String? undoLabel) {
+    if (undoLabel == null || undoLabel.isEmpty) {
+      _lastUndoLabel = null;
+      return;
+    }
+    if (_lastUndoLabel == undoLabel) return;
+    _lastUndoLabel = undoLabel;
     _scrollToLastRow();
   }
 
@@ -377,8 +389,15 @@ class _OrderSummaryState extends State<_OrderSummary> {
         return const SizedBox.shrink();
       }
 
+      // Drive rebuild + scroll when the undo strip appears (shrinks the list).
+      final undoLabel = controller.undoDeleteLabel.value;
       final rows = _buildVisibleRows(context, resolvedOrder);
       _scrollToLatestItemIfNeeded(resolvedOrder);
+      _scrollWhenUndoBannerAppears(undoLabel);
+
+      final listBottomPad = undoLabel != null && undoLabel.isNotEmpty
+          ? 20.0
+          : 12.0;
 
       return Column(
         children: [
@@ -422,7 +441,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 padding: JtrResponsive.getResponsivePadding(
                   context,
                   horizontal: 20,
-                  bottom: 12,
+                  bottom: listBottomPad,
                 ),
                 itemCount: rows.length,
                 separatorBuilder: (_, _) =>

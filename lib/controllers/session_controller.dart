@@ -433,14 +433,28 @@ class SessionController extends GetxController {
     final incomingDisplay = incoming.displayEntries.length;
     final previousDisplay = previous.displayEntries.length;
 
+    final incomingSuivre =
+        OrderMapper.suivreSeparatorCount(incoming.displayEntries);
+    final previousSuivre =
+        OrderMapper.suivreSeparatorCount(previous.displayEntries);
+
     // Lightweight / stale background rows must not demote a richer ticket.
     final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
         (incomingLines > 0 &&
             previousLines > 0 &&
             incomingLines < previousLines) ||
-        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0);
+        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0) ||
+        (incomingSuivre < previousSuivre && previousLines > 0);
 
     if (incomingThinner) {
+      final keptDisplay = incomingSuivre < previousSuivre &&
+              incoming.products.isNotEmpty &&
+              incoming.products.length >= previous.products.length
+          ? OrderMapper.reconcileSuivreDisplay(
+              previous: previous.displayEntries,
+              next: incoming.displayEntries,
+            )
+          : previous.displayEntries;
       return previous.copyWith(
         impressionCount: incoming.impressionCount,
         impressionColor: incoming.impressionColor,
@@ -455,6 +469,12 @@ class SessionController extends GetxController {
             : (incoming.itemCount > 0
                 ? incoming.itemCount
                 : previous.products.length),
+        products: incoming.products.length >= previous.products.length
+            ? incoming.products
+            : previous.products,
+        displayEntries: keptDisplay.isNotEmpty
+            ? keptDisplay
+            : previous.displayEntries,
       );
     }
 
@@ -635,8 +655,30 @@ class SessionController extends GetxController {
       forceReplace = true;
     }
 
-    SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
-        forceReplace ? incoming : _preferDetailedOrder(incoming, previous);
+    SessionOrder merged(SessionOrder incoming, SessionOrder previous) {
+      if (!forceReplace) {
+        return _preferDetailedOrder(incoming, previous);
+      }
+      // Intentional empty ticket (last line deleted / empty shell).
+      if (incoming.products.isEmpty && incoming.displayEntries.isEmpty) {
+        return incoming;
+      }
+      // Forced replace is the new local truth — only restore À SUIVRE the
+      // mutation accidentally dropped.
+      final incomingSuivre =
+          OrderMapper.suivreSeparatorCount(incoming.displayEntries);
+      final previousSuivre =
+          OrderMapper.suivreSeparatorCount(previous.displayEntries);
+      if (previousSuivre > incomingSuivre && incoming.products.isNotEmpty) {
+        return incoming.copyWith(
+          displayEntries: OrderMapper.reconcileSuivreDisplay(
+            previous: previous.displayEntries,
+            next: incoming.displayEntries,
+          ),
+        );
+      }
+      return incoming;
+    }
 
     if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(
@@ -776,8 +818,11 @@ class SessionController extends GetxController {
 
     try {
       final previous = orders[idx];
-      final layoutHints =
-          previousDisplayEntries ?? previous.displayEntries;
+      // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
+      final layoutHints = OrderMapper.coalesceLayoutHints(
+            previousDisplayEntries,
+          ) ??
+          OrderMapper.coalesceLayoutHints(previous.displayEntries);
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
         previousDisplayEntries: layoutHints,
@@ -789,7 +834,11 @@ class SessionController extends GetxController {
       // leaving the row showing its lightweight total with no items).
       final freshIdx = orders.indexWhere((order) => order.id == existing.id);
       if (freshIdx >= 0) {
-        orders[freshIdx] = detail;
+        final live = orders[freshIdx];
+        orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
+          server: detail,
+          live: live,
+        );
         orders.refresh();
       }
     } on ApiException catch (e) {

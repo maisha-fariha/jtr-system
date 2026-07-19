@@ -15,6 +15,21 @@ import '../../utils/api_log.dart';
 import '../mappers/order_mapper.dart';
 import 'catalog_repository.dart';
 
+/// One simple product line for a batched seat-order items POST.
+class SimpleProductBatchLine {
+  const SimpleProductBatchLine({
+    required this.productId,
+    required this.unitPrice,
+    this.qty = 1,
+    this.comment = '',
+  });
+
+  final int productId;
+  final double unitPrice;
+  final int qty;
+  final String comment;
+}
+
 class OrderRepository {
   OrderRepository({
     required OrderRemoteDataSource remote,
@@ -170,17 +185,20 @@ class OrderRepository {
 
       await _local.saveOrderDetail(orderId, detail);
 
-      final splitHint = previousDisplayEntries == null
+      // Empty [] from lightweight session rows must not wipe Hive suivre hints.
+      final layoutHints =
+          OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+      final splitHint = layoutHints == null
           ? _local.readSuivreSplitHint(orderId)
-          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
-      final countHint = previousDisplayEntries == null
+          : OrderMapper.suivreSplitPositions(layoutHints);
+      final countHint = layoutHints == null
           ? _local.readSuivreCountHint(orderId)
-          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+          : OrderMapper.suivreSeparatorCount(layoutHints);
 
       final order = OrderMapper.sessionOrderHidingCreateSeed(
         detail,
         seedProductId: seedId,
-        previousDisplayEntries: previousDisplayEntries,
+        previousDisplayEntries: layoutHints,
         suivreSplitHints: splitHint,
         suivreCountHint: countHint,
       );
@@ -191,9 +209,20 @@ class OrderRepository {
 
     final cached = _local.readOrderDetail(orderId);
     if (cached != null) {
+      final layoutHints =
+          OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+      final splitHint = layoutHints == null
+          ? _local.readSuivreSplitHint(orderId)
+          : OrderMapper.suivreSplitPositions(layoutHints);
+      final countHint = layoutHints == null
+          ? _local.readSuivreCountHint(orderId)
+          : OrderMapper.suivreSeparatorCount(layoutHints);
       return OrderMapper.sessionOrderHidingCreateSeed(
         cached,
         seedProductId: seedId,
+        previousDisplayEntries: layoutHints,
+        suivreSplitHints: splitHint,
+        suivreCountHint: countHint,
       );
     }
 
@@ -208,6 +237,10 @@ class OrderRepository {
 
   /// Clear empty-shell UI lock once the ticket has real lines again.
   void clearEmptyShellDisplay(int orderId) => _forgetEmptyShellDisplay(orderId);
+
+  /// Keep table details empty after delete-all (hides create-seed flash).
+  void rememberEmptyShellDisplay(int orderId) =>
+      _rememberEmptyShellDisplay(orderId);
 
   /// Current local detail revision for [orderId] (0 if never bumped).
   int detailRevision(int orderId) =>
@@ -1399,7 +1432,7 @@ class OrderRepository {
         layoutHints: layoutHints,
       );
 
-      final body = OrderMapper.buildSeatOrderItemsPostPayload(
+      final body = OrderMapper.buildSeatOrderItemPostPayload(
         courseNumber: course.number,
         productId: productId,
         qty: qty,
@@ -1511,6 +1544,215 @@ class OrderRepository {
     }
   }
 
+  /// Adds many simple products with **one** `PUT /api/orders/:id`.
+  ///
+  /// Rapid catalog taps must call this once with the full queue — never one
+  /// PUT per tap (sequential fallback was removed for that reason).
+  Future<SessionOrder> addSimpleProductsBatchToOrder({
+    required int orderId,
+    required List<SimpleProductBatchLine> items,
+    List<OrderDisplayEntry>? layoutHints,
+    String? tableNumber,
+    int? waiterId,
+    bool expectEmptyShell = false,
+  }) async {
+    if (items.isEmpty) {
+      return getOrderDetail(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
+    }
+
+    final apiLog = StringBuffer();
+    lastAddItemLog = null;
+
+    if (!await _connectivity.isOnline) {
+      lastAddItemLog = 'Hors ligne — ajout articles impossible.';
+      throw ApiException(
+        message: 'Ajout impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    apiLog.writeln('── Ajout articles (batch, 1 PUT) ──');
+    apiLog.writeln('order_id=$orderId count=${items.length}');
+    for (final line in items) {
+      apiLog.writeln(
+        '  product_id=${line.productId} qty=${line.qty} '
+        'unit=${line.unitPrice}',
+      );
+    }
+
+    try {
+      final pendingStrip = _pendingCreateSeedStrips[orderId];
+      if (pendingStrip != null) {
+        apiLog.writeln('── Attente fin strip seed create ──');
+        await pendingStrip;
+      }
+
+      apiLog.writeln('── GET /api/orders/$orderId ──');
+      var detail = await _remote.fetchOrderDetail(orderId);
+
+      final plantedSeedId = lastEmptyOrderSeedProductId;
+      final catalogSeedId = plantedSeedId ??
+          (await _catalog.resolveSeedProductForEmptyOrder())?.id;
+      final onlySeed = OrderMapper.hasOnlyEmptyCreateSeed(
+        detail,
+        seedProductId: catalogSeedId,
+      );
+
+      final seedToDrop = plantedSeedId;
+      if (seedToDrop != null &&
+          OrderMapper.containsVisibleProductId(detail, seedToDrop) &&
+          !items.any((line) => line.productId == seedToDrop)) {
+        apiLog.writeln(
+          '── Drop leftover seed product=$seedToDrop before batch ──',
+        );
+        detail = OrderMapper.withoutVisibleProduct(detail, seedToDrop);
+      }
+
+      final needsShellRevive = expectEmptyShell ||
+          onlySeed ||
+          OrderMapper.shouldRecreateOrderForAdd(detail) ||
+          OrderMapper.orderDetailHasNoVisibleItems(detail);
+
+      // Empty ticket: use the proven revive path (clears stale suite / seat
+      // targeting). Then batch any remaining lines on the revived order.
+      if (needsShellRevive) {
+        apiLog.writeln(
+          '── Batch on empty shell → revive first line, then rest ──',
+        );
+        await _persistSuivreLayoutHints(orderId, const []);
+        final first = items.first;
+        final rest = items.sublist(1);
+        final revived = await _reviveOrRecreateWithSimpleProduct(
+          orderId: orderId,
+          detail: detail,
+          productId: first.productId,
+          unitPrice: first.unitPrice,
+          qty: first.qty,
+          comment: first.comment,
+          layoutHints: null,
+          tableNumber: tableNumber,
+          waiterId: waiterId,
+          apiLog: apiLog,
+        );
+        lastAddItemLog = apiLog.toString();
+        if (rest.isEmpty) return revived;
+        final activeId = revived.id > 0 ? revived.id : orderId;
+        return addSimpleProductsBatchToOrder(
+          orderId: activeId,
+          items: rest,
+          layoutHints: revived.displayEntries,
+          tableNumber: tableNumber,
+          waiterId: waiterId,
+        );
+      }
+
+      final working = OrderMapper.copyOrderDetail(detail);
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: layoutHints,
+      );
+      _ensureAddItemCourse(
+        working,
+        apiLog,
+        orderId: orderId,
+        layoutHints: layoutHints,
+      );
+
+      final payload = Map<String, dynamic>.from(
+        OrderMapper.appendSimpleItems(
+          orderDetail: working,
+          items: [
+            for (final line in items)
+              (
+                productId: line.productId,
+                unitPrice: line.unitPrice,
+                qty: line.qty,
+                comment: line.comment,
+              ),
+          ],
+          suivreSectionCount: suivreHints.count,
+          suivreSplitHints: suivreHints.splits,
+          layoutHints: layoutHints,
+        ),
+      );
+
+      final updated = await _putOrderUpdate(
+        orderId: orderId,
+        payload: payload,
+        apiLog: apiLog,
+      );
+      lastEmptyOrderSeedProductId = null;
+      _forgetEmptyShellDisplay(orderId);
+      await _local.saveOrderDetail(orderId, updated);
+      await _sessionLocal.upsertOpenOrderInList(updated);
+      lastAddItemLog = apiLog.toString();
+      return _fetchAndMapOrder(
+        orderId,
+        previousDisplayEntries: layoutHints,
+      );
+    } on ApiException catch (e) {
+      apiLog.writeln('Batch PUT failed: ${e.message}');
+      if (_remote.lastApiLog != null) {
+        apiLog.writeln(_remote.lastApiLog);
+      }
+      lastAddItemLog = apiLog.toString();
+
+      // Last resort: one POST with all items (never N sequential PUTs).
+      apiLog.writeln('── Batch fallback: 1 POST …/items ──');
+      try {
+        final detail = await _remote.fetchOrderDetail(orderId);
+        final suivreHints = _resolveSuivreHints(
+          orderId,
+          layoutHints: layoutHints,
+        );
+        final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
+        final course = OrderMapper.resolveAppendCourse(
+          detail,
+          seatNumber: seatNumber,
+          suivreSectionCount: suivreHints.count,
+          suivreSplitHints: suivreHints.splits,
+          layoutHints: layoutHints,
+        );
+        _ensureAddItemCourse(
+          detail,
+          apiLog,
+          orderId: orderId,
+          layoutHints: layoutHints,
+        );
+        final body = OrderMapper.buildSeatOrderItemsPostPayload(
+          courseNumber: course.number,
+          items: [
+            for (final line in items)
+              OrderMapper.seatOrderItemPayload(
+                productId: line.productId,
+                qty: line.qty,
+                subTotal: line.unitPrice * line.qty,
+                comment: line.comment,
+              ),
+          ],
+        );
+        await _postSeatOrderItems(
+          orderId: orderId,
+          detail: detail,
+          seatNumber: seatNumber,
+          body: body,
+          apiLog: apiLog,
+        );
+        lastAddItemLog = apiLog.toString();
+        return _fetchAndMapOrder(
+          orderId,
+          previousDisplayEntries: layoutHints,
+        );
+      } on ApiException catch (postError) {
+        apiLog.writeln('Batch POST fallback failed: ${postError.message}');
+        lastAddItemLog = apiLog.toString();
+        rethrow;
+      }
+    }
+  }
+
   bool _shouldRecreateAfterAddFailure(
     ApiException error,
     Map<String, dynamic> detail,
@@ -1602,16 +1844,14 @@ class OrderRepository {
     }
 
     final working = OrderMapper.asOpenEmptyOrderShell(cleaned);
-    final suivreHints = _resolveSuivreHints(
-      orderId,
-      layoutHints: layoutHints,
-    );
+    // Empty revive always targets course 1 — never stale À SUIVRE hints.
+    await _persistSuivreLayoutHints(orderId, const []);
 
     _ensureAddItemCourse(
       working,
       apiLog,
       orderId: orderId,
-      layoutHints: layoutHints,
+      layoutHints: null,
     );
 
     final payload = Map<String, dynamic>.from(
@@ -1621,9 +1861,9 @@ class OrderRepository {
         unitPrice: unitPrice,
         qty: qty,
         comment: comment,
-        suivreSectionCount: suivreHints.count,
-        suivreSplitHints: suivreHints.splits,
-        layoutHints: layoutHints,
+        suivreSectionCount: 0,
+        suivreSplitHints: const [],
+        layoutHints: null,
       ),
     );
     // Force the shell back to an open/unpaid state so the API accepts lines.
@@ -2321,6 +2561,8 @@ class OrderRepository {
   Future<SessionOrder> cancelOrderLineAtIndex({
     required int orderId,
     required int lineIndex,
+    int? itemId,
+    List<OrderDisplayEntry>? previousDisplayEntries,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -2333,18 +2575,57 @@ class OrderRepository {
     }
 
     apiLog.writeln('── Annulation article ──');
-    apiLog.writeln('order_id=$orderId line_index=$lineIndex');
+    apiLog.writeln(
+      'order_id=$orderId line_index=$lineIndex item_id=${itemId ?? '—'}',
+    );
 
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
       final detail = await _remote.fetchOrderDetail(orderId);
       final localMutated = OrderMapper.copyOrderDetail(detail);
 
-      final payload = OrderMapper.cancelOrderLineAtIndex(
-        orderDetail: localMutated,
-        lineIndex: lineIndex,
-      );
+      // Prefer stable item id — line indexes shift while deletes are queued.
+      var cancelled = false;
+      if (itemId != null && itemId > 0) {
+        cancelled = OrderMapper.cancelOrderLineByItemId(localMutated, itemId);
+        apiLog.writeln(
+          cancelled
+              ? '── Cancel by item_id=$itemId ──'
+              : '── item_id=$itemId already absent ──',
+        );
+      }
+      if (!cancelled) {
+        final before = OrderMapper.countVisibleLineItems(localMutated);
+        OrderMapper.cancelOrderLineAtIndex(
+          orderDetail: localMutated,
+          lineIndex: lineIndex,
+        );
+        cancelled =
+            OrderMapper.countVisibleLineItems(localMutated) < before;
+        apiLog.writeln(
+          cancelled
+              ? '── Cancel by line_index=$lineIndex ──'
+              : '── line_index=$lineIndex already absent (noop) ──',
+        );
+      }
 
+      if (!cancelled) {
+        // Already gone on server — do not PUT / error; return mapped empty/current.
+        lastAddItemLog = apiLog.toString();
+        if (OrderMapper.orderDetailHasNoVisibleItems(localMutated)) {
+          _rememberEmptyShellDisplay(orderId);
+        }
+        return _persistOrderAfterItemMutation(
+          orderId: orderId,
+          detail: localMutated,
+          previousDisplayEntries: previousDisplayEntries,
+        );
+      }
+
+      final payload = OrderMapper.buildOrderUpdatePayload(
+        localMutated,
+        keepOpenWhenEmpty: true,
+      );
       final updated = await _putOrderUpdate(
         orderId: orderId,
         payload: payload,
@@ -2352,13 +2633,19 @@ class OrderRepository {
       );
       lastAddItemLog = apiLog.toString();
 
-      return _persistOrderAfterItemMutation(
+      final persisted = await _persistOrderAfterItemMutation(
         orderId: orderId,
         detail: updated,
-        keepLinesIfApiEmpty: OrderMapper.orderDetailHasNoVisibleItems(localMutated)
-            ? null
-            : localMutated,
+        previousDisplayEntries: previousDisplayEntries,
+        keepLinesIfApiEmpty:
+            OrderMapper.orderDetailHasNoVisibleItems(localMutated)
+                ? null
+                : localMutated,
       );
+      if (persisted.products.isEmpty) {
+        _rememberEmptyShellDisplay(orderId);
+      }
+      return persisted;
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {
@@ -2395,33 +2682,35 @@ class OrderRepository {
     required int orderId,
     List<OrderDisplayEntry>? layoutHints,
   }) {
+    // No visible lines → ignore stale À SUIVRE hints (always restart course 1).
+    final emptyTicket = OrderMapper.orderDetailHasNoVisibleItems(detail);
+    final effectiveLayout =
+        emptyTicket ? null : OrderMapper.coalesceLayoutHints(layoutHints);
+    final suivreHints = emptyTicket
+        ? (splits: const <int>[], count: 0)
+        : _resolveSuivreHints(orderId, layoutHints: effectiveLayout);
+
+    OrderMapper.ensureMinimalSeatCourseStructure(detail);
+
     final seatNumber = OrderMapper.resolveDefaultSeatNumber(detail);
-    final suivreHints = _resolveSuivreHints(
-      orderId,
-      layoutHints: layoutHints,
-    );
     final course = OrderMapper.resolveAppendCourse(
       detail,
       seatNumber: seatNumber,
       suivreSectionCount: suivreHints.count,
       suivreSplitHints: suivreHints.splits,
-      layoutHints: layoutHints,
+      layoutHints: effectiveLayout,
     );
 
+    final courseNumber = course.number > 0 ? course.number : 1;
     if (course.number <= 0) {
       apiLog.writeln(
-        'ERREUR: aucune suite (course) sur la commande. '
-        'La commande doit avoir au moins un seat_order/course.',
-      );
-      throw ApiException(
-        message:
-            'Impossible d\'ajouter: aucune suite active sur cette commande.',
+        'WARN: course_number<=0 after empty ticket — forcing course 1',
       );
     }
 
     apiLog.writeln(
       'seat_number=$seatNumber course_id=${course.id ?? '—'} '
-      'course_number=${course.number}',
+      'course_number=$courseNumber',
     );
   }
 
@@ -2573,21 +2862,24 @@ class OrderRepository {
     await _local.saveOrderDetail(orderId, working);
     await _sessionLocal.upsertOpenOrderInList(working);
 
-    final splitHint = previousDisplayEntries == null
+    final layoutHints =
+        OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+    final splitHint = layoutHints == null
         ? _local.readSuivreSplitHint(orderId)
-        : OrderMapper.suivreSplitPositions(previousDisplayEntries);
-    final countHint = previousDisplayEntries == null
+        : OrderMapper.suivreSplitPositions(layoutHints);
+    final countHint = layoutHints == null
         ? _local.readSuivreCountHint(orderId)
-        : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+        : OrderMapper.suivreSeparatorCount(layoutHints);
 
     final order = OrderMapper.fromOrderDetail(
       working,
-      previousDisplayEntries: previousDisplayEntries,
+      previousDisplayEntries: layoutHints,
       suivreSplitHints: splitHint,
       suivreCountHint: countHint,
     );
 
-    // Empty display for emptied shells (cancelled lines stay on the server).
+    // Empty shell: clear À SUIVRE hints so the next add targets course 1 / seat
+    // again (stale suite hints caused "seat" / "aucune suite" errors on re-add).
     if (OrderMapper.orderDetailHasNoVisibleItems(working)) {
       final empty = order.copyWith(
         products: const [],

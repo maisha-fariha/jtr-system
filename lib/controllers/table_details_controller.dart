@@ -77,9 +77,80 @@ class TableDetailsController extends GetxController {
   Timer? _pendingDeleteTimer;
   SessionOrder? _pendingDeleteSnapshot;
   int? _pendingDeleteLineIndex;
+  int? _pendingDeleteItemId;
   int _pendingDeleteGeneration = 0;
 
+  /// Item ids cancelled locally (pending + recently committed) so sync merge
+  /// cannot resurrect a ghost line after delete-all.
+  final Set<int> _locallyCancelledItemIds = <int>{};
+
   static const _undoDeleteDuration = Duration(seconds: 5);
+
+  /// Rapid simple-product taps are UI-immediate; network uses one coalesced
+  /// `PUT` with every line queued since the last flush (not one PUT per tap).
+  final List<CatalogProductModel> _queuedSimpleAdds = [];
+  Timer? _simpleAddBatchTimer;
+  SessionOrder? _simpleAddBatchRollback;
+  bool _simpleAddSyncEnqueued = false;
+  static const _simpleAddBatchWindow = Duration(milliseconds: 500);
+
+  Set<int> get _suppressDeletedItemIds {
+    final ids = <int>{..._locallyCancelledItemIds};
+    final pending = _pendingDeleteItemId;
+    if (pending != null && pending > 0) ids.add(pending);
+    return ids;
+  }
+
+  /// Apply a background sync result without flashing stale/thinner server data.
+  void _applySyncedOrder(SessionOrder updated) {
+    if (updated.id > 0) orderId = updated.id;
+
+    final live = order;
+    // After delete-all, never re-show create-seed / stale server lines.
+    if (live != null &&
+        live.products.isEmpty &&
+        _suppressDeletedItemIds.isNotEmpty) {
+      if (updated.id > 0) {
+        _orderRepository.rememberEmptyShellDisplay(updated.id);
+      }
+      final empty = updated.copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+      if (updated.products.isEmpty) {
+        _locallyCancelledItemIds.clear();
+      }
+      _syncOrderInSession(
+        empty,
+        orderNumber,
+        displayEntriesOverride: empty.displayEntries,
+      );
+      return;
+    }
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: updated,
+      live: live,
+      suppressItemIds: _suppressDeletedItemIds,
+    );
+    if (merged.products.isEmpty) {
+      _locallyCancelledItemIds.clear();
+      if (merged.id > 0) {
+        _orderRepository.rememberEmptyShellDisplay(merged.id);
+      }
+    } else {
+      _locallyCancelledItemIds.removeWhere(
+        (id) => !OrderMapper.productItemIds(merged.displayEntries).contains(id),
+      );
+    }
+    _syncOrderInSession(
+      merged,
+      orderNumber,
+      displayEntriesOverride: merged.displayEntries,
+    );
+  }
 
   bool isSuivreSectionCollapsed(int sectionIndex) =>
       collapsedSuivreSections.contains(sectionIndex);
@@ -303,6 +374,10 @@ class TableDetailsController extends GetxController {
   Future<void> _refreshOrder({
     List<OrderDisplayEntry>? layoutBeforeNav,
   }) async {
+    // Don't refresh over a debounce window that hasn't POSTed yet.
+    if (_queuedSimpleAdds.isNotEmpty) {
+      _flushQueuedSimpleAddsNow();
+    }
     if (_optimisticSync.hasPending(_optimisticSyncKey)) return;
     if (!Get.isRegistered<SessionController>()) return;
 
@@ -1258,19 +1333,152 @@ class TableDetailsController extends GetxController {
     selectedProductId.value = product.id;
 
     if (product.isComposed) {
+      // Flush any pending simple batch before opening the menu composer.
+      _flushQueuedSimpleAddsNow();
       unawaited(_handleComposedProductTap(product));
       return;
     }
 
-    final rollbackSnapshot =
-        order != null ? OrderOptimisticSync.deepSnapshot(order!) : null;
+    _queueSimpleProductAdd(product);
+  }
 
+  void _queueSimpleProductAdd(CatalogProductModel product) {
+    _simpleAddBatchRollback ??=
+        order != null ? OrderOptimisticSync.deepSnapshot(order!) : null;
     _applyAddSimpleProductToUi(product);
-    unawaited(
-      _syncAddSimpleProductInBackground(
-        product: product,
-        rollbackSnapshot: rollbackSnapshot,
-      ),
+    _queuedSimpleAdds.add(product);
+    _scheduleCoalescedSimpleAddSync();
+  }
+
+  void _scheduleCoalescedSimpleAddSync() {
+    _simpleAddBatchTimer?.cancel();
+    _simpleAddBatchTimer = Timer(_simpleAddBatchWindow, () {
+      _enqueueCoalescedSimpleAddSync();
+    });
+  }
+
+  void _flushQueuedSimpleAddsNow() {
+    _simpleAddBatchTimer?.cancel();
+    _simpleAddBatchTimer = null;
+    if (_queuedSimpleAdds.isEmpty) return;
+    _enqueueCoalescedSimpleAddSync();
+  }
+
+  /// At most one sync job is enqueued; it drains the full tap queue when it
+  /// runs so a burst never becomes N separate PUTs.
+  void _enqueueCoalescedSimpleAddSync() {
+    if (_queuedSimpleAdds.isEmpty) return;
+    if (_simpleAddSyncEnqueued) return;
+    _simpleAddSyncEnqueued = true;
+
+    final snapshot = _simpleAddBatchRollback ??
+        order ??
+        OrderMapper.buildSessionPlaceholderOrder(
+          tableNumber: _parsedTableNumber,
+          numberOfGuests: 1,
+        );
+    _simpleAddBatchRollback = null;
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: _applySyncedOrder,
+      sync: () async {
+        try {
+          // Catch taps that land just after the debounce timer.
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          final batch = List<CatalogProductModel>.from(_queuedSimpleAdds);
+          _queuedSimpleAdds.clear();
+
+          if (batch.isEmpty) {
+            return order ?? snapshot;
+          }
+
+          logOrderFlow(
+            'coalescedSimpleBatch count=${batch.length} '
+            'products=${batch.map((p) => p.id).join(',')}',
+          );
+
+          final lines = [
+            for (final product in batch)
+              SimpleProductBatchLine(
+                productId: product.id,
+                unitPrice: product.unitPrice,
+              ),
+          ];
+          final live = order;
+          // Empty ticket (after delete-all): don't pass stale À SUIVRE layout.
+          final reopeningEmpty = live == null ||
+              live.products.isEmpty ||
+              snapshot.products.isEmpty;
+          final layoutHints = reopeningEmpty
+              ? null
+              : (live.displayEntries.isNotEmpty
+                  ? live.displayEntries
+                  : snapshot.displayEntries);
+          final id = await _resolveOrderIdForBackgroundSync();
+
+          if (id == null || id <= 0) {
+            final first = batch.first;
+            final rest = lines.sublist(1);
+            final created =
+                await _orderRepository.createOrderWithFirstSimpleProduct(
+              tableNumber: orderNumber,
+              waiterId: _currentWaiterId,
+              productId: first.id,
+              unitPrice: first.unitPrice,
+              qty: 1,
+              numberOfGuests: int.tryParse(snapshot.couverts),
+            );
+            orderId = created.id;
+            if (rest.isEmpty) return created;
+            final updated =
+                await _orderRepository.addSimpleProductsBatchToOrder(
+              orderId: created.id,
+              items: rest,
+              layoutHints: created.displayEntries,
+              tableNumber: orderNumber,
+              waiterId: _currentWaiterId,
+            );
+            orderId = updated.id;
+            return updated;
+          }
+
+          orderId = id;
+          final updated = await _orderRepository.addSimpleProductsBatchToOrder(
+            orderId: id,
+            items: lines,
+            layoutHints: layoutHints,
+            tableNumber: orderNumber,
+            waiterId: _currentWaiterId,
+            expectEmptyShell: reopeningEmpty,
+          );
+          orderId = updated.id;
+          return updated;
+        } finally {
+          _simpleAddSyncEnqueued = false;
+          // Taps during the request → one more coalesced sync, not N.
+          if (_queuedSimpleAdds.isNotEmpty) {
+            _scheduleCoalescedSimpleAddSync();
+          }
+        }
+      },
+      recover: (snap) async {
+        _simpleAddSyncEnqueued = false;
+        if (_queuedSimpleAdds.isNotEmpty) {
+          _scheduleCoalescedSimpleAddSync();
+        }
+        final id = _fastResolvedOrderId;
+        if (id != null && id > 0) {
+          return _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
+          );
+        }
+        return snap;
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('ajouter les articles', error),
     );
   }
 
@@ -1409,10 +1617,7 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
-      apply: (updated) {
-        orderId = updated.id > 0 ? updated.id : orderId;
-        _syncOrderInSession(updated, orderNumber);
-      },
+      apply: _applySyncedOrder,
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         // Live optimistic layout keeps add order when the API reshuffles items[].
@@ -1457,74 +1662,6 @@ class TableDetailsController extends GetxController {
       },
       onError: (error) =>
           _showOptimisticMutationError('ajouter le menu', error),
-    );
-  }
-
-  Future<void> _syncAddSimpleProductInBackground({
-    required CatalogProductModel product,
-    SessionOrder? rollbackSnapshot,
-  }) async {
-    final snapshot = rollbackSnapshot ??
-        order ??
-        OrderMapper.buildSessionPlaceholderOrder(
-          tableNumber: _parsedTableNumber,
-          numberOfGuests: 1,
-        );
-
-    _optimisticSync.enqueue(
-      syncKey: _optimisticSyncKey,
-      snapshot: snapshot,
-      apply: (updated) {
-        orderId = updated.id > 0 ? updated.id : orderId;
-        _syncOrderInSession(updated, orderNumber);
-      },
-      sync: () async {
-        final id = await _resolveOrderIdForBackgroundSync();
-        // Prefer the live optimistic ticket (menu then soft add order) so API
-        // reshuffles don't reorder lines after sync.
-        final layoutHints = order?.displayEntries ?? snapshot.displayEntries;
-
-        if (id == null || id <= 0) {
-          final created =
-              await _orderRepository.createOrderWithFirstSimpleProduct(
-            tableNumber: orderNumber,
-            waiterId: _currentWaiterId,
-            productId: product.id,
-            unitPrice: product.unitPrice,
-            qty: 1,
-            numberOfGuests: int.tryParse(snapshot.couverts),
-          );
-          orderId = created.id;
-          return created;
-        }
-
-        // Empty UI shell may still point at a backend order that was auto
-        // closed/paid when the last item was cancelled — recreate if needed.
-        orderId = id;
-        final updated = await _orderRepository.addSimpleProductToOrder(
-          orderId: id,
-          productId: product.id,
-          unitPrice: product.unitPrice,
-          qty: 1,
-          layoutHints: layoutHints,
-          tableNumber: orderNumber,
-          waiterId: _currentWaiterId,
-          expectEmptyShell: snapshot.products.isEmpty,
-        );
-        orderId = updated.id;
-        return updated;
-      },
-      recover: (snap) async {
-        final id = _fastResolvedOrderId;
-        if (id != null && id > 0) {
-          return _orderRepository.getOrderDetail(
-            id,
-            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
-          );
-        }
-        return snap;
-      },
-      onError: (error) => _showOptimisticMutationError('ajouter l\'article', error),
     );
   }
 
@@ -1797,10 +1934,30 @@ class TableDetailsController extends GetxController {
     }
 
     final snapshot = OrderOptimisticSync.deepSnapshot(currentOrder);
+    int? deletedItemId;
+    for (final entry in currentOrder.displayEntries) {
+      if (entry.type == OrderDisplayEntryType.product &&
+          entry.lineIndex == productIndex) {
+        deletedItemId = entry.itemId;
+        break;
+      }
+    }
+
     final predicted = OrderMapper.predictAfterCancelLineAtIndex(
       currentOrder,
       productIndex,
     );
+    _pendingDeleteItemId =
+        (deletedItemId != null && deletedItemId > 0) ? deletedItemId : null;
+    if (_pendingDeleteItemId != null) {
+      _locallyCancelledItemIds.add(_pendingDeleteItemId!);
+    }
+    if (predicted.products.isEmpty) {
+      final id = orderId ?? currentOrder.id;
+      if (id > 0) {
+        _orderRepository.rememberEmptyShellDisplay(id);
+      }
+    }
     _syncOrderInSession(predicted, orderNumber);
 
     final qtyLabel = line.quantity.trim().isEmpty ? '1' : line.quantity.trim();
@@ -1821,12 +1978,17 @@ class TableDetailsController extends GetxController {
     final snapshot = _pendingDeleteSnapshot;
     if (snapshot == null) return;
 
+    final undoneId = _pendingDeleteItemId;
     _pendingDeleteTimer?.cancel();
     _pendingDeleteTimer = null;
     _pendingDeleteSnapshot = null;
     _pendingDeleteLineIndex = null;
+    _pendingDeleteItemId = null;
     _pendingDeleteGeneration++;
     undoDeleteLabel.value = null;
+    if (undoneId != null && undoneId > 0) {
+      _locallyCancelledItemIds.remove(undoneId);
+    }
 
     _syncOrderInSession(snapshot, orderNumber);
   }
@@ -1834,6 +1996,7 @@ class TableDetailsController extends GetxController {
   Future<void> _commitPendingDeleteIfAny() async {
     final lineIndex = _pendingDeleteLineIndex;
     final snapshot = _pendingDeleteSnapshot;
+    final deletedItemId = _pendingDeleteItemId;
     if (lineIndex == null || snapshot == null) return;
 
     _pendingDeleteTimer?.cancel();
@@ -1841,9 +2004,15 @@ class TableDetailsController extends GetxController {
     _pendingDeleteLineIndex = null;
     _pendingDeleteSnapshot = null;
     undoDeleteLabel.value = null;
+    // Keep suppress id until cancel sync apply finishes.
+    _pendingDeleteItemId = deletedItemId;
+    if (deletedItemId != null && deletedItemId > 0) {
+      _locallyCancelledItemIds.add(deletedItemId);
+    }
 
     await _syncCancelLineInBackground(
       lineIndex: lineIndex,
+      itemId: deletedItemId,
       rollbackSnapshot: snapshot,
     );
   }
@@ -1851,16 +2020,21 @@ class TableDetailsController extends GetxController {
   @override
   void onClose() {
     _pendingDeleteTimer?.cancel();
+    // Flush pending rapid adds before leaving the table.
+    _flushQueuedSimpleAddsNow();
     // Persist the delete if the waiter leaves before the undo window ends.
     final lineIndex = _pendingDeleteLineIndex;
     final snapshot = _pendingDeleteSnapshot;
+    final deletedItemId = _pendingDeleteItemId;
     _pendingDeleteLineIndex = null;
     _pendingDeleteSnapshot = null;
     undoDeleteLabel.value = null;
+    _pendingDeleteItemId = deletedItemId;
     if (lineIndex != null && snapshot != null) {
       unawaited(
         _syncCancelLineInBackground(
           lineIndex: lineIndex,
+          itemId: deletedItemId,
           rollbackSnapshot: snapshot,
         ),
       );
@@ -1871,14 +2045,14 @@ class TableDetailsController extends GetxController {
   Future<void> _syncCancelLineInBackground({
     required int lineIndex,
     required SessionOrder rollbackSnapshot,
+    int? itemId,
   }) async {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
       apply: (updated) {
-        // Emptying may replace a closed/paid shell with a new remote order id.
-        if (updated.id > 0) orderId = updated.id;
-        _syncOrderInSession(updated, orderNumber);
+        _pendingDeleteItemId = null;
+        _applySyncedOrder(updated);
       },
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
@@ -1887,25 +2061,36 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
+        final liveLayout = order?.displayEntries ?? rollbackSnapshot.displayEntries;
         final updated = await _orderRepository.cancelOrderLineAtIndex(
           orderId: id,
           lineIndex: lineIndex,
+          itemId: itemId,
+          previousDisplayEntries: liveLayout,
         );
         if (updated.id > 0) orderId = updated.id;
         return updated;
       },
       recover: (snap) async {
+        _pendingDeleteItemId = null;
+        if (itemId != null && itemId > 0) {
+          _locallyCancelledItemIds.remove(itemId);
+        }
         final id = _fastResolvedOrderId;
         if (id != null && id > 0) {
           return _orderRepository.getOrderDetail(
             id,
-            previousDisplayEntries: snap.displayEntries,
+            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
           );
         }
         return snap;
       },
-      onError: (error) =>
-          _showOptimisticMutationError('annuler l\'article', error),
+      onError: (error) {
+        if (itemId != null && itemId > 0) {
+          _locallyCancelledItemIds.remove(itemId);
+        }
+        _showOptimisticMutationError('annuler l\'article', error);
+      },
     );
   }
 
@@ -1932,21 +2117,15 @@ class TableDetailsController extends GetxController {
         if (updated.products.isEmpty && snapshot.products.isNotEmpty) {
           return;
         }
-        if (updated.id > 0) this.orderId = updated.id;
-        _syncOrderInSession(
-          updated,
-          orderNumber,
-          displayEntriesOverride: updated.displayEntries.isNotEmpty
-              ? updated.displayEntries
-              : predicted.displayEntries,
-        );
+        _applySyncedOrder(updated);
       },
       sync: () async {
         final updated = await _orderRepository.adjustOrderLineQuantityAtIndex(
           orderId: orderId,
           lineIndex: lineIndex,
           delta: delta,
-          previousDisplayEntries: predicted.displayEntries,
+          previousDisplayEntries:
+              order?.displayEntries ?? predicted.displayEntries,
         );
         if (updated.id > 0) this.orderId = updated.id;
         return updated;
@@ -1992,14 +2171,7 @@ class TableDetailsController extends GetxController {
         if (updated.products.isEmpty && snapshot.products.isNotEmpty) {
           return;
         }
-        if (updated.id > 0) this.orderId = updated.id;
-        _syncOrderInSession(
-          updated,
-          orderNumber,
-          displayEntriesOverride: updated.displayEntries.isNotEmpty
-              ? updated.displayEntries
-              : predicted.displayEntries,
-        );
+        _applySyncedOrder(updated);
       },
       sync: () async {
         final updated = await _orderRepository.setOrderLineQuantityAtIndex(

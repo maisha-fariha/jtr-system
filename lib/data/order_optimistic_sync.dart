@@ -62,24 +62,24 @@ class OrderOptimisticSync {
       _pending[syncKey] = remaining;
     }
 
-    if (remaining > 0) {
-      if (error != null) {
-        onError?.call(error);
-      }
-      return;
-    }
-
     if (error != null) {
-      try {
-        final recovered = await recover(snapshot);
-        apply(recovered);
-      } catch (_) {
-        apply(snapshot);
+      // Only the last mutation in the queue recovers the UI — earlier failures
+      // must not overwrite a newer optimistic ticket (e.g. add after delete).
+      if (remaining <= 0) {
+        try {
+          final recovered = await recover(snapshot);
+          apply(recovered);
+        } catch (_) {
+          apply(snapshot);
+        }
       }
       onError?.call(error);
       return;
     }
 
+    // Always apply successful results in order. Skipping intermediate applies
+    // caused delete/add races: the add response could reintroduce a line the
+    // delete already removed on the server / in the optimistic UI.
     if (reconciled != null) {
       apply(reconciled);
     }

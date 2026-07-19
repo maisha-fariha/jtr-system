@@ -1388,22 +1388,15 @@ class OrderMapper {
     }
 
     // Never replace a non-empty ticket with an empty server flash.
-    if (server.products.isEmpty &&
-        live.products.isNotEmpty &&
-        suppressItemIds.isEmpty) {
-      return live;
+    if (server.products.isEmpty && live.products.isNotEmpty) {
+      return _stripSuppressedItems(live, suppressItemIds);
     }
 
     final liveCount = productEntryCount(live.displayEntries);
-    // Waiter already cleared the ticket (optimistic delete-all). Do not re-adopt
-    // server/create-seed lines while cancelled ids are still suppressed.
+    // Empty live + suppressed deletes: keep only non-suppressed server lines.
+    // (Revive/add after delete-all must not be wiped just because suppress is set.)
     if (liveCount == 0 && suppressItemIds.isNotEmpty) {
-      return server.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: formatPrice('0'),
-      );
+      return _stripSuppressedItems(server, suppressItemIds);
     }
 
     final serverCount = productEntryCount(server.displayEntries);

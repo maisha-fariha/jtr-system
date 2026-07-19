@@ -155,6 +155,25 @@ void main() {
     expect(merged.total, '0,00 €');
   });
 
+  test('merge keeps revived lines after delete-all when suppress is stale', () {
+    final live = _order(display: const []);
+    final server = _order(
+      display: [
+        _product(0, 'OULMES 1L', itemId: 99),
+      ],
+      total: '30.00',
+    );
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: server,
+      live: live,
+      suppressItemIds: {42},
+    );
+
+    expect(OrderMapper.productItemIds(merged.displayEntries), [99]);
+    expect(merged.products, isNotEmpty);
+  });
+
   test('reconcile keeps pending À SUIVRE over false DEMANDÉE from add sync', () {
     final previous = [
       _product(0, 'A', itemId: 1),

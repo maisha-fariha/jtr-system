@@ -1661,7 +1661,12 @@ class OrderRepository {
       }
 
       apiLog.writeln('── GET /api/orders/$orderId ──');
-      var detail = await _remote.fetchOrderDetail(orderId);
+      var detail = OrderMapper.copyOrderDetail(
+        await _remote.fetchOrderDetail(orderId),
+      );
+
+      // Delete-then-quick-add race: never PUT locally-deleted lines back.
+      _cancelSuppressedItemsInDetail(orderId, detail, apiLog);
 
       final plantedSeedId = lastEmptyOrderSeedProductId;
       final catalogSeedId = plantedSeedId ??
@@ -1773,7 +1778,10 @@ class OrderRepository {
       // Last resort: one POST with all items (never N sequential PUTs).
       apiLog.writeln('── Batch fallback: 1 POST …/items ──');
       try {
-        final detail = await _remote.fetchOrderDetail(orderId);
+        final detail = OrderMapper.copyOrderDetail(
+          await _remote.fetchOrderDetail(orderId),
+        );
+        _cancelSuppressedItemsInDetail(orderId, detail, apiLog);
         final suivreHints = _resolveSuivreHints(
           orderId,
           layoutHints: layoutHints,
@@ -2655,7 +2663,9 @@ class OrderRepository {
       final detail = await _remote.fetchOrderDetail(orderId);
       final localMutated = OrderMapper.copyOrderDetail(detail);
 
-      // Prefer stable item id — line indexes shift while deletes are queued.
+      // Prefer stable item id — line indexes shift while deletes/adds race.
+      // Never fall back to line_index when item_id was provided: that can
+      // cancel the wrong (newly added) line after a quick add.
       var cancelled = false;
       if (itemId != null && itemId > 0) {
         cancelled = OrderMapper.cancelOrderLineByItemId(localMutated, itemId);
@@ -2664,8 +2674,7 @@ class OrderRepository {
               ? '── Cancel by item_id=$itemId ──'
               : '── item_id=$itemId already absent ──',
         );
-      }
-      if (!cancelled) {
+      } else {
         final before = OrderMapper.countVisibleLineItems(localMutated);
         OrderMapper.cancelOrderLineAtIndex(
           orderDetail: localMutated,
@@ -2725,6 +2734,28 @@ class OrderRepository {
       lastAddItemLog = apiLog.toString();
       rethrow;
     }
+  }
+
+  /// Marks locally-deleted item ids as cancelled on a detail copy (in place).
+  int _cancelSuppressedItemsInDetail(
+    int orderId,
+    Map<String, dynamic> detail,
+    StringBuffer apiLog,
+  ) {
+    final suppressed = suppressedItemIdsFor(orderId);
+    if (suppressed.isEmpty) return 0;
+    var count = 0;
+    for (final itemId in suppressed) {
+      if (OrderMapper.cancelOrderLineByItemId(detail, itemId)) {
+        count++;
+      }
+    }
+    if (count > 0) {
+      apiLog.writeln(
+        '── Stripped $count suppressed deleted item(s) before add PUT ──',
+      );
+    }
+    return count;
   }
 
   ({List<int> splits, int count}) _resolveSuivreHints(

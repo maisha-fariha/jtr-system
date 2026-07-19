@@ -80,6 +80,10 @@ class TableDetailsController extends GetxController {
   bool _simpleAddSyncEnqueued = false;
   static const _simpleAddBatchWindow = Duration(milliseconds: 500);
 
+  /// Bumped on every line delete so an in-flight add sync can detect that the
+  /// waiter already cleared/changed the ticket and must not PUT/apply adds.
+  int _ticketMutationEpoch = 0;
+
   Set<int> get _suppressDeletedItemIds {
     final orderKey = orderId ?? _rawSessionOrder?.id ?? 0;
     if (orderKey <= 0) return const {};
@@ -110,61 +114,135 @@ class TableDetailsController extends GetxController {
 
   /// Apply a background sync result without flashing stale server data.
   ///
-  /// Model: local ticket is source of truth while deletes/adds are in flight.
-  /// Suppressed item ids are stripped until the API confirms they are gone.
+  /// Local ticket wins while deletes/adds race. Suppressed item ids are always
+  /// stripped from whatever the API returns before it touches the UI.
   void _applySyncedOrder(SessionOrder updated) {
     if (updated.id > 0) orderId = updated.id;
 
     final live = _rawSessionOrder;
     final suppress = _suppressDeletedItemIds;
-    final liveHasLines = live != null &&
-        (live.products.isNotEmpty || live.displayEntries.isNotEmpty);
+    final orderKey = updated.id > 0 ? updated.id : (live?.id ?? 0);
+    final pendingDelete = orderKey > 0 &&
+        _orderRepository.hasPendingLocalDelete(orderKey);
+    final liveCount = live == null
+        ? 0
+        : OrderMapper.productEntryCount(live.displayEntries);
+    final updatedCount =
+        OrderMapper.productEntryCount(updated.displayEntries);
 
-    // Cancel finished on an empty server, but waiter already added again.
-    if (updated.products.isEmpty && liveHasLines) {
-      _orderRepository.clearEmptyShellDisplay(live.id);
-      _releaseDeletedLinesConfirmedBy(updated);
+    // Live ticket already empty after delete — never refill from a fatter
+    // add/cancel response (new server ids may not be in suppress yet).
+    final emptyShell = orderKey > 0 &&
+        _orderRepository.shouldDisplayAsEmptyCreateShell(orderKey);
+    if (liveCount == 0 &&
+        (suppress.isNotEmpty || pendingDelete || emptyShell) &&
+        updatedCount > 0) {
+      final empty = (live ?? updated).copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+      if (orderKey > 0) {
+        _orderRepository.rememberEmptyShellDisplay(orderKey);
+      }
       _syncOrderInSession(
-        live,
+        empty,
         orderNumber,
-        displayEntriesOverride: live.displayEntries,
+        displayEntriesOverride: empty.displayEntries,
+      );
+      return;
+    }
+    if (liveCount == 0 && (suppress.isNotEmpty || pendingDelete || emptyShell)) {
+      final empty = (live ?? updated).copyWith(
+        products: const [],
+        displayEntries: const [],
+        itemCount: 0,
+        total: OrderMapper.formatPrice('0'),
+      );
+      if (orderKey > 0) {
+        _orderRepository.rememberEmptyShellDisplay(orderKey);
+      }
+      if (updatedCount == 0) {
+        _releaseDeletedLinesConfirmedBy(updated);
+        _orderRepository.clearSuppressedOrderItemIds(orderKey);
+      }
+      _syncOrderInSession(
+        empty,
+        orderNumber,
+        displayEntriesOverride: empty.displayEntries,
       );
       return;
     }
 
-    final merged = OrderMapper.mergeLiveOptimisticDetail(
-      server: updated,
-      live: live,
-      suppressItemIds: suppress,
-    );
-
-    SessionOrder toShow = merged;
+    // During a delete storm, the thinner live ticket always wins.
     if (live != null &&
-        OrderMapper.productEntryCount(live.displayEntries) ==
-            OrderMapper.productEntryCount(merged.displayEntries) &&
-        OrderMapper.suivreSeparatorCount(live.displayEntries) ==
-            OrderMapper.suivreSeparatorCount(merged.displayEntries) &&
-        OrderMapper.demandeSeparatorCount(live.displayEntries) ==
-            OrderMapper.demandeSeparatorCount(merged.displayEntries)) {
-      final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
-        live: live.displayEntries,
-        server: merged.displayEntries,
+        liveCount > 0 &&
+        liveCount < updatedCount &&
+        (suppress.isNotEmpty || pendingDelete)) {
+      final merged = OrderMapper.mergeLiveOptimisticDetail(
+        server: updated,
+        live: live,
+        suppressItemIds: suppress,
       );
-      final products = [
-        for (final entry in stabilized)
-          if (entry.type == OrderDisplayEntryType.product &&
-              entry.product != null)
-            entry.product!,
-      ];
-      toShow = merged.copyWith(
-        products: products,
-        displayEntries: stabilized,
-        itemCount: products.length,
+      if (merged.id > 0) {
+        _orderRepository.clearEmptyShellDisplay(merged.id);
+      }
+      _releaseDeletedLinesConfirmedBy(updated);
+      _syncOrderInSession(
+        merged,
+        orderNumber,
+        displayEntriesOverride: merged.displayEntries,
+      );
+      return;
+    }
+
+    // Prefer live when it already has newer adds and the sync payload is empty.
+    SessionOrder base;
+    if (updatedCount == 0 && liveCount > 0) {
+      base = live!;
+    } else {
+      base = OrderMapper.mergeLiveOptimisticDetail(
+        server: updated,
+        live: live,
+        suppressItemIds: suppress,
+      );
+      if (live != null &&
+          OrderMapper.productEntryCount(live.displayEntries) ==
+              OrderMapper.productEntryCount(base.displayEntries) &&
+          OrderMapper.suivreSeparatorCount(live.displayEntries) ==
+              OrderMapper.suivreSeparatorCount(base.displayEntries) &&
+          OrderMapper.demandeSeparatorCount(live.displayEntries) ==
+              OrderMapper.demandeSeparatorCount(base.displayEntries)) {
+        final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
+          live: live.displayEntries,
+          server: base.displayEntries,
+        );
+        final products = [
+          for (final entry in stabilized)
+            if (entry.type == OrderDisplayEntryType.product &&
+                entry.product != null)
+              entry.product!,
+        ];
+        base = base.copyWith(
+          products: products,
+          displayEntries: stabilized,
+          itemCount: products.length,
+        );
+      }
+    }
+
+    // Hard guarantee: deleted ids never re-enter the ticket from any response.
+    var toShow = base;
+    if (suppress.isNotEmpty) {
+      toShow = OrderMapper.mergeLiveOptimisticDetail(
+        server: base,
+        live: base,
+        suppressItemIds: suppress,
       );
     }
 
     if (toShow.products.isEmpty && toShow.id > 0) {
-      // Hide create-seed flash only when the ticket is truly empty.
       _orderRepository.rememberEmptyShellDisplay(toShow.id);
     } else if (toShow.id > 0) {
       _orderRepository.clearEmptyShellDisplay(toShow.id);
@@ -191,11 +269,40 @@ class TableDetailsController extends GetxController {
   }
 
   /// Lift empty-shell lock before an optimistic add.
+  ///
+  /// Do **not** clear suppressed delete ids here — a quick add must not let a
+  /// racing GET/PUT resurrect a line the waiter just removed.
   void _prepareForNewAdd() {
     final id = orderId ?? _rawSessionOrder?.id ?? seedOrder?.id;
-    if (id != null && id > 0) {
-      _orderRepository.clearEmptyShellDisplay(id);
-      _orderRepository.bumpDetailRevision(id);
+    if (id == null || id <= 0) return;
+    _orderRepository.clearEmptyShellDisplay(id);
+    _orderRepository.bumpDetailRevision(id);
+  }
+
+  /// Keep catalog highlight in sync with the real ticket.
+  void _reconcileCatalogSelection({SessionOrder? source}) {
+    final current = source ?? _rawSessionOrder;
+    if (current == null || current.products.isEmpty) {
+      selectedProductId.value = null;
+      selectedOrderLineIndex.value = null;
+      return;
+    }
+
+    final selectedId = selectedProductId.value;
+    if (selectedId != null) {
+      final stillInOrder = current.products.any((line) {
+        final catalog = catalogProductByName(line.name);
+        return catalog?.id == selectedId;
+      });
+      if (!stillInOrder) {
+        selectedProductId.value = null;
+      }
+    }
+
+    final lineIndex = selectedOrderLineIndex.value;
+    if (lineIndex != null &&
+        (lineIndex < 0 || lineIndex >= current.products.length)) {
+      selectedOrderLineIndex.value = null;
     }
   }
 
@@ -1396,7 +1503,6 @@ class TableDetailsController extends GetxController {
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
 
-    selectedProductId.value = product.id;
     _prepareForNewAdd();
 
     if (product.isComposed) {
@@ -1410,11 +1516,60 @@ class TableDetailsController extends GetxController {
   }
 
   void _queueSimpleProductAdd(CatalogProductModel product) {
-    _simpleAddBatchRollback ??=
-        order != null ? OrderOptimisticSync.deepSnapshot(order!) : null;
+    // Snapshot the unmasked ticket — empty-shell must not poison rollback.
+    _simpleAddBatchRollback ??= _rawSessionOrder != null
+        ? OrderOptimisticSync.deepSnapshot(_rawSessionOrder!)
+        : null;
     _applyAddSimpleProductToUi(product);
+    // Highlight only after the line is actually on the ticket.
+    if (isProductInOrder(product, source: _rawSessionOrder)) {
+      selectedProductId.value = product.id;
+      selectedOrderLineIndex.value = null;
+    }
     _queuedSimpleAdds.add(product);
-    _scheduleCoalescedSimpleAddSync();
+    // After a delete, flush add immediately so it queues behind cancel (same
+    // sync key) instead of racing via a long debounce window.
+    final activeId = orderId ?? _rawSessionOrder?.id ?? 0;
+    if (activeId > 0 &&
+        (_orderRepository.hasPendingLocalDelete(activeId) ||
+            _optimisticSync.hasPending(_optimisticSyncKey))) {
+      _flushQueuedSimpleAddsNow();
+    } else {
+      _scheduleCoalescedSimpleAddSync();
+    }
+  }
+
+  /// Drop debounced/queued adds — waiter deleted; do not PUT them later.
+  void _discardPendingSimpleAdds() {
+    _simpleAddBatchTimer?.cancel();
+    _simpleAddBatchTimer = null;
+    _queuedSimpleAdds.clear();
+    _simpleAddBatchRollback = null;
+  }
+
+  /// True when a background add must not hit the API / UI (ticket cleared).
+  bool _shouldAbortBackgroundAdd() {
+    final live = _rawSessionOrder;
+    final id = orderId ?? live?.id ?? 0;
+    if (id > 0 && _orderRepository.shouldDisplayAsEmptyCreateShell(id)) {
+      return true;
+    }
+    if (live != null &&
+        live.products.isEmpty &&
+        id > 0 &&
+        _orderRepository.hasPendingLocalDelete(id)) {
+      return true;
+    }
+    return false;
+  }
+
+  SessionOrder _emptyTicketShell(SessionOrder template) {
+    return template.copyWith(
+      products: const [],
+      displayEntries: const [],
+      itemCount: 0,
+      total: OrderMapper.formatPrice('0'),
+    );
   }
 
   void _scheduleCoalescedSimpleAddSync() {
@@ -1446,6 +1601,7 @@ class TableDetailsController extends GetxController {
         );
     _simpleAddBatchRollback = null;
 
+    final epochAtEnqueue = _ticketMutationEpoch;
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
@@ -1454,11 +1610,25 @@ class TableDetailsController extends GetxController {
         try {
           // Catch taps that land just after the debounce timer.
           await Future<void>.delayed(const Duration(milliseconds: 80));
+
+          // Waiter deleted while this add was queued/in-flight — do not PUT.
+          if (epochAtEnqueue != _ticketMutationEpoch ||
+              _shouldAbortBackgroundAdd()) {
+            logOrderFlow(
+              'abort coalescedSimpleBatch — ticket cleared after queue '
+              '(epoch $epochAtEnqueue→$_ticketMutationEpoch)',
+            );
+            _queuedSimpleAdds.clear();
+            final live = _rawSessionOrder;
+            if (live != null) return live;
+            return _emptyTicketShell(snapshot);
+          }
+
           final batch = List<CatalogProductModel>.from(_queuedSimpleAdds);
           _queuedSimpleAdds.clear();
 
           if (batch.isEmpty) {
-            return order ?? snapshot;
+            return _rawSessionOrder ?? snapshot;
           }
 
           logOrderFlow(
@@ -1473,7 +1643,7 @@ class TableDetailsController extends GetxController {
                 unitPrice: product.unitPrice,
               ),
           ];
-          final live = order;
+          final live = _rawSessionOrder;
           // Empty ticket (after delete-all): don't pass stale À SUIVRE layout.
           final reopeningEmpty = live == null ||
               live.products.isEmpty ||
@@ -1484,6 +1654,15 @@ class TableDetailsController extends GetxController {
                   ? live.displayEntries
                   : snapshot.displayEntries);
           final id = await _resolveOrderIdForBackgroundSync();
+
+          // Re-check after await — delete may have landed meanwhile.
+          if (epochAtEnqueue != _ticketMutationEpoch ||
+              _shouldAbortBackgroundAdd()) {
+            logOrderFlow('abort coalescedSimpleBatch after resolveOrderId');
+            final current = _rawSessionOrder;
+            if (current != null) return current;
+            return _emptyTicketShell(snapshot);
+          }
 
           if (id == null || id <= 0) {
             final first = batch.first;
@@ -1497,6 +1676,11 @@ class TableDetailsController extends GetxController {
               qty: 1,
               numberOfGuests: int.tryParse(snapshot.couverts),
             );
+            if (epochAtEnqueue != _ticketMutationEpoch ||
+                _shouldAbortBackgroundAdd()) {
+              logOrderFlow('abort after create — ticket cleared');
+              return _rawSessionOrder ?? _emptyTicketShell(created);
+            }
             orderId = created.id;
             if (rest.isEmpty) return created;
             final updated =
@@ -1507,6 +1691,10 @@ class TableDetailsController extends GetxController {
               tableNumber: orderNumber,
               waiterId: _currentWaiterId,
             );
+            if (epochAtEnqueue != _ticketMutationEpoch ||
+                _shouldAbortBackgroundAdd()) {
+              return _rawSessionOrder ?? _emptyTicketShell(updated);
+            }
             orderId = updated.id;
             return updated;
           }
@@ -1520,29 +1708,33 @@ class TableDetailsController extends GetxController {
             waiterId: _currentWaiterId,
             expectEmptyShell: reopeningEmpty,
           );
+          if (epochAtEnqueue != _ticketMutationEpoch ||
+              _shouldAbortBackgroundAdd()) {
+            logOrderFlow('abort after add PUT — keep cleared ticket');
+            return _rawSessionOrder ?? _emptyTicketShell(updated);
+          }
           orderId = updated.id;
           return updated;
         } finally {
           _simpleAddSyncEnqueued = false;
           // Taps during the request → one more coalesced sync, not N.
-          if (_queuedSimpleAdds.isNotEmpty) {
+          if (_queuedSimpleAdds.isNotEmpty && !_shouldAbortBackgroundAdd()) {
             _scheduleCoalescedSimpleAddSync();
+          } else {
+            _queuedSimpleAdds.clear();
           }
         }
       },
       recover: (snap) async {
         _simpleAddSyncEnqueued = false;
-        if (_queuedSimpleAdds.isNotEmpty) {
+        if (_queuedSimpleAdds.isNotEmpty && !_shouldAbortBackgroundAdd()) {
           _scheduleCoalescedSimpleAddSync();
+        } else {
+          _queuedSimpleAdds.clear();
         }
-        final id = _fastResolvedOrderId;
-        if (id != null && id > 0) {
-          return _orderRepository.getOrderDetail(
-            id,
-            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
-          );
-        }
-        return snap;
+        final live = _rawSessionOrder;
+        if (live != null) return live;
+        return _emptyTicketShell(snap);
       },
       onError: (error) =>
           _showOptimisticMutationError('ajouter les articles', error),
@@ -1690,6 +1882,8 @@ class TableDetailsController extends GetxController {
       displayEntriesOverride: predicted.displayEntries,
     );
     if (predicted.products.isNotEmpty) {
+      selectedProductId.value = product.id;
+      selectedOrderLineIndex.value = predicted.products.length - 1;
       final newLineIndex = predicted.products.length - 1;
       expandedMenuLineIndices.add(newLineIndex);
       expandedMenuLineIndices.refresh();
@@ -1704,21 +1898,30 @@ class TableDetailsController extends GetxController {
     List<OrderDisplayEntry>? layoutHints,
   }) async {
     final snapshot = rollbackSnapshot ??
-        order ??
+        _rawSessionOrder ??
         OrderMapper.buildSessionPlaceholderOrder(
           tableNumber: _parsedTableNumber,
           numberOfGuests: 1,
         );
     final effectiveLayoutHints = layoutHints ?? snapshot.displayEntries;
+    final epochAtEnqueue = _ticketMutationEpoch;
 
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: _applySyncedOrder,
       sync: () async {
+        if (epochAtEnqueue != _ticketMutationEpoch ||
+            _shouldAbortBackgroundAdd()) {
+          return _rawSessionOrder ?? _emptyTicketShell(snapshot);
+        }
         final id = await _resolveOrderIdForBackgroundSync();
-        // Live optimistic layout keeps add order when the API reshuffles items[].
-        final hints = order?.displayEntries ?? effectiveLayoutHints;
+        if (epochAtEnqueue != _ticketMutationEpoch ||
+            _shouldAbortBackgroundAdd()) {
+          return _rawSessionOrder ?? _emptyTicketShell(snapshot);
+        }
+        final hints =
+            _rawSessionOrder?.displayEntries ?? effectiveLayoutHints;
         if (id == null || id <= 0) {
           final created =
               await _orderRepository.createOrderWithFirstComposedProduct(
@@ -1729,6 +1932,10 @@ class TableDetailsController extends GetxController {
             menuSelections: menuSelections,
             numberOfGuests: int.tryParse(snapshot.couverts),
           );
+          if (epochAtEnqueue != _ticketMutationEpoch ||
+              _shouldAbortBackgroundAdd()) {
+            return _rawSessionOrder ?? _emptyTicketShell(created);
+          }
           orderId = created.id;
           return created;
         }
@@ -1744,18 +1951,17 @@ class TableDetailsController extends GetxController {
           waiterId: _currentWaiterId,
           expectEmptyShell: snapshot.products.isEmpty,
         );
+        if (epochAtEnqueue != _ticketMutationEpoch ||
+            _shouldAbortBackgroundAdd()) {
+          return _rawSessionOrder ?? _emptyTicketShell(updated);
+        }
         orderId = updated.id;
         return updated;
       },
       recover: (snap) async {
-        final id = _fastResolvedOrderId;
-        if (id != null && id > 0) {
-          return _orderRepository.getOrderDetail(
-            id,
-            previousDisplayEntries: order?.displayEntries ?? snap.displayEntries,
-          );
-        }
-        return snap;
+        final live = _rawSessionOrder;
+        if (live != null) return live;
+        return _emptyTicketShell(snap);
       },
       onError: (error) =>
           _showOptimisticMutationError('ajouter le menu', error),
@@ -1840,6 +2046,7 @@ class TableDetailsController extends GetxController {
       synced,
       replaceDetail: true,
     );
+    _reconcileCatalogSelection(source: synced);
     orderUiRevision.value++;
 
     final id = synced.id;
@@ -2066,6 +2273,11 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    // Invalidate any queued/in-flight add so it cannot PUT or re-apply lines
+    // after this delete (add → quick delete-all race).
+    _ticketMutationEpoch++;
+    _discardPendingSimpleAdds();
+
     final line = currentOrder.products[productIndex];
     final catalog = catalogProductByName(line.name);
     if (catalog != null && selectedProductId.value == catalog.id) {
@@ -2091,9 +2303,20 @@ class TableDetailsController extends GetxController {
     );
     final activeId = orderId ?? currentOrder.id;
     _suppressDeletedLine(deletedItemId, orderId: activeId);
+    // Also suppress every remaining line id when clearing the ticket so a
+    // late add response (new ids) is still blocked by empty-shell + epoch.
     if (predicted.products.isEmpty && activeId > 0) {
+      for (final entry in currentOrder.displayEntries) {
+        if (entry.type != OrderDisplayEntryType.product) continue;
+        final id = entry.itemId ?? 0;
+        if (id > 0) {
+          _orderRepository.suppressOrderItemIds(activeId, [id]);
+        }
+      }
       _orderRepository.rememberEmptyShellDisplay(activeId);
       unawaited(_orderRepository.persistSuivreLayoutHints(activeId, const []));
+      selectedProductId.value = null;
+      selectedOrderLineIndex.value = null;
     }
     _syncOrderInSession(
       predicted,
@@ -2130,11 +2353,9 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
-        final liveLayout = _rawSessionOrder?.displayEntries ??
-            OrderMapper.predictAfterCancelLineAtIndex(
-              rollbackSnapshot,
-              lineIndex,
-            ).displayEntries;
+        // Always hint the current optimistic layout (may already be empty after
+        // delete-all). Never pass the pre-delete snapshot — that resurrects lines.
+        final liveLayout = _rawSessionOrder?.displayEntries ?? const [];
         final updated = await _orderRepository.cancelOrderLineAtIndex(
           orderId: id,
           lineIndex: lineIndex,
@@ -2142,31 +2363,34 @@ class TableDetailsController extends GetxController {
           previousDisplayEntries: liveLayout,
         );
         if (updated.id > 0) orderId = updated.id;
+        // Return the thinner of API result vs live ticket so apply cannot
+        // re-expand a delete-all.
+        final live = _rawSessionOrder;
+        if (live != null &&
+            OrderMapper.productEntryCount(live.displayEntries) <
+                OrderMapper.productEntryCount(updated.displayEntries)) {
+          return OrderMapper.mergeLiveOptimisticDetail(
+            server: updated,
+            live: live,
+            suppressItemIds: _orderRepository.suppressedItemIdsFor(id),
+          );
+        }
         return updated;
       },
       recover: (snap) async {
+        // Keep suppress on failure — do not resurrect the deleted line.
         final id = _fastResolvedOrderId ?? snap.id;
-        if (itemId != null && itemId > 0 && id > 0) {
-          _orderRepository.clearSuppressedOrderItemIds(id, itemId: itemId);
-        } else if (id > 0) {
-          _orderRepository.clearSuppressedOrderItemIds(id);
-        }
+        final live = _rawSessionOrder;
+        if (live != null) return live;
         if (id > 0) {
           return _orderRepository.getOrderDetail(
             id,
-            previousDisplayEntries:
-                _rawSessionOrder?.displayEntries ?? snap.displayEntries,
+            previousDisplayEntries: snap.displayEntries,
           );
         }
         return snap;
       },
       onError: (error) {
-        final id = rollbackSnapshot.id;
-        if (itemId != null && itemId > 0 && id > 0) {
-          _orderRepository.clearSuppressedOrderItemIds(id, itemId: itemId);
-        } else if (id > 0) {
-          _orderRepository.clearSuppressedOrderItemIds(id);
-        }
         _showOptimisticMutationError('annuler l\'article', error);
       },
     );

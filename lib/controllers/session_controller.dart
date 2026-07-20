@@ -1398,8 +1398,27 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          final updated = await _orderRepository.requestNextCourses(order.id);
-          _upsertOrderInList(updated);
+          var layoutSource = order;
+          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
+                  0 &&
+              layoutSource.id > 0) {
+            try {
+              layoutSource = await _orderRepository.getOrderDetail(
+                layoutSource.id,
+                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+                  layoutSource.displayEntries,
+                ),
+              );
+            } catch (_) {}
+          }
+
+          final updated = await _orderRepository.requestNextCourses(
+            layoutSource.id,
+            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+              layoutSource.displayEntries,
+            ),
+          );
+          updateOrderRow(updated, replaceDetail: true);
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

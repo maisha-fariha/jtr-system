@@ -974,6 +974,57 @@ class OrderMapper {
     return layout.last.type == OrderDisplayEntryType.suivreSeparator;
   }
 
+  /// First open À SUIVRE on the ticket (session "Demander la suite").
+  static int? firstPendingSuivreSectionIndex(List<OrderDisplayEntry> entries) {
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+      final sectionIndex = entry.sectionIndex ?? 0;
+      if (sectionIndex > 0) return sectionIndex;
+    }
+    return null;
+  }
+
+  /// Exactly one course id — the next suite to demand (session screen).
+  ///
+  /// Uses the first pending À SUIVRE in waiter layout order, never every
+  /// unrequested course on the ticket.
+  static List<int> extractSingleNextCourseIdForDemande(
+    Map<String, dynamic> data, {
+    List<OrderDisplayEntry>? layout,
+  }) {
+    final layoutHints = coalesceLayoutHints(layout);
+    if (layoutHints != null) {
+      for (final entry in layoutHints) {
+        if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+        final sectionIndex = entry.sectionIndex ?? 0;
+        if (sectionIndex <= 0) continue;
+
+        final fromLayout = extractRequestableCourseIdsForSuivreLayout(
+          data,
+          layout: layoutHints,
+          sectionIndex: sectionIndex,
+        );
+        if (fromLayout.isNotEmpty) return [fromLayout.first];
+
+        final above = entry.courseNumber ?? sectionIndex;
+        final preferred = above > 0 ? above + 1 : sectionIndex + 1;
+        final targetCourse = resolveWritableSuivreCourseNumber(
+          data,
+          preferredCourseNumber: preferred,
+        );
+        final fromNumber = extractRequestableCourseIdsForSuivreSection(
+          data,
+          courseNumber: targetCourse,
+        );
+        if (fromNumber.isNotEmpty) return [fromNumber.first];
+      }
+    }
+
+    final fallback = extractRequestableCourseIds(data);
+    if (fallback.isEmpty) return const [];
+    return [fallback.first];
+  }
+
   /// Converts À SUIVRE → DEMANDÉE from API kitchen timestamps.
   ///
   /// Rules:

@@ -1183,6 +1183,68 @@ class OrderRepository {
     return null;
   }
 
+  /// Align the next pending À SUIVRE onto a writable course before session Demande.
+  Future<Map<String, dynamic>> _prepareDetailForSessionDemande({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required List<OrderDisplayEntry> layout,
+    required int sectionIndex,
+  }) async {
+    var working = detail;
+    var preferred = sectionIndex + 1;
+    for (final entry in layout) {
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+      if (entry.sectionIndex != sectionIndex) continue;
+      final above = entry.courseNumber ?? sectionIndex;
+      preferred = above > 0 ? above + 1 : sectionIndex + 1;
+      break;
+    }
+
+    var targetCourse = OrderMapper.resolveWritableSuivreCourseNumber(
+      working,
+      preferredCourseNumber: preferred,
+    );
+    final under = OrderMapper.productEntriesUnderSection(layout, sectionIndex);
+    final aligned = OrderMapper.suiteItemsFullyOnCourse(
+      working,
+      layout: layout,
+      sectionIndex: sectionIndex,
+      courseNumber: targetCourse,
+    );
+    if (under.isNotEmpty && aligned) return working;
+
+    final catalogProducts = await _catalog.getProducts();
+    CatalogProductModel? catalogByName(String name) {
+      final needle = name.trim().toUpperCase();
+      if (needle.isEmpty) return null;
+      for (final product in catalogProducts) {
+        if (product.name.trim().toUpperCase() == needle) return product;
+      }
+      return null;
+    }
+
+    final ensured = OrderMapper.ensureSuivreSectionOnCourse(
+      working,
+      layout: layout,
+      sectionIndex: sectionIndex,
+      targetCourseNumber: targetCourse,
+      resolveProductId: (name) => catalogByName(name)?.id,
+      resolveUnitPrice: (name) => catalogByName(name)?.unitPrice,
+    );
+    if (!ensured.changed) return working;
+
+    final apiLog = StringBuffer();
+    working = await _putOrderUpdate(
+      orderId: orderId,
+      payload: OrderMapper.buildOrderUpdatePayload(ensured.detail),
+      apiLog: apiLog,
+    );
+    await _local.saveOrderDetail(orderId, working);
+    working = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, working);
+    return working;
+  }
+
   Future<SessionOrder> requestNextCourses(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,
@@ -1193,18 +1255,57 @@ class OrderRepository {
       );
     }
 
-    final detail = await _remote.fetchOrderDetail(orderId);
-    final courseIds = OrderMapper.extractRequestableCourseIds(detail);
+    final layoutHints = OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+    final demandSectionIndex = layoutHints == null
+        ? null
+        : OrderMapper.firstPendingSuivreSectionIndex(layoutHints);
+
+    var detail = await _remote.fetchOrderDetail(orderId);
+    if (layoutHints != null &&
+        demandSectionIndex != null &&
+        demandSectionIndex > 0) {
+      detail = await _prepareDetailForSessionDemande(
+        orderId: orderId,
+        detail: detail,
+        layout: layoutHints,
+        sectionIndex: demandSectionIndex,
+      );
+    }
+
+    final courseIds = OrderMapper.extractSingleNextCourseIdForDemande(
+      detail,
+      layout: layoutHints,
+    );
     if (courseIds.isEmpty) {
       throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 
     await _remote.requestCourses(orderId, courseIds);
-    return getOrderDetail(
+
+    var order = await getOrderDetail(
       orderId,
-      previousDisplayEntries: previousDisplayEntries,
+      previousDisplayEntries: layoutHints,
       applyKitchenDemande: true,
     );
+
+    // Flip only the one section the waiter demanded — not every À SUIVRE row.
+    if (layoutHints != null &&
+        demandSectionIndex != null &&
+        demandSectionIndex > 0) {
+      final timeLabel = OrderMapper.formatDemandeTime(
+            DateTime.now().toUtc().toIso8601String(),
+          ) ??
+          '--:--:--';
+      order = OrderMapper.rebuildOrderAfterSuivreDemande(
+        serverOrder: order,
+        liveLayout: layoutHints,
+        suivreSectionIndex: demandSectionIndex,
+        demandeTimeLabel: timeLabel,
+      );
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+    }
+
+    return order;
   }
 
   Future<SessionOrder> requestCourseForSuivreSection(

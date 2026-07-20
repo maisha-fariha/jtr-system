@@ -2028,4 +2028,158 @@ void main() {
     );
     expect(ids.toSet(), {102, 103});
   });
+
+  test('extractSingleNextCourseIdForDemande returns only first pending suite',
+      () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T10:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 1,
+                  'course_id': 101,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 1, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 2,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'pending',
+                  'product': {'id': 2, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 103,
+              'course_number': 3,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 3,
+                  'course_id': 103,
+                  'qty': 1,
+                  'status': 'pending',
+                  'product': {'id': 3, 'name': 'C'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+
+    final ids = OrderMapper.extractSingleNextCourseIdForDemande(
+      detail,
+      layout: layout,
+    );
+    expect(ids, [102]);
+  });
+
+  test(
+      'extractSingleNextCourseIdForDemande picks next suivre after first demanded',
+      () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T10:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 1,
+                  'course_id': 101,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 1, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'requested_at': '2026-07-20T10:05:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 2, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 103,
+              'course_number': 3,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 3,
+                  'course_id': 103,
+                  'qty': 1,
+                  'status': 'pending',
+                  'product': {'id': 3, 'name': 'C'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '10:05',
+      ),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+
+    final ids = OrderMapper.extractSingleNextCourseIdForDemande(
+      detail,
+      layout: layout,
+    );
+    expect(ids, [103]);
+  });
 }

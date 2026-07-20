@@ -7,6 +7,7 @@ import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../data/mappers/order_mapper.dart';
@@ -134,7 +135,18 @@ class SessionController extends GetxController {
         ),
       );
       unawaited(_prefetchTables());
+      unawaited(_prefetchCreateCatalog());
     }
+  }
+
+  /// Warm product cache + create seed so the first POST /api/orders is not
+  /// blocked on a full paginated products download.
+  Future<void> _prefetchCreateCatalog() async {
+    try {
+      final catalog = Get.find<CatalogRepository>();
+      unawaited(catalog.getProducts());
+      await catalog.resolveSeedProductForEmptyOrder();
+    } catch (_) {}
   }
 
   void _hydrateOrdersFromCache() {
@@ -432,6 +444,14 @@ class SessionController extends GetxController {
     final previousLines = previous.products.length;
     final incomingDisplay = incoming.displayEntries.length;
     final previousDisplay = previous.displayEntries.length;
+
+    final incomingDemande =
+        OrderMapper.demandeSeparatorCount(incoming.displayEntries);
+    final previousDemande =
+        OrderMapper.demandeSeparatorCount(previous.displayEntries);
+    if (incomingDemande > previousDemande) {
+      return incoming;
+    }
 
     final incomingSuivre =
         OrderMapper.suivreSeparatorCount(incoming.displayEntries);
@@ -990,16 +1010,20 @@ class SessionController extends GetxController {
     var blockRecovery = false;
 
     try {
-      // Fresh tables list — stale cache can block create (false "already active")
-      // or skip the occupied dialog incorrectly after a recent delete/close.
-      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      // Prefer cached tables for speed; refresh only if the table is missing
+      // or create fails with a stale "already active" guard.
+      var tables = await _sessionRepository.getTablesList();
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
           targetTableNumber: tableNumber,
         ),
       );
-      final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      var target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      if (target == null) {
+        tables = await _sessionRepository.getTablesList(forceRefresh: true);
+        target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      }
       if (target == null) {
         logOrderFlow('_createTableAndOpenDetails ABORT table not found');
         _showSnack('Erreur', 'Table $tableNumber introuvable.');
@@ -1048,29 +1072,38 @@ class SessionController extends GetxController {
 
       attemptedCreate = true;
       try {
-        final result = await _orderRepository.createTableOrder(
+        created = await _createTableOrderWithFreshTablesRetry(
           waiterId: waiterId,
           tableNumber: tableNumber,
-          numberOfGuests: guests,
+          guests: guests,
           tables: tables,
           salesZoneId: salesZoneId,
+          context: context,
         );
-        created = result.order;
-        final createdWaiter = created.waiterId;
-        if (createdWaiter != null &&
-            createdWaiter > 0 &&
-            createdWaiter != waiterId) {
-          created = null;
-          blockRecovery = true;
-          if (context.mounted) {
-            await TableOccupiedDialog.show(
-              context: context,
-              userName: _currentUserDisplayName,
-              tableNumber: tableNumber,
-            );
-          }
-          return;
-        }
+        if (created == null) return;
+
+        final opened = created!;
+        _clearSuppressedTable(tableNumber);
+        _clearSuppressedTable(opened.number);
+        _upsertOrderInList(opened);
+        isCreatingOrder.value = false;
+        logOrderFlow(
+          '_createTableAndOpenDetails OPEN table=${opened.number} '
+          'orderId=${opened.id}',
+        );
+        openTableDetails(
+          opened.number,
+          orderId: opened.id,
+          deferDetailFetch: true,
+          seedOrder: opened,
+        );
+        unawaited(
+          refreshOrderList(
+            pinOrder: opened,
+            background: true,
+          ),
+        );
+        return;
       } on ApiException catch (e) {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: tableNumber,
@@ -1164,6 +1197,60 @@ class SessionController extends GetxController {
         }
       }
     }
+  }
+
+  Future<SessionOrder?> _createTableOrderWithFreshTablesRetry({
+    required int waiterId,
+    required String tableNumber,
+    required int guests,
+    required List<Map<String, dynamic>> tables,
+    required int? salesZoneId,
+    required BuildContext context,
+  }) async {
+    Future<SessionOrder> run(List<Map<String, dynamic>> snapshot) async {
+      final result = await _orderRepository.createTableOrder(
+        waiterId: waiterId,
+        tableNumber: tableNumber,
+        numberOfGuests: guests,
+        tables: snapshot,
+        salesZoneId: salesZoneId,
+      );
+      return result.order;
+    }
+
+    SessionOrder order;
+    try {
+      order = await run(tables);
+    } on ApiException catch (error) {
+      final message = error.message.toLowerCase();
+      final staleTableGuard = message.contains('déjà') ||
+          message.contains('deja') ||
+          message.contains('active') ||
+          message.contains('already');
+      if (!staleTableGuard) rethrow;
+
+      logOrderFlow(
+        '_createTableOrderWithFreshTablesRetry refresh tables after: '
+        '${error.message}',
+      );
+      final fresh = await _sessionRepository.getTablesList(forceRefresh: true);
+      order = await run(fresh);
+    }
+
+    final createdWaiter = order.waiterId;
+    if (createdWaiter != null &&
+        createdWaiter > 0 &&
+        createdWaiter != waiterId) {
+      if (context.mounted) {
+        await TableOccupiedDialog.show(
+          context: context,
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+      }
+      return null;
+    }
+    return order;
   }
 
   /// Finds an open order for [tableNumber] already shown in this waiter's list.
@@ -1319,8 +1406,27 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          final updated = await _orderRepository.requestNextCourses(order.id);
-          _upsertOrderInList(updated);
+          var layoutSource = order;
+          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
+                  0 &&
+              layoutSource.id > 0) {
+            try {
+              layoutSource = await _orderRepository.getOrderDetail(
+                layoutSource.id,
+                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+                  layoutSource.displayEntries,
+                ),
+              );
+            } catch (_) {}
+          }
+
+          final updated = await _orderRepository.requestNextCourses(
+            layoutSource.id,
+            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+              layoutSource.displayEntries,
+            ),
+          );
+          updateOrderRow(updated, replaceDetail: true);
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

@@ -19,6 +19,8 @@ class CatalogRepository {
   final CatalogLocalDataSource _local;
   final ConnectivityService _connectivity;
 
+  CatalogProductModel? _cachedSeedProduct;
+
   Future<List<LeafCategoryModel>> getLeafCategories({
     bool forceRefresh = false,
   }) async {
@@ -180,6 +182,7 @@ class CatalogRepository {
   /// validation, then cancelled/stripped so the new order stays empty in UI.
   /// Prefers the cheapest active simple product (often a placeholder SKU).
   Future<CatalogProductModel?> resolveSeedProductForEmptyOrder() async {
+    if (_cachedSeedProduct != null) return _cachedSeedProduct;
     try {
       final products = await getProducts();
       CatalogProductModel? best;
@@ -190,6 +193,7 @@ class CatalogRepository {
           best = product;
         }
       }
+      _cachedSeedProduct = best;
       return best;
     } catch (_) {}
     return null;

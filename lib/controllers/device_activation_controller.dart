@@ -30,19 +30,19 @@ class DeviceActivationController extends GetxController {
   final DeviceRepository _deviceRepository;
   final AuthRepository _authRepository;
 
-  /// Prefill at construction so the first frame already shows bypass values.
+  /// Prefill bypass values only when QR is off; QR/POS mode uses hints only.
   late final codeController = TextEditingController(
-    text: DeviceActivationBypass.enabled
+    text: DeviceActivationBypass.prefillBypassFields
         ? DeviceActivationBypass.activationCode
         : '',
   );
   late final tenantController = TextEditingController(
-    text: DeviceActivationBypass.enabled
+    text: DeviceActivationBypass.prefillBypassFields
         ? DeviceActivationBypass.tenantSchema
         : '',
   );
   late final apiBaseUrlController = TextEditingController(
-    text: DeviceActivationBypass.enabled
+    text: DeviceActivationBypass.prefillBypassFields
         ? DeviceActivationBypass.apiBaseUrl
         : '',
   );
@@ -58,9 +58,12 @@ class DeviceActivationController extends GetxController {
   final feedbackMessage = RxnString();
   final feedbackIsError = false.obs;
 
-  /// Bypass keeps a static API until the user scans/imports a QR.
-  bool get usesStaticBypassApi =>
-      DeviceActivationBypass.enabled && !qrApplied.value;
+  /// Fixed Goatech API only on bypass APK (no QR). QR / POS mode: editable field.
+  bool get usesStaticBypassApi {
+    // Always read so Obx/GetX can subscribe (&& would skip qrApplied otherwise).
+    final applied = qrApplied.value;
+    return DeviceActivationBypass.prefillBypassFields && !applied;
+  }
 
   /// Display-only host for bypass (never append `/api` in the input).
   String get bypassDisplayApiUrl => DeviceActivationBypass.apiBaseUrl;

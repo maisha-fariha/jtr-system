@@ -83,90 +83,100 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                             ),
                           ),
                           JtrResponsive.getResponsiveSpacing(context, 10),
-                          Obx(() {
-                            final staticApi = controller.usesStaticBypassApi;
-                            return Text(
-                              staticApi
-                                  ? 'Mode test (bypass) — API Goatech fixe '
-                                      'jusqu\'au scan QR.\n'
-                                      'Code prérempli : JTR-BYPASS.\n'
-                                      'Scannez / importez un QR pour basculer '
-                                      'sur le poste, ou activez en manuel.'
-                                  : 'Liez cet appareil au poste Windows (caisse).\n'
-                                      'Scannez le QR, importez une image, ou saisissez '
-                                      'code + schéma + URL du poste.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  13,
-                                ),
-                                height: 1.45,
-                                color: AppTheme.textSecondary.withValues(
-                                  alpha: 0.85,
-                                ),
+                          Text(
+                            DeviceActivationBypass.prefillBypassFields
+                                ? 'Mode test (bypass) — API Goatech fixe.\n'
+                                    'Code prérempli : JTR-BYPASS.\n'
+                                    'Appuyez sur Activer.'
+                                : (DeviceActivationBypass.qrEnabled
+                                    ? 'Liez cet appareil au poste Windows (caisse).\n'
+                                        'Scannez le QR ou saisissez code, schéma '
+                                        'et URL / IP du poste.'
+                                    : 'Liez cet appareil au poste Windows (caisse).\n'
+                                        'Saisissez le code, le schéma et l\'URL / IP '
+                                        'du poste, puis appuyez sur Activer.'),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: JtrResponsive.getResponsiveFontSize(
+                                context,
+                                13,
                               ),
-                            );
-                          }),
+                              height: 1.45,
+                              color: AppTheme.textSecondary.withValues(
+                                alpha: 0.85,
+                              ),
+                            ),
+                          ),
                           JtrResponsive.getResponsiveSpacing(context, 28),
                           _FieldLabel(text: 'Code d\'activation'),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          Obx(() {
-                            final staticApi = controller.usesStaticBypassApi;
-                            return TextField(
-                              controller: controller.codeController,
-                              textCapitalization: TextCapitalization.characters,
-                              cursorColor: AppTheme.primary,
-                              style: TextStyle(color: AppTheme.darkText),
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(
-                                  RegExp(r'[A-Za-z0-9\-]'),
-                                ),
-                              ],
-                              decoration: _fieldDecoration(
-                                context,
-                                hint: staticApi ? 'JTR-BYPASS' : 'JTR-ABCD-EFGH',
+                          TextField(
+                            controller: controller.codeController,
+                            textCapitalization: TextCapitalization.characters,
+                            cursorColor: AppTheme.primary,
+                            style: TextStyle(color: AppTheme.darkText),
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[A-Za-z0-9\-]'),
                               ),
-                            );
-                          }),
+                            ],
+                            decoration: _fieldDecoration(
+                              context,
+                              hint: DeviceActivationBypass.prefillBypassFields
+                                  ? 'JTR-BYPASS'
+                                  : 'JTR-ABCD-EFGH',
+                            ),
+                          ),
                           JtrResponsive.getResponsiveSpacing(context, 18),
                           _FieldLabel(text: 'Schéma restaurant'),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          Obx(() {
-                            final staticApi = controller.usesStaticBypassApi;
-                            return TextField(
-                              controller: controller.tenantController,
-                              cursorColor: AppTheme.primary,
-                              style: TextStyle(color: AppTheme.darkText),
-                              decoration: _fieldDecoration(
-                                context,
-                                hint: staticApi ? 'mocca' : 'ex. mocca',
-                              ),
-                            );
-                          }),
+                          TextField(
+                            controller: controller.tenantController,
+                            cursorColor: AppTheme.primary,
+                            style: TextStyle(color: AppTheme.darkText),
+                            decoration: _fieldDecoration(
+                              context,
+                              hint: DeviceActivationBypass.prefillBypassFields
+                                  ? 'mocca'
+                                  : 'ex. mocca',
+                            ),
+                          ),
                           JtrResponsive.getResponsiveSpacing(context, 18),
-                          Obx(() {
-                            final staticApi = controller.usesStaticBypassApi;
-                            return _FieldLabel(
-                              text: staticApi ? 'URL API' : 'URL / IP du poste',
-                            );
-                          }),
+                          _FieldLabel(
+                            text: DeviceActivationBypass.prefillBypassFields
+                                ? 'URL API'
+                                : 'URL / IP du poste',
+                          ),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          Obx(() {
-                            if (controller.usesStaticBypassApi) {
-                              // Fixed display — never rewrite with trailing /api.
-                              return InputDecorator(
+                          if (DeviceActivationBypass.prefillBypassFields)
+                            Obx(() {
+                              if (controller.usesStaticBypassApi) {
+                                return InputDecorator(
+                                  decoration: _fieldDecoration(
+                                    context,
+                                    hint: '',
+                                  ),
+                                  child: Text(
+                                    controller.bypassDisplayApiUrl,
+                                    style:
+                                        TextStyle(color: AppTheme.darkText),
+                                  ),
+                                );
+                              }
+                              return TextField(
+                                controller: controller.apiBaseUrlController,
+                                keyboardType: TextInputType.url,
+                                cursorColor: AppTheme.primary,
+                                style: TextStyle(color: AppTheme.darkText),
                                 decoration: _fieldDecoration(
                                   context,
-                                  hint: '',
-                                ),
-                                child: Text(
-                                  controller.bypassDisplayApiUrl,
-                                  style: TextStyle(color: AppTheme.darkText),
+                                  hint:
+                                      'ex. 192.168.1.10 ou http://192.168.1.10/api',
                                 ),
                               );
-                            }
-                            return TextField(
+                            })
+                          else
+                            TextField(
                               controller: controller.apiBaseUrlController,
                               keyboardType: TextInputType.url,
                               cursorColor: AppTheme.primary,
@@ -176,8 +186,7 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                 hint:
                                     'ex. 192.168.1.10 ou http://192.168.1.10/api',
                               ),
-                            );
-                          }),
+                            ),
                           if (DeviceActivationBypass.qrEnabled) ...[
                             JtrResponsive.getResponsiveSpacing(context, 16),
                             Obx(

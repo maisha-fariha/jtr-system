@@ -5,7 +5,6 @@ import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
 import '../data/mappers/menu_mapper.dart';
-import '../data/mappers/order_mapper.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../models/menu_active_selection.dart';
@@ -351,16 +350,7 @@ class MenuSelectionController extends GetxController {
       onConfirm: () async {
         isSaving.value = true;
         try {
-          final updated = await _orderRepository.requestNextCourses(
-            id,
-            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-              Get.isRegistered<SessionController>()
-                  ? Get.find<SessionController>()
-                      .findOrder(orderNumber: orderNumber, orderId: id)
-                      ?.displayEntries
-                  : null,
-            ),
-          );
+          final updated = await _orderRepository.requestNextCourses(id);
           if (Get.isRegistered<SessionController>()) {
             Get.find<SessionController>().updateOrderRow(
               updated,

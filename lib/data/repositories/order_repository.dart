@@ -1193,53 +1193,18 @@ class OrderRepository {
       );
     }
 
-    final layoutHints = OrderMapper.coalesceLayoutHints(previousDisplayEntries);
-    final demandSectionIndex = layoutHints == null
-        ? null
-        : OrderMapper.firstPendingSuivreSectionIndex(layoutHints);
-
-    var detail = await _remote.fetchOrderDetail(orderId);
-    var courseIds = <int>[];
-
-    if (layoutHints != null && demandSectionIndex != null) {
-      courseIds = OrderMapper.extractRequestableCourseIdsForSuivreLayout(
-        detail,
-        layout: layoutHints,
-        sectionIndex: demandSectionIndex,
-      );
-    }
-    if (courseIds.isEmpty) {
-      courseIds = OrderMapper.extractRequestableCourseIds(detail);
-    }
+    final detail = await _remote.fetchOrderDetail(orderId);
+    final courseIds = OrderMapper.extractRequestableCourseIds(detail);
     if (courseIds.isEmpty) {
       throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 
     await _remote.requestCourses(orderId, courseIds);
-
-    var order = await getOrderDetail(
+    return getOrderDetail(
       orderId,
-      previousDisplayEntries: layoutHints,
+      previousDisplayEntries: previousDisplayEntries,
       applyKitchenDemande: true,
     );
-
-    if (layoutHints != null &&
-        demandSectionIndex != null &&
-        demandSectionIndex > 0) {
-      final timeLabel = OrderMapper.formatDemandeTime(
-            DateTime.now().toUtc().toIso8601String(),
-          ) ??
-          '--:--:--';
-      order = OrderMapper.rebuildOrderAfterSuivreDemande(
-        serverOrder: order,
-        liveLayout: layoutHints,
-        suivreSectionIndex: demandSectionIndex,
-        demandeTimeLabel: timeLabel,
-      );
-      await _persistSuivreLayoutHints(orderId, order.displayEntries);
-    }
-
-    return order;
   }
 
   Future<SessionOrder> requestCourseForSuivreSection(

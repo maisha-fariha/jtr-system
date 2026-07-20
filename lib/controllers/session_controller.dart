@@ -445,14 +445,6 @@ class SessionController extends GetxController {
     final incomingDisplay = incoming.displayEntries.length;
     final previousDisplay = previous.displayEntries.length;
 
-    final incomingDemande =
-        OrderMapper.demandeSeparatorCount(incoming.displayEntries);
-    final previousDemande =
-        OrderMapper.demandeSeparatorCount(previous.displayEntries);
-    if (incomingDemande > previousDemande) {
-      return incoming;
-    }
-
     final incomingSuivre =
         OrderMapper.suivreSeparatorCount(incoming.displayEntries);
     final previousSuivre =
@@ -1406,27 +1398,8 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          var layoutSource = order;
-          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
-                  0 &&
-              layoutSource.id > 0) {
-            try {
-              layoutSource = await _orderRepository.getOrderDetail(
-                layoutSource.id,
-                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-                  layoutSource.displayEntries,
-                ),
-              );
-            } catch (_) {}
-          }
-
-          final updated = await _orderRepository.requestNextCourses(
-            layoutSource.id,
-            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-              layoutSource.displayEntries,
-            ),
-          );
-          updateOrderRow(updated, replaceDetail: true);
+          final updated = await _orderRepository.requestNextCourses(order.id);
+          _upsertOrderInList(updated);
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

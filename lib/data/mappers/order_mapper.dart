@@ -974,16 +974,6 @@ class OrderMapper {
     return layout.last.type == OrderDisplayEntryType.suivreSeparator;
   }
 
-  /// First open À SUIVRE section on the ticket (session "Demander la suite").
-  static int? firstPendingSuivreSectionIndex(List<OrderDisplayEntry> entries) {
-    for (final entry in entries) {
-      if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
-      final sectionIndex = entry.sectionIndex ?? 0;
-      if (sectionIndex > 0) return sectionIndex;
-    }
-    return null;
-  }
-
   /// Converts À SUIVRE → DEMANDÉE from API kitchen timestamps.
   ///
   /// Rules:

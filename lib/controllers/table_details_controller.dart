@@ -116,6 +116,75 @@ class TableDetailsController extends GetxController {
     }
   }
 
+  void _invalidateBackgroundApplies() {
+    _optimisticSync.invalidateApplies(_optimisticSyncKey);
+  }
+
+  /// Delete/cancel sync must never rebuild the visible ticket — only adopt ids
+  /// and release suppress flags confirmed by the server.
+  void _applyDeleteSyncSilently(SessionOrder updated) {
+    if (updated.id > 0) {
+      final previousId = orderId ?? _rawSessionOrder?.id ?? 0;
+      orderId = updated.id;
+      if (previousId > 0 && previousId != updated.id) {
+        _orderRepository.clearSuppressedOrderItemIds(previousId);
+        _orderRepository.clearPendingLocalDeleteFlag(previousId);
+        _orderRepository.clearEmptyShellDisplay(previousId);
+      }
+    }
+
+    _releaseDeletedLinesConfirmedBy(updated);
+
+    final orderKey = updated.id > 0 ? updated.id : (orderId ?? 0);
+    if (orderKey <= 0) return;
+
+    _orderRepository.clearPendingLocalDeleteFlag(orderKey);
+    final live = _rawSessionOrder;
+    if (live != null && live.products.isNotEmpty) {
+      _orderRepository.clearEmptyShellDisplay(orderKey);
+      return;
+    }
+    if (live == null || live.products.isEmpty) {
+      _orderRepository.rememberEmptyShellDisplay(orderKey);
+    }
+  }
+
+  bool _shouldPreferLiveTicket(
+    SessionOrder live,
+    SessionOrder updated,
+    Set<int> suppress,
+  ) {
+    final liveCount = OrderMapper.productEntryCount(live.displayEntries);
+    final updatedCount =
+        OrderMapper.productEntryCount(updated.displayEntries);
+
+    if (OrderMapper.hasOptimisticProductEntries(live.displayEntries)) {
+      return true;
+    }
+    if (liveCount > updatedCount) return true;
+    if (suppress.isNotEmpty && liveCount <= updatedCount) return true;
+    if (OrderMapper.suivreSeparatorCount(live.displayEntries) >
+        OrderMapper.suivreSeparatorCount(updated.displayEntries)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _liveItemIdsDiffer(SessionOrder before, SessionOrder after) {
+    List<int> orderedIds(List<OrderDisplayEntry> entries) => [
+          for (final entry in entries)
+            if (entry.type == OrderDisplayEntryType.product)
+              entry.itemId ?? 0,
+        ];
+    final beforeIds = orderedIds(before.displayEntries);
+    final afterIds = orderedIds(after.displayEntries);
+    if (beforeIds.length != afterIds.length) return true;
+    for (var i = 0; i < beforeIds.length; i++) {
+      if (beforeIds[i] != afterIds[i]) return true;
+    }
+    return false;
+  }
+
   /// Apply a background sync result without flashing stale server data.
   ///
   /// Local ticket wins while deletes/adds race. Suppressed item ids are always
@@ -144,6 +213,31 @@ class TableDetailsController extends GetxController {
     final updatedCount =
         OrderMapper.productEntryCount(updated.displayEntries);
 
+    // Waiter's current ticket wins — patch server ids only, never relayout.
+    if (live != null && _shouldPreferLiveTicket(live, updated, suppress)) {
+      _releaseDeletedLinesConfirmedBy(updated);
+      if (orderKey > 0) {
+        _orderRepository.clearPendingLocalDeleteFlag(orderKey);
+        if (live.products.isNotEmpty) {
+          _orderRepository.clearEmptyShellDisplay(orderKey);
+        }
+      }
+
+      final patched = OrderMapper.patchServerItemIdsOntoLive(
+        live: live,
+        server: updated,
+        suppressItemIds: suppress,
+      );
+      if (_liveItemIdsDiffer(live, patched)) {
+        _syncOrderInSession(
+          patched,
+          orderNumber,
+          displayEntriesOverride: patched.displayEntries,
+        );
+      }
+      return;
+    }
+
     // No-op when the visible ticket already matches — avoid GetX rebuild storms.
     if (live != null &&
         live.id == updated.id &&
@@ -154,7 +248,8 @@ class TableDetailsController extends GetxController {
             OrderMapper.suivreSeparatorCount(updated.displayEntries) &&
         OrderMapper.demandeSeparatorCount(live.displayEntries) ==
             OrderMapper.demandeSeparatorCount(updated.displayEntries) &&
-        live.total == updated.total) {
+        live.total == updated.total &&
+        !_liveItemIdsDiffer(live, updated)) {
       _releaseDeletedLinesConfirmedBy(updated);
       return;
     }
@@ -166,31 +261,12 @@ class TableDetailsController extends GetxController {
     if (liveCount == 0 &&
         (suppress.isNotEmpty || pendingDelete || emptyShell) &&
         updatedCount > 0) {
-      // Keep the sync id (may be recreated) even while locking empty UI.
-      final empty = updated.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
       if (orderKey > 0) {
         _orderRepository.rememberEmptyShellDisplay(orderKey);
       }
-      _syncOrderInSession(
-        empty,
-        orderNumber,
-        displayEntriesOverride: empty.displayEntries,
-      );
       return;
     }
     if (liveCount == 0 && (suppress.isNotEmpty || pendingDelete || emptyShell)) {
-      // Prefer updated id so recreate-after-delete-all sticks in the session.
-      final empty = updated.copyWith(
-        products: const [],
-        displayEntries: const [],
-        itemCount: 0,
-        total: OrderMapper.formatPrice('0'),
-      );
       if (orderKey > 0) {
         _orderRepository.rememberEmptyShellDisplay(orderKey);
       }
@@ -198,34 +274,18 @@ class TableDetailsController extends GetxController {
         _releaseDeletedLinesConfirmedBy(updated);
         _orderRepository.clearSuppressedOrderItemIds(orderKey);
         _orderRepository.clearPendingLocalDeleteFlag(orderKey);
+        final empty = updated.copyWith(
+          products: const [],
+          displayEntries: const [],
+          itemCount: 0,
+          total: OrderMapper.formatPrice('0'),
+        );
+        _syncOrderInSession(
+          empty,
+          orderNumber,
+          displayEntriesOverride: empty.displayEntries,
+        );
       }
-      _syncOrderInSession(
-        empty,
-        orderNumber,
-        displayEntriesOverride: empty.displayEntries,
-      );
-      return;
-    }
-
-    // During a delete storm, the thinner live ticket always wins.
-    if (live != null &&
-        liveCount > 0 &&
-        liveCount < updatedCount &&
-        (suppress.isNotEmpty || pendingDelete)) {
-      final merged = OrderMapper.mergeLiveOptimisticDetail(
-        server: updated,
-        live: live,
-        suppressItemIds: suppress,
-      );
-      if (merged.id > 0) {
-        _orderRepository.clearEmptyShellDisplay(merged.id);
-      }
-      _releaseDeletedLinesConfirmedBy(updated);
-      _syncOrderInSession(
-        merged,
-        orderNumber,
-        displayEntriesOverride: merged.displayEntries,
-      );
       return;
     }
 
@@ -239,29 +299,6 @@ class TableDetailsController extends GetxController {
         live: live,
         suppressItemIds: suppress,
       );
-      if (live != null &&
-          OrderMapper.productEntryCount(live.displayEntries) ==
-              OrderMapper.productEntryCount(base.displayEntries) &&
-          OrderMapper.suivreSeparatorCount(live.displayEntries) ==
-              OrderMapper.suivreSeparatorCount(base.displayEntries) &&
-          OrderMapper.demandeSeparatorCount(live.displayEntries) ==
-              OrderMapper.demandeSeparatorCount(base.displayEntries)) {
-        final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
-          live: live.displayEntries,
-          server: base.displayEntries,
-        );
-        final products = [
-          for (final entry in stabilized)
-            if (entry.type == OrderDisplayEntryType.product &&
-                entry.product != null)
-              entry.product!,
-        ];
-        base = base.copyWith(
-          products: products,
-          displayEntries: stabilized,
-          itemCount: products.length,
-        );
-      }
     }
 
     // Hard guarantee: deleted ids never re-enter the ticket from any response.
@@ -269,7 +306,7 @@ class TableDetailsController extends GetxController {
     if (suppress.isNotEmpty) {
       toShow = OrderMapper.mergeLiveOptimisticDetail(
         server: base,
-        live: base,
+        live: live ?? base,
         suppressItemIds: suppress,
       );
     }
@@ -281,6 +318,19 @@ class TableDetailsController extends GetxController {
     }
 
     _releaseDeletedLinesConfirmedBy(updated);
+
+    // Skip rebuild when layout already matches live (prevents jump).
+    if (live != null &&
+        OrderMapper.productEntryCount(live.displayEntries) ==
+            OrderMapper.productEntryCount(toShow.displayEntries) &&
+        OrderMapper.suivreSeparatorCount(live.displayEntries) ==
+            OrderMapper.suivreSeparatorCount(toShow.displayEntries) &&
+        OrderMapper.demandeSeparatorCount(live.displayEntries) ==
+            OrderMapper.demandeSeparatorCount(toShow.displayEntries) &&
+        !_liveItemIdsDiffer(live, toShow)) {
+      return;
+    }
+
     _syncOrderInSession(
       toShow,
       orderNumber,
@@ -310,6 +360,16 @@ class TableDetailsController extends GetxController {
     _orderRepository.clearEmptyShellDisplay(id);
     _orderRepository.clearPendingLocalDeleteFlag(id);
     _orderRepository.bumpDetailRevision(id);
+  }
+
+  /// Drop in-flight delete applies when the waiter starts adding after deletes.
+  void _invalidateDeleteAppliesIfNeeded() {
+    final id = orderId ?? _rawSessionOrder?.id ?? 0;
+    if (id > 0 &&
+        (_orderRepository.hasPendingLocalDelete(id) ||
+            _suppressDeletedItemIds.isNotEmpty)) {
+      _invalidateBackgroundApplies();
+    }
   }
 
   /// Keep catalog highlight in sync with the real ticket.
@@ -1434,6 +1494,7 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: displayEntries,
     );
+    _invalidateDeleteAppliesIfNeeded();
   }
 
   Future<void> requestNextCourse({BuildContext? context}) async {
@@ -1553,6 +1614,7 @@ class TableDetailsController extends GetxController {
     );
 
     _prepareForNewAdd();
+    _invalidateDeleteAppliesIfNeeded();
 
     if (product.isComposed) {
       // Flush any pending simple batch before opening the menu composer.
@@ -2349,10 +2411,17 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    // Invalidate any queued/in-flight add so it cannot PUT or re-apply lines
-    // after this delete (add → quick delete-all race).
-    _ticketMutationEpoch++;
-    _discardPendingSimpleAdds();
+    // Abort in-flight adds only when clearing the whole ticket — partial
+    // deletes must not discard items the waiter adds immediately after.
+    final predicted = OrderMapper.predictAfterCancelLineAtIndex(
+      currentOrder,
+      productIndex,
+    );
+    final clearingTicket = predicted.products.isEmpty;
+    if (clearingTicket) {
+      _ticketMutationEpoch++;
+      _discardPendingSimpleAdds();
+    }
 
     final line = currentOrder.products[productIndex];
     final catalog = catalogProductByName(line.name);
@@ -2373,15 +2442,12 @@ class TableDetailsController extends GetxController {
       }
     }
 
-    final predicted = OrderMapper.predictAfterCancelLineAtIndex(
-      currentOrder,
-      productIndex,
-    );
+    final predictedAfterCancel = predicted;
     final activeId = orderId ?? currentOrder.id;
     _suppressDeletedLine(deletedItemId, orderId: activeId);
     // Also suppress every remaining line id when clearing the ticket so a
     // late add response (new ids) is still blocked by empty-shell + epoch.
-    if (predicted.products.isEmpty && activeId > 0) {
+    if (predictedAfterCancel.products.isEmpty && activeId > 0) {
       for (final entry in currentOrder.displayEntries) {
         if (entry.type != OrderDisplayEntryType.product) continue;
         final id = entry.itemId ?? 0;
@@ -2420,13 +2486,7 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
-      apply: (updated) {
-        if (updated.id > 0) {
-          orderId = updated.id;
-          _orderRepository.rememberEmptyShellDisplay(updated.id);
-        }
-        _applySyncedOrder(updated);
-      },
+      apply: _applyDeleteSyncSilently,
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -2443,20 +2503,12 @@ class TableDetailsController extends GetxController {
           seedOrder = updated;
         }
         final live = _rawSessionOrder;
-        // Waiter already re-added while cancel-all ran — keep those lines.
         if (live != null && live.products.isNotEmpty) {
           _orderRepository.clearEmptyShellDisplay(
             updated.id > 0 ? updated.id : id,
           );
           _orderRepository.clearPendingLocalDeleteFlag(
             updated.id > 0 ? updated.id : id,
-          );
-          return OrderMapper.mergeLiveOptimisticDetail(
-            server: updated,
-            live: live,
-            suppressItemIds: _orderRepository.suppressedItemIdsFor(
-              updated.id > 0 ? updated.id : id,
-            ),
           );
         }
         return updated;
@@ -2501,7 +2553,7 @@ class TableDetailsController extends GetxController {
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: rollbackSnapshot,
-      apply: _applySyncedOrder,
+      apply: _applyDeleteSyncSilently,
       sync: () async {
         final id = await _resolveOrderIdForBackgroundSync();
         if (id == null || id <= 0) {
@@ -2532,15 +2584,12 @@ class TableDetailsController extends GetxController {
         }
         if (updated.id > 0) orderId = updated.id;
         final liveAfter = _rawSessionOrder;
-        if (liveAfter != null &&
-            OrderMapper.productEntryCount(liveAfter.displayEntries) <
-                OrderMapper.productEntryCount(updated.displayEntries)) {
-          return OrderMapper.mergeLiveOptimisticDetail(
-            server: updated,
-            live: liveAfter,
-            suppressItemIds: _orderRepository.suppressedItemIdsFor(
-              updated.id > 0 ? updated.id : id,
-            ),
+        if (liveAfter != null && liveAfter.products.isNotEmpty) {
+          _orderRepository.clearEmptyShellDisplay(
+            updated.id > 0 ? updated.id : id,
+          );
+          _orderRepository.clearPendingLocalDeleteFlag(
+            updated.id > 0 ? updated.id : id,
           );
         }
         return updated;

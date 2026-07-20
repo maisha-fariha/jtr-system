@@ -1670,6 +1670,77 @@ class OrderMapper {
     return result;
   }
 
+  /// Copies server item ids onto [live] rows without reordering or rebuilding
+  /// sections — used when background add sync completes while the waiter
+  /// already sees the correct local ticket.
+  static SessionOrder patchServerItemIdsOntoLive({
+    required SessionOrder live,
+    required SessionOrder server,
+    Set<int> suppressItemIds = const {},
+  }) {
+    final serverProducts = <OrderDisplayEntry>[
+      for (final entry in server.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            (entry.itemId ?? 0) > 0 &&
+            !suppressItemIds.contains(entry.itemId))
+          entry,
+    ];
+    final remaining = List<OrderDisplayEntry>.from(serverProducts);
+
+    OrderDisplayEntry? takeMatch(OrderDisplayEntry liveProduct) {
+      final id = liveProduct.itemId ?? 0;
+      if (id > 0) {
+        final byId = remaining.indexWhere((e) => (e.itemId ?? 0) == id);
+        if (byId >= 0) return remaining.removeAt(byId);
+      }
+      final key = _productFingerprint(liveProduct.product);
+      if (key != null) {
+        final byKey = remaining.indexWhere(
+          (e) => _productFingerprint(e.product) == key,
+        );
+        if (byKey >= 0) return remaining.removeAt(byKey);
+      }
+      return null;
+    }
+
+    var lineIndex = 0;
+    final display = <OrderDisplayEntry>[];
+    for (final entry in live.displayEntries) {
+      if (entry.isSectionDivider) {
+        display.add(entry);
+        continue;
+      }
+      if (entry.type != OrderDisplayEntryType.product || entry.product == null) {
+        display.add(entry);
+        continue;
+      }
+      final match = takeMatch(entry);
+      display.add(
+        OrderDisplayEntry.product(
+          product: match?.product ?? entry.product!,
+          lineIndex: lineIndex++,
+          sectionIndex: entry.sectionIndex ?? 0,
+          courseNumber: match?.courseNumber ?? entry.courseNumber,
+          itemId: match?.itemId ?? entry.itemId,
+        ),
+      );
+    }
+
+    final products = [
+      for (final entry in display)
+        if (entry.type == OrderDisplayEntryType.product && entry.product != null)
+          entry.product!,
+    ];
+
+    return live.copyWith(
+      id: server.id > 0 ? server.id : live.id,
+      products: products,
+      displayEntries: display,
+      itemCount: products.length,
+      total: products.isEmpty ? formatPrice('0') : live.total,
+    );
+  }
+
   static SessionOrder _stripSuppressedItems(
     SessionOrder order,
     Set<int> suppressItemIds,

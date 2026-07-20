@@ -1189,6 +1189,47 @@ void main() {
     );
   });
 
+  test('patchServerItemIdsOntoLive keeps layout and assigns ids', () {
+    final live = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 0),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(2, 'C', itemId: 0),
+      ],
+    );
+    final server = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'X', itemId: 99),
+        _product(2, 'B', itemId: 2),
+        _product(3, 'C', itemId: 3),
+      ],
+    );
+
+    final patched = OrderMapper.patchServerItemIdsOntoLive(
+      live: live,
+      server: server,
+      suppressItemIds: {99},
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(patched.displayEntries), 1);
+    expect(
+      [
+        for (final e in patched.displayEntries)
+          if (e.type == OrderDisplayEntryType.product) e.itemId,
+      ],
+      [1, 2, 3],
+    );
+    expect(
+      [
+        for (final e in patched.displayEntries)
+          if (e.type == OrderDisplayEntryType.product) e.product?.name,
+      ],
+      ['A', 'B', 'C'],
+    );
+  });
+
   test('stabilizeLiveLayoutWithServer keeps live order', () {
     final live = [
       _product(0, 'A', itemId: 1),

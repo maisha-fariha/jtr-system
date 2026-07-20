@@ -30,12 +30,14 @@ class OrderOptimisticSync {
     void Function(Object error)? onError,
   }) {
     _pending[syncKey] = (_pending[syncKey] ?? 0) + 1;
-    _generation[syncKey] = (_generation[syncKey] ?? 0) + 1;
+    final jobGeneration = (_generation[syncKey] ?? 0) + 1;
+    _generation[syncKey] = jobGeneration;
 
     final task = (_queues[syncKey] ?? Future<void>.value())
         .catchError((_) {})
         .then((_) => _runQueuedMutation(
               syncKey: syncKey,
+              applyGeneration: jobGeneration,
               snapshot: snapshot,
               apply: apply,
               sync: sync,
@@ -47,8 +49,17 @@ class OrderOptimisticSync {
     unawaited(task);
   }
 
+  /// Bumps generation so in-flight jobs drop their apply without enqueueing.
+  ///
+  /// Call when the waiter mutates the ticket locally (add / À SUIVRE) so a
+  /// late delete response cannot rebuild the visible layout.
+  void invalidateApplies(int syncKey) {
+    _generation[syncKey] = (_generation[syncKey] ?? 0) + 1;
+  }
+
   Future<void> _runQueuedMutation({
     required int syncKey,
+    required int applyGeneration,
     required SessionOrder snapshot,
     required OrderApply apply,
     required Future<SessionOrder> Function() sync,
@@ -73,8 +84,6 @@ class OrderOptimisticSync {
     } else {
       _pending[syncKey] = remaining;
     }
-
-    final applyGeneration = _generation[syncKey] ?? 0;
 
     if (error != null) {
       if (remaining <= 0) {

@@ -115,6 +115,7 @@ class DeviceActivationController extends GetxController {
 
   /// Live camera scan of the dashboard QR.
   Future<void> scanQrWithCamera() async {
+    if (!DeviceActivationBypass.qrEnabled) return;
     if (isSubmitting.value || isImportingQr.value || isScanningQr.value) {
       return;
     }
@@ -145,6 +146,7 @@ class DeviceActivationController extends GetxController {
   }
 
   Future<void> importQrPng() async {
+    if (!DeviceActivationBypass.qrEnabled) return;
     _clearFeedback();
     if (isSubmitting.value || isScanningQr.value || isImportingQr.value) {
       return;

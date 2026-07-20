@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../controllers/device_activation_controller.dart';
+import '../core/config/device_activation_bypass.dart';
 import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
@@ -177,14 +178,15 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                               ),
                             );
                           }),
-                          JtrResponsive.getResponsiveSpacing(context, 16),
-                          Obx(
-                            () => ElevatedButton.icon(
-                              onPressed: controller.isImportingQr.value ||
-                                      controller.isScanningQr.value ||
-                                      controller.isSubmitting.value
-                                  ? null
-                                  : controller.scanQrWithCamera,
+                          if (DeviceActivationBypass.qrEnabled) ...[
+                            JtrResponsive.getResponsiveSpacing(context, 16),
+                            Obx(
+                              () => ElevatedButton.icon(
+                                onPressed: controller.isImportingQr.value ||
+                                        controller.isScanningQr.value ||
+                                        controller.isSubmitting.value
+                                    ? null
+                                    : controller.scanQrWithCamera,
                               icon: controller.isScanningQr.value
                                   ? SizedBox(
                                       height: JtrResponsive.getResponsiveSize(
@@ -297,6 +299,7 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                     ),
                             ),
                           ),
+                          ],
                           Obx(() {
                             final message = controller.feedbackMessage.value;
                             if (message == null || message.isEmpty) {

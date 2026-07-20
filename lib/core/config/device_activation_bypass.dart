@@ -8,6 +8,9 @@ class DeviceActivationBypass {
   /// QR scan/import stays available; API stays static until a QR is applied.
   static const bool enabled = true;
 
+  /// Camera scan + PNG import on activation screen.
+  static const bool qrEnabled = false;
+
   static const String activationCode = 'JTR-BYPASS';
   static const String apiBaseUrl = 'https://api.goatech.ma/';
   static const String tenantSchema = 'mocca';

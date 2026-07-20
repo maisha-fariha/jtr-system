@@ -542,7 +542,7 @@ void main() {
     expect(((courses.first as Map)['items'] as List).isNotEmpty, isTrue);
   });
 
-  test('writable suivre skips empty shell without server id', () {
+  test('writable suivre reuses empty shell slot even without server id', () {
     final detail = <String, dynamic>{
       'id': 1,
       'seat_orders': [
@@ -577,7 +577,7 @@ void main() {
         detail,
         preferredCourseNumber: 2,
       ),
-      3,
+      2,
     );
   });
 
@@ -1272,5 +1272,357 @@ void main() {
     expect(OrderMapper.suivreSeparatorCount(predicted.displayEntries), 0);
     expect(predicted.products.length, 1);
     expect(predicted.products.first.name, 'A');
+  });
+
+  test('preservePendingSuivreFromLive keeps waiter-opened divider', () {
+    final live = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 0),
+        _product(2, 'C', itemId: 0),
+        _product(3, 'D', itemId: 0),
+      ],
+    );
+    final candidate = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 2),
+        _product(2, 'C', itemId: 3),
+        _product(3, 'D', itemId: 4),
+      ],
+    );
+
+    final preserved = OrderMapper.preservePendingSuivreFromLive(
+      live: live,
+      candidate: candidate,
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(preserved.displayEntries), 1);
+    expect(OrderMapper.productEntryCount(preserved.displayEntries), 4);
+  });
+
+  test('rebake moves suite items from course 1 onto empty course 2', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'COCA'},
+                  'sub_total': 5,
+                },
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 30, 'name': 'AVOCAT'},
+                  'sub_total': 5,
+                },
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 30, 'name': 'AVOCAT'},
+                  'sub_total': 5,
+                },
+                {
+                  'id': 4,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 30, 'name': 'AVOCAT'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 11,
+              'course_number': 2,
+              'status': 'to_be_continued',
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    final layout = [
+      _product(0, 'COCA', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'AVOCAT', itemId: 2),
+      _product(2, 'AVOCAT', itemId: 3),
+      _product(3, 'AVOCAT', itemId: 4),
+    ];
+
+    final rebaked = OrderMapper.rebakeSuivreSectionOntoCourse(
+      detail,
+      layout: layout,
+      sectionIndex: 1,
+      targetCourseNumber: 2,
+    );
+
+    expect(rebaked.changed, isTrue);
+    final course2 = OrderMapper.findCourseInOrderDetail(rebaked.detail, 2)!;
+    expect(
+      [
+        for (final item in (course2['items'] as List))
+          if (item is Map && item['status'] != 'cancelled') item,
+      ].length,
+      3,
+    );
+    expect(
+      OrderMapper.extractRequestableCourseIdsForSuivreSection(
+        rebaked.detail,
+        courseNumber: 2,
+      ),
+      [11],
+    );
+  });
+
+  test('ensure puts missing suite items onto empty course 2', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'COCA'},
+                  'sub_total': 5,
+                },
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'cancelled',
+                  'product': {'id': 30, 'name': 'AVOCAT'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 11,
+              'course_number': 2,
+              'status': 'to_be_continued',
+              'items': <dynamic>[],
+            },
+          ],
+        },
+      ],
+    };
+
+    final layout = [
+      _product(0, 'COCA', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'AVOCAT', itemId: 0),
+      _product(2, 'AVOCAT', itemId: 0),
+      _product(3, 'AVOCAT', itemId: 0),
+    ];
+
+    final ensured = OrderMapper.ensureSuivreSectionOnCourse(
+      detail,
+      layout: layout,
+      sectionIndex: 1,
+      targetCourseNumber: 2,
+      resolveProductId: (name) =>
+          name.toUpperCase() == 'AVOCAT' ? 30 : null,
+      resolveUnitPrice: (_) => 5,
+    );
+
+    expect(ensured.changed, isTrue);
+    final course2 = OrderMapper.findCourseInOrderDetail(ensured.detail, 2)!;
+    expect(
+      [
+        for (final item in (course2['items'] as List))
+          if (item is Map && item['status'] != 'cancelled') item,
+      ].length,
+      3,
+    );
+    expect(
+      OrderMapper.extractRequestableCourseIdsForSuivreSection(
+        ensured.detail,
+        courseNumber: 2,
+      ),
+      [11],
+    );
+  });
+
+  test('pin does not pull suite lines above À SUIVRE when above ids are missing',
+      () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'MISSING', itemId: 99), // not on server
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(2, 'D', itemId: 0),
+      _product(3, 'E', itemId: 0),
+      _product(4, 'F', itemId: 0),
+    ];
+    final next = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'D', itemId: 10),
+      _product(2, 'E', itemId: 11),
+      _product(3, 'F', itemId: 12),
+    ];
+
+    final pinned = OrderMapper.pinProductsRelativeToDividers(
+      previous: previous,
+      next: next,
+    );
+
+    final before = <String>[];
+    final after = <String>[];
+    var seen = false;
+    for (final e in pinned) {
+      if (e.isSectionDivider) {
+        seen = true;
+        continue;
+      }
+      if (e.product == null) continue;
+      (seen ? after : before).add(e.product!.name);
+    }
+    expect(before, ['A']);
+    expect(after, ['D', 'E', 'F']);
+  });
+
+  test(
+      'stabilize does not pull suite lines above À SUIVRE when above ids missing',
+      () {
+    final live = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'MISSING', itemId: 99),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(2, 'D', itemId: 0),
+      _product(3, 'E', itemId: 0),
+      _product(4, 'F', itemId: 0),
+    ];
+    final server = [
+      _product(0, 'A', itemId: 1),
+      _product(1, 'D', itemId: 10),
+      _product(2, 'E', itemId: 11),
+      _product(3, 'F', itemId: 12),
+    ];
+
+    final stabilized = OrderMapper.stabilizeLiveLayoutWithServer(
+      live: live,
+      server: server,
+    );
+
+    final before = <String>[];
+    final after = <String>[];
+    var seen = false;
+    for (final e in stabilized) {
+      if (e.isSectionDivider) {
+        seen = true;
+        continue;
+      }
+      if (e.product == null) continue;
+      (seen ? after : before).add(e.product!.name);
+    }
+    // Unmatched live "MISSING" is kept; suite lines stay under À SUIVRE.
+    expect(before, ['A', 'MISSING']);
+    expect(after, ['D', 'E', 'F']);
+  });
+
+  test(
+      'rebuild after Demande keeps suite items under DEMANDÉE when API flattens',
+      () {
+    final live = [
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '13:50:39',
+      ),
+      _product(0, 'OULMES 1L', itemId: 1),
+      _product(1, 'OULMES 50CL', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 1),
+      _product(2, 'COUPE KIDS', itemId: 0),
+      _product(3, 'COUPE KIDS', itemId: 0),
+      _product(4, 'test grammage', itemId: 0),
+      _product(5, 'test grammage', itemId: 0),
+      _product(6, 'test grammage', itemId: 0),
+    ];
+    // Server pin lost suite lines under an empty DEMANDÉE but products[] still
+    // has them (total / In order badges).
+    final serverDisplay = [
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '13:50:39',
+      ),
+      _product(0, 'OULMES 1L', itemId: 1),
+      _product(1, 'OULMES 50CL', itemId: 2),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 2,
+        courseNumber: 1,
+        demandeTimeLabel: '13:50:41',
+      ),
+    ];
+    final serverProducts = [
+      for (final e in live)
+        if (e.type == OrderDisplayEntryType.product && e.product != null)
+          e.product!,
+    ];
+    final server = SessionOrder(
+      id: 1,
+      number: 'T1',
+      numberColor: const Color(0xFF000000),
+      group: '1',
+      poste: 'A',
+      profitCenter: 'SUR PLACE',
+      couverts: '3',
+      impressionCount: 0,
+      impressionColor: const Color(0xFF000000),
+      total: '225.00',
+      products: serverProducts,
+      itemCount: serverProducts.length,
+      displayEntries: serverDisplay,
+    );
+
+    final rebuilt = OrderMapper.rebuildOrderAfterSuivreDemande(
+      serverOrder: server,
+      liveLayout: live,
+      suivreSectionIndex: 2,
+      demandeTimeLabel: '13:50:41',
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(rebuilt.displayEntries), 2);
+    expect(OrderMapper.suivreSeparatorCount(rebuilt.displayEntries), 0);
+    expect(OrderMapper.productEntryCount(rebuilt.displayEntries), 7);
+    expect(rebuilt.products.length, 7);
+
+    final underSecond = <String>[];
+    var demandeCount = 0;
+    for (final e in rebuilt.displayEntries) {
+      if (e.isSectionDivider) {
+        demandeCount++;
+        continue;
+      }
+      if (demandeCount >= 2 && e.product != null) {
+        underSecond.add(e.product!.name);
+      }
+    }
+    expect(underSecond, [
+      'COUPE KIDS',
+      'COUPE KIDS',
+      'test grammage',
+      'test grammage',
+      'test grammage',
+    ]);
   });
 }

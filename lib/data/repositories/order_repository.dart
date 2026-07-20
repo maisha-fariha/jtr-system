@@ -13,6 +13,7 @@ import '../datasources/order_remote_datasource.dart';
 import '../datasources/session_datasource.dart';
 import '../../utils/api_log.dart';
 import '../mappers/order_mapper.dart';
+import '../models/catalog/catalog_product_model.dart';
 import 'catalog_repository.dart';
 
 /// One simple product line for a batched seat-order items POST.
@@ -1216,6 +1217,8 @@ class OrderRepository {
 
     final apiLog = StringBuffer('── Demande À SUIVRE course=$courseNumber ──\n');
     var detail = await _remote.fetchOrderDetail(orderId);
+    apiLog.writeln('API courses before:');
+    apiLog.writeln(OrderMapper.describeCourseContents(detail));
     var courseIds = <int>[];
 
     // Suite lines already alone on a real course → fire that id.
@@ -1233,8 +1236,8 @@ class OrderRepository {
     }
 
     // After delete-suite / layout-only À SUIVRE: preferred course is often an
-    // empty shell while items still sit on course 1. Rebake onto a writable
-    // course (reuse empty shell with server id when possible).
+    // empty shell while items still sit on course 1. Ensure suite lines live
+    // on a writable follow-up course before Demande.
     var targetCourseNumber = OrderMapper.resolveWritableSuivreCourseNumber(
       detail,
       preferredCourseNumber: courseNumber,
@@ -1243,14 +1246,6 @@ class OrderRepository {
       apiLog.writeln(
         'preferred course $courseNumber not writable → $targetCourseNumber',
       );
-    }
-
-    bool targetCourseMissingServerId() {
-      final course =
-          OrderMapper.findCourseInOrderDetail(detail, targetCourseNumber);
-      if (course == null) return true;
-      final id = (course['id'] as num?)?.toInt() ?? 0;
-      return id <= 0;
     }
 
     bool targetCourseEmpty() {
@@ -1274,35 +1269,63 @@ class OrderRepository {
           suivreSectionIndex,
         ).isNotEmpty;
 
-    // Always rebake when Demande targets an empty/missing shell but the UI
-    // still has suite lines (typical after À SUIVRE when items stayed on
-    // course 1).
+    bool suiteNeedsEnsure() {
+      if (!layoutHasSuiteItems ||
+          previousDisplayEntries == null ||
+          suivreSectionIndex == null) {
+        return false;
+      }
+      return !OrderMapper.suiteItemsFullyOnCourse(
+        detail,
+        layout: previousDisplayEntries,
+        sectionIndex: suivreSectionIndex,
+        courseNumber: targetCourseNumber,
+      );
+    }
+
+    // Move/create suite lines onto the target remote course before Demande.
     if (layoutHasSuiteItems &&
-        (courseIds.isEmpty ||
-            targetCourseMissingServerId() ||
-            targetCourseEmpty())) {
-      final rebaked = OrderMapper.rebakeSuivreSectionOntoCourse(
+        (courseIds.isEmpty || suiteNeedsEnsure() || targetCourseEmpty())) {
+      final catalogProducts = await _catalog.getProducts();
+      CatalogProductModel? catalogByName(String name) {
+        final needle = name.trim().toUpperCase();
+        if (needle.isEmpty) return null;
+        for (final product in catalogProducts) {
+          if (product.name.trim().toUpperCase() == needle) return product;
+        }
+        return null;
+      }
+
+      final ensured = OrderMapper.ensureSuivreSectionOnCourse(
         detail,
         layout: previousDisplayEntries!,
         sectionIndex: suivreSectionIndex!,
         targetCourseNumber: targetCourseNumber,
+        resolveProductId: (name) => catalogByName(name)?.id,
+        resolveUnitPrice: (name) => catalogByName(name)?.unitPrice,
       );
-      if (rebaked.changed) {
-        apiLog.writeln('── Rebake suite → course $targetCourseNumber ──');
+      if (ensured.changed) {
+        apiLog.writeln(
+          '── Ensure suite items on course $targetCourseNumber ──',
+        );
         detail = await _putOrderUpdate(
           orderId: orderId,
-          payload: OrderMapper.buildOrderUpdatePayload(rebaked.detail),
+          payload: OrderMapper.buildOrderUpdatePayload(ensured.detail),
           apiLog: apiLog,
         );
         await _local.saveOrderDetail(orderId, detail);
+        apiLog.writeln('after ensure PUT:');
+        apiLog.writeln(OrderMapper.describeCourseContents(detail));
+
         detail = await _remote.fetchOrderDetail(orderId);
         await _local.saveOrderDetail(orderId, detail);
+        apiLog.writeln('after ensure GET:');
+        apiLog.writeln(OrderMapper.describeCourseContents(detail));
 
         targetCourseNumber = OrderMapper.resolveWritableSuivreCourseNumber(
           detail,
           preferredCourseNumber: targetCourseNumber,
         );
-        // Prefer course-number lookup after rebake (new item ids).
         courseIds = OrderMapper.extractRequestableCourseIdsForSuivreSection(
           detail,
           courseNumber: targetCourseNumber,
@@ -1315,11 +1338,11 @@ class OrderRepository {
           );
         }
         apiLog.writeln(
-          'after rebake course=$targetCourseNumber '
+          'after ensure course=$targetCourseNumber '
           'ids=${courseIds.isEmpty ? '—' : courseIds.join(',')}',
         );
       } else {
-        apiLog.writeln('── Rebake made no changes (matching failed?) ──');
+        apiLog.writeln('── Ensure made no changes ──');
       }
     }
 
@@ -1329,6 +1352,15 @@ class OrderRepository {
         courseNumber: targetCourseNumber,
       );
     }
+    if (courseIds.isEmpty &&
+        previousDisplayEntries != null &&
+        suivreSectionIndex != null) {
+      courseIds = OrderMapper.extractRequestableCourseIdsForSuivreLayout(
+        detail,
+        layout: previousDisplayEntries,
+        sectionIndex: suivreSectionIndex,
+      );
+    }
     if (courseIds.isEmpty) {
       detail = await _remote.fetchOrderDetail(orderId);
       await _local.saveOrderDetail(orderId, detail);
@@ -1336,8 +1368,30 @@ class OrderRepository {
         detail,
         courseNumber: targetCourseNumber,
       );
+      if (courseIds.isEmpty &&
+          previousDisplayEntries != null &&
+          suivreSectionIndex != null) {
+        courseIds = OrderMapper.extractRequestableCourseIdsForSuivreLayout(
+          detail,
+          layout: previousDisplayEntries,
+          sectionIndex: suivreSectionIndex,
+        );
+      }
+    }
+    // Prefer course id from the target course shell / its item.course_id.
+    if (courseIds.isEmpty) {
+      final shellId = OrderMapper.courseRecordIdForNumber(
+        detail,
+        targetCourseNumber,
+      );
+      if (shellId != null && !targetCourseEmpty()) {
+        courseIds = [shellId];
+        apiLog.writeln('shell/item course_id fallback ids=$shellId');
+      }
     }
     if (courseIds.isEmpty) {
+      apiLog.writeln('FINAL courses:');
+      apiLog.writeln(OrderMapper.describeCourseContents(detail));
       lastKitchenSendLog = apiLog.toString();
       throw ApiException(
         message: OrderMapper.describeWhySuivreSectionNotRequestable(
@@ -1362,44 +1416,37 @@ class OrderRepository {
       applyKitchenDemande: true,
     );
 
-    if (suivreSectionIndex != null && suivreSectionIndex > 0) {
+    // Always rebuild from the waiter suite layout after Demande. API extract/pin
+    // can leave an empty DEMANDÉE while products[] / total still include the
+    // suite lines (matches "In order" badges with a blank section).
+    if (previousDisplayEntries != null &&
+        suivreSectionIndex != null &&
+        suivreSectionIndex > 0) {
       final timeLabel = OrderMapper.formatDemandeTime(
             DateTime.now().toUtc().toIso8601String(),
           ) ??
           '--:--:--';
-      var display = order.displayEntries;
-      final stillSuivre = display.any(
-        (entry) =>
-            entry.type == OrderDisplayEntryType.suivreSeparator &&
-            entry.sectionIndex == suivreSectionIndex,
+      order = OrderMapper.rebuildOrderAfterSuivreDemande(
+        serverOrder: order,
+        liveLayout: previousDisplayEntries,
+        suivreSectionIndex: suivreSectionIndex,
+        demandeTimeLabel: timeLabel,
       );
-      if (stillSuivre) {
-        display = OrderMapper.convertSuivreSectionToDemande(
-          display,
-          sectionIndex: suivreSectionIndex,
-          demandeTimeLabel: timeLabel,
-        );
-      } else if (previousDisplayEntries != null &&
-          !display.any(
-            (entry) =>
-                entry.isSectionDivider &&
-                entry.sectionIndex == suivreSectionIndex,
-          )) {
-        // Pin dropped the divider — restore from pre-demande layout as DEMANDÉE.
-        display = OrderMapper.convertSuivreSectionToDemande(
-          previousDisplayEntries,
-          sectionIndex: suivreSectionIndex,
-          demandeTimeLabel: timeLabel,
-        );
-        display = OrderMapper.stabilizeLiveLayoutWithServer(
-          live: display,
-          server: order.displayEntries,
-        );
-      }
-      order = order.copyWith(displayEntries: display);
-      await _persistSuivreLayoutHints(orderId, display);
+      await _persistSuivreLayoutHints(orderId, order.displayEntries);
+    } else if (OrderMapper.productEntryCount(order.displayEntries) <
+        order.products.length) {
+      apiLog.writeln(
+        'display lost products '
+        '(${OrderMapper.productEntryCount(order.displayEntries)}'
+        '/${order.products.length}) — reload from API',
+      );
+      order = await getOrderDetail(
+        orderId,
+        applyKitchenDemande: true,
+      );
     }
 
+    lastKitchenSendLog = apiLog.toString();
     return order;
   }
 

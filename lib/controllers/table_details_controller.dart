@@ -167,6 +167,11 @@ class TableDetailsController extends GetxController {
         OrderMapper.suivreSeparatorCount(updated.displayEntries)) {
       return true;
     }
+    // Open À SUIVRE with lines under it — API often still parks them on
+    // course 1; never let sync flatten them above the divider.
+    if (OrderMapper.layoutHasProductsUnderPendingSuivre(live.displayEntries)) {
+      return true;
+    }
     return false;
   }
 
@@ -223,12 +228,17 @@ class TableDetailsController extends GetxController {
         }
       }
 
-      final patched = OrderMapper.patchServerItemIdsOntoLive(
+      final patched = OrderMapper.preservePendingSuivreFromLive(
         live: live,
-        server: updated,
-        suppressItemIds: suppress,
+        candidate: OrderMapper.patchServerItemIdsOntoLive(
+          live: live,
+          server: updated,
+          suppressItemIds: suppress,
+        ),
       );
-      if (_liveItemIdsDiffer(live, patched)) {
+      if (_liveItemIdsDiffer(live, patched) ||
+          OrderMapper.suivreSeparatorCount(live.displayEntries) !=
+              OrderMapper.suivreSeparatorCount(patched.displayEntries)) {
         _syncOrderInSession(
           patched,
           orderNumber,
@@ -1435,8 +1445,17 @@ class TableDetailsController extends GetxController {
 
   Future<void> addSuivreAfterLatestItems() async {
     if (_blockIfOrderOffered()) return;
+    if (isAddingProduct.value) {
+      AppSnackbar.show(
+        'À SUIVRE',
+        'Veuillez patienter pendant l\'annulation de la suite.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
 
-    final currentOrder = order;
+    final currentOrder = _rawSessionOrder ?? order;
     if (currentOrder == null) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
@@ -1485,8 +1504,11 @@ class TableDetailsController extends GetxController {
     selectedSuivreSection.value = sectionIndex;
 
     final id = resolvedOrderId;
+    // Invalidate + bump BEFORE any await — a late cancel/sync must not wipe
+    // this newly opened À SUIVRE (or items added under it).
+    _invalidateBackgroundApplies();
     if (id != null && id > 0) {
-      await _orderRepository.persistSuivreLayoutHints(id, displayEntries);
+      _orderRepository.bumpDetailRevision(id);
     }
 
     _syncOrderInSession(
@@ -1494,7 +1516,12 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: displayEntries,
     );
-    _invalidateDeleteAppliesIfNeeded();
+
+    if (id != null && id > 0) {
+      unawaited(
+        _orderRepository.persistSuivreLayoutHints(id, displayEntries),
+      );
+    }
   }
 
   Future<void> requestNextCourse({BuildContext? context}) async {
@@ -1564,15 +1591,34 @@ class TableDetailsController extends GetxController {
           await _optimisticSync.waitUntilIdle(_optimisticSyncKey);
 
           final orderSnapshot = order;
+          List<OrderDisplayEntry>? layoutForDemande =
+              orderSnapshot?.displayEntries;
+          if (orderSnapshot != null && layoutForDemande != null) {
+            try {
+              final serverOrder = await _orderRepository.getOrderDetail(
+                id,
+                previousDisplayEntries: layoutForDemande,
+              );
+              layoutForDemande = OrderMapper.patchServerItemIdsOntoLive(
+                live: orderSnapshot,
+                server: serverOrder,
+                suppressItemIds: _suppressDeletedItemIds,
+              ).displayEntries;
+            } catch (_) {}
+          }
+
           final updated = await _orderRepository.requestCourseForSuivreSection(
             id,
             courseNumber: demandeCourseNumber,
-            previousDisplayEntries: orderSnapshot?.displayEntries,
+            previousDisplayEntries: layoutForDemande,
             suivreSectionIndex: sectionIndex,
           );
           if (selectedSuivreSection.value == sectionIndex) {
             selectedSuivreSection.value = null;
           }
+          // Show every DEMANDÉE section's items after send.
+          collapsedSuivreSections.clear();
+          collapsedSuivreSections.refresh();
           // Kitchen response already has DEMANDÉE — do not refresh over it with
           // stale À SUIVRE layout hints.
           _syncOrderInSession(
@@ -1588,9 +1634,12 @@ class TableDetailsController extends GetxController {
             margin: const EdgeInsets.all(16),
           );
         } on ApiException catch (e) {
+          final log = _orderRepository.lastKitchenSendLog;
           ApiDebugDialog.show(
             title: 'Erreur demande',
-            body: e.message,
+            body: log == null || log.isEmpty
+                ? e.message
+                : '${e.message}\n\n$log',
           );
         } catch (_) {
           AppSnackbar.show(
@@ -2141,6 +2190,8 @@ class TableDetailsController extends GetxController {
     );
 
     // Skip identical writes — rapid bg sync must not thrash Obx rebuilds.
+    // Also require the same under-suivre product count so a flattened sync
+    // cannot be ignored while the visible suite layout is wrong.
     final existing = _rawSessionOrder;
     if (existing != null &&
         existing.id == synced.id &&
@@ -2151,7 +2202,12 @@ class TableDetailsController extends GetxController {
         OrderMapper.suivreSeparatorCount(existing.displayEntries) ==
             OrderMapper.suivreSeparatorCount(synced.displayEntries) &&
         OrderMapper.demandeSeparatorCount(existing.displayEntries) ==
-            OrderMapper.demandeSeparatorCount(synced.displayEntries)) {
+            OrderMapper.demandeSeparatorCount(synced.displayEntries) &&
+        OrderMapper.layoutHasProductsUnderPendingSuivre(
+              existing.displayEntries) ==
+            OrderMapper.layoutHasProductsUnderPendingSuivre(
+              synced.displayEntries) &&
+        !_liveItemIdsDiffer(existing, synced)) {
       _reconcileCatalogSelection(source: synced);
       return;
     }
@@ -2306,6 +2362,10 @@ class TableDetailsController extends GetxController {
       currentOrder.displayEntries,
       sectionIndex,
     );
+    final trimmedSuivre =
+        OrderMapper.suivreSeparatorCount(trimmedDisplay);
+    final trimmedProducts =
+        OrderMapper.productEntryCount(trimmedDisplay);
 
     // Suppress cancelled suite item ids so background refresh cannot resurrect.
     for (final entry in currentOrder.displayEntries) {
@@ -2331,6 +2391,10 @@ class TableDetailsController extends GetxController {
         if (entry.type == OrderDisplayEntryType.product && entry.product != null)
           entry.product!,
     ];
+    final revisionAtStart = _orderRepository.detailRevision(id);
+    _orderRepository.bumpDetailRevision(id);
+    _invalidateBackgroundApplies();
+
     _syncOrderInSession(
       currentOrder.copyWith(
         products: optimisticProducts,
@@ -2343,8 +2407,9 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: trimmedDisplay,
     );
-    // Persist trimmed hints before GET so sync cannot revive the suite.
-    await _orderRepository.persistSuivreLayoutHints(id, trimmedDisplay);
+    // Persist off the critical path — awaiting here let late syncs wipe a
+    // newly recreated À SUIVRE while this cancel was still in flight.
+    unawaited(_orderRepository.persistSuivreLayoutHints(id, trimmedDisplay));
 
     isAddingProduct.value = true;
     try {
@@ -2362,6 +2427,28 @@ class TableDetailsController extends GetxController {
         );
       }
       if (updated.id > 0) orderId = updated.id;
+
+      final live = _rawSessionOrder;
+      final liveSuivre = live == null
+          ? 0
+          : OrderMapper.suivreSeparatorCount(live.displayEntries);
+      final liveProducts = live == null
+          ? 0
+          : OrderMapper.productEntryCount(live.displayEntries);
+      final revisionMoved =
+          _orderRepository.detailRevision(id) != revisionAtStart + 1;
+      // Waiter already opened a new suite / added items — never overwrite.
+      if (revisionMoved ||
+          liveSuivre > trimmedSuivre ||
+          liveProducts > trimmedProducts) {
+        _releaseDeletedLinesConfirmedBy(updated);
+        if (live != null) {
+          unawaited(
+            _orderRepository.persistSuivreLayoutHints(id, live.displayEntries),
+          );
+        }
+        return;
+      }
 
       // Keep the waiter-trimmed layout — only refresh product payloads/ids.
       final cleanedDisplay = OrderMapper.stabilizeLiveLayoutWithServer(

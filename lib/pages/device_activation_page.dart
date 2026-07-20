@@ -82,82 +82,90 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                             ),
                           ),
                           JtrResponsive.getResponsiveSpacing(context, 10),
-                          Text(
-                            controller.isQrDisabled
-                                ? 'Mode test (bypass) — serveur Goatech.\n'
-                                    'Code prérempli : JTR-BYPASS.\n'
-                                    'Saisissez le schéma restaurant fourni, '
-                                    'puis activez.'
-                                : 'Liez cet appareil au poste Windows (caisse).\n'
-                                    'Scannez le QR, importez une image, ou saisissez '
-                                    'code + schéma + URL du poste.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: JtrResponsive.getResponsiveFontSize(
-                                context,
-                                13,
+                          Obx(() {
+                            final staticApi = controller.usesStaticBypassApi;
+                            return Text(
+                              staticApi
+                                  ? 'Mode test (bypass) — API Goatech fixe '
+                                      'jusqu\'au scan QR.\n'
+                                      'Code prérempli : JTR-BYPASS.\n'
+                                      'Scannez / importez un QR pour basculer '
+                                      'sur le poste, ou activez en manuel.'
+                                  : 'Liez cet appareil au poste Windows (caisse).\n'
+                                      'Scannez le QR, importez une image, ou saisissez '
+                                      'code + schéma + URL du poste.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  13,
+                                ),
+                                height: 1.45,
+                                color: AppTheme.textSecondary.withValues(
+                                  alpha: 0.85,
+                                ),
                               ),
-                              height: 1.45,
-                              color: AppTheme.textSecondary.withValues(
-                                alpha: 0.85,
-                              ),
-                            ),
-                          ),
+                            );
+                          }),
                           JtrResponsive.getResponsiveSpacing(context, 28),
                           _FieldLabel(text: 'Code d\'activation'),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          TextField(
-                            controller: controller.codeController,
-                            textCapitalization: TextCapitalization.characters,
-                            cursorColor: AppTheme.primary,
-                            style: TextStyle(color: AppTheme.darkText),
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(
-                                RegExp(r'[A-Za-z0-9\-]'),
+                          Obx(() {
+                            final staticApi = controller.usesStaticBypassApi;
+                            return TextField(
+                              controller: controller.codeController,
+                              textCapitalization: TextCapitalization.characters,
+                              cursorColor: AppTheme.primary,
+                              style: TextStyle(color: AppTheme.darkText),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[A-Za-z0-9\-]'),
+                                ),
+                              ],
+                              decoration: _fieldDecoration(
+                                context,
+                                hint: staticApi ? 'JTR-BYPASS' : 'JTR-ABCD-EFGH',
                               ),
-                            ],
-                            decoration: _fieldDecoration(
-                              context,
-                              hint: controller.isQrDisabled
-                                  ? 'JTR-BYPASS'
-                                  : 'JTR-ABCD-EFGH',
-                            ),
-                          ),
+                            );
+                          }),
                           JtrResponsive.getResponsiveSpacing(context, 18),
                           _FieldLabel(text: 'Schéma restaurant'),
                           JtrResponsive.getResponsiveSpacing(context, 8),
-                          TextField(
-                            controller: controller.tenantController,
-                            cursorColor: AppTheme.primary,
-                            style: TextStyle(color: AppTheme.darkText),
-                            decoration: _fieldDecoration(
-                              context,
-                              hint: controller.isQrDisabled
-                                  ? 'mocca'
-                                  : 'ex. mocca',
-                            ),
-                          ),
-                          JtrResponsive.getResponsiveSpacing(context, 18),
-                          _FieldLabel(
-                            text: controller.isQrDisabled
-                                ? 'URL API'
-                                : 'URL / IP du poste',
-                          ),
-                          JtrResponsive.getResponsiveSpacing(context, 8),
-                          if (controller.isQrDisabled)
-                            // Fixed display — never rewrite with trailing /api.
-                            InputDecorator(
+                          Obx(() {
+                            final staticApi = controller.usesStaticBypassApi;
+                            return TextField(
+                              controller: controller.tenantController,
+                              cursorColor: AppTheme.primary,
+                              style: TextStyle(color: AppTheme.darkText),
                               decoration: _fieldDecoration(
                                 context,
-                                hint: '',
+                                hint: staticApi ? 'mocca' : 'ex. mocca',
                               ),
-                              child: Text(
-                                controller.bypassDisplayApiUrl,
-                                style: TextStyle(color: AppTheme.darkText),
-                              ),
-                            )
-                          else
-                            TextField(
+                            );
+                          }),
+                          JtrResponsive.getResponsiveSpacing(context, 18),
+                          Obx(() {
+                            final staticApi = controller.usesStaticBypassApi;
+                            return _FieldLabel(
+                              text: staticApi ? 'URL API' : 'URL / IP du poste',
+                            );
+                          }),
+                          JtrResponsive.getResponsiveSpacing(context, 8),
+                          Obx(() {
+                            if (controller.usesStaticBypassApi) {
+                              // Fixed display — never rewrite with trailing /api.
+                              return InputDecorator(
+                                decoration: _fieldDecoration(
+                                  context,
+                                  hint: '',
+                                ),
+                                child: Text(
+                                  controller.bypassDisplayApiUrl,
+                                  style: TextStyle(color: AppTheme.darkText),
+                                ),
+                              );
+                            }
+                            return TextField(
                               controller: controller.apiBaseUrlController,
                               keyboardType: TextInputType.url,
                               cursorColor: AppTheme.primary,
@@ -167,131 +175,128 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                                 hint:
                                     'ex. 192.168.1.10 ou http://192.168.1.10/api',
                               ),
-                            ),
-                          if (!controller.isQrDisabled) ...[
-                            JtrResponsive.getResponsiveSpacing(context, 16),
-                            Obx(
-                              () => ElevatedButton.icon(
-                                onPressed: controller.isImportingQr.value ||
-                                        controller.isScanningQr.value ||
-                                        controller.isSubmitting.value
-                                    ? null
-                                    : controller.scanQrWithCamera,
-                                icon: controller.isScanningQr.value
-                                    ? SizedBox(
-                                        height:
-                                            JtrResponsive.getResponsiveSize(
-                                          context,
-                                          18,
-                                        ),
-                                        width: JtrResponsive.getResponsiveSize(
-                                          context,
-                                          18,
-                                        ),
-                                        child: const CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : Icon(
-                                        Icons.qr_code_scanner,
-                                        size: JtrResponsive.getResponsiveSize(
-                                          context,
-                                          22,
-                                        ),
+                            );
+                          }),
+                          JtrResponsive.getResponsiveSpacing(context, 16),
+                          Obx(
+                            () => ElevatedButton.icon(
+                              onPressed: controller.isImportingQr.value ||
+                                      controller.isScanningQr.value ||
+                                      controller.isSubmitting.value
+                                  ? null
+                                  : controller.scanQrWithCamera,
+                              icon: controller.isScanningQr.value
+                                  ? SizedBox(
+                                      height: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
                                       ),
-                                label: Text(
-                                  'Scanner le QR (caméra)',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize:
-                                        JtrResponsive.getResponsiveFontSize(
+                                      width: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
+                                      ),
+                                      child: const CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.qr_code_scanner,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        22,
+                                      ),
+                                    ),
+                              label: Text(
+                                'Scanner le QR (caméra)',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    14,
+                                  ),
+                                ),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primary,
+                                disabledBackgroundColor:
+                                    AppTheme.primary.withValues(alpha: 0.45),
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding: JtrResponsive.getResponsivePadding(
+                                  context,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    JtrResponsive.getResponsiveRadius(
                                       context,
-                                      14,
-                                    ),
-                                  ),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppTheme.primary,
-                                  disabledBackgroundColor:
-                                      AppTheme.primary.withValues(alpha: 0.45),
-                                  foregroundColor: Colors.white,
-                                  elevation: 0,
-                                  padding: JtrResponsive.getResponsivePadding(
-                                    context,
-                                    vertical: 14,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(
-                                      JtrResponsive.getResponsiveRadius(
-                                        context,
-                                        16,
-                                      ),
+                                      16,
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                            JtrResponsive.getResponsiveSpacing(context, 10),
-                            Obx(
-                              () => OutlinedButton(
-                                onPressed: controller.isImportingQr.value ||
-                                        controller.isScanningQr.value ||
-                                        controller.isSubmitting.value
-                                    ? null
-                                    : controller.importQrPng,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: AppTheme.primary,
-                                  disabledForegroundColor:
-                                      AppTheme.primary.withValues(alpha: 0.4),
-                                  side: BorderSide(
-                                    color: AppTheme.primary,
-                                    width: 1.4,
-                                  ),
-                                  backgroundColor: AppTheme.lightButton,
-                                  padding: JtrResponsive.getResponsivePadding(
-                                    context,
-                                    vertical: 14,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(
-                                      JtrResponsive.getResponsiveRadius(
-                                        context,
-                                        16,
-                                      ),
+                          ),
+                          JtrResponsive.getResponsiveSpacing(context, 10),
+                          Obx(
+                            () => OutlinedButton(
+                              onPressed: controller.isImportingQr.value ||
+                                      controller.isScanningQr.value ||
+                                      controller.isSubmitting.value
+                                  ? null
+                                  : controller.importQrPng,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppTheme.primary,
+                                disabledForegroundColor:
+                                    AppTheme.primary.withValues(alpha: 0.4),
+                                side: BorderSide(
+                                  color: AppTheme.primary,
+                                  width: 1.4,
+                                ),
+                                backgroundColor: AppTheme.lightButton,
+                                padding: JtrResponsive.getResponsivePadding(
+                                  context,
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    JtrResponsive.getResponsiveRadius(
+                                      context,
+                                      16,
                                     ),
                                   ),
                                 ),
-                                child: controller.isImportingQr.value
-                                    ? SizedBox(
-                                        height:
-                                            JtrResponsive.getResponsiveSize(
+                              ),
+                              child: controller.isImportingQr.value
+                                  ? SizedBox(
+                                      height: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
+                                      ),
+                                      width: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        18,
+                                      ),
+                                      child: const CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: AppTheme.primary,
+                                      ),
+                                    )
+                                  : Text(
+                                      'Importer le QR (PNG)',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: JtrResponsive
+                                            .getResponsiveFontSize(
                                           context,
-                                          18,
-                                        ),
-                                        width: JtrResponsive.getResponsiveSize(
-                                          context,
-                                          18,
-                                        ),
-                                        child: const CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: AppTheme.primary,
-                                        ),
-                                      )
-                                    : Text(
-                                        'Importer le QR (PNG)',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: JtrResponsive
-                                              .getResponsiveFontSize(
-                                            context,
-                                            14,
-                                          ),
+                                          14,
                                         ),
                                       ),
-                              ),
+                                    ),
                             ),
-                          ],
+                          ),
                           Obx(() {
                             final message = controller.feedbackMessage.value;
                             if (message == null || message.isEmpty) {

@@ -50,17 +50,22 @@ class DeviceActivationController extends GetxController {
   final isImportingQr = false.obs;
   final isScanningQr = false.obs;
 
+  /// True after a successful camera/PNG QR parse (unlocks runtime API from QR).
+  final qrApplied = false.obs;
+
   /// User-facing text from API `message` (or local validation).
   final feedbackMessage = RxnString();
   final feedbackIsError = false.obs;
 
-  bool get isQrDisabled => DeviceActivationBypass.enabled;
+  /// Bypass keeps a static API until the user scans/imports a QR.
+  bool get usesStaticBypassApi =>
+      DeviceActivationBypass.enabled && !qrApplied.value;
 
   /// Display-only host for bypass (never append `/api` in the input).
   String get bypassDisplayApiUrl => DeviceActivationBypass.apiBaseUrl;
 
   void _pinBypassDisplayUrl() {
-    if (!DeviceActivationBypass.enabled) return;
+    if (!usesStaticBypassApi) return;
     apiBaseUrlController.text = DeviceActivationBypass.apiBaseUrl;
   }
 
@@ -109,7 +114,6 @@ class DeviceActivationController extends GetxController {
 
   /// Live camera scan of the dashboard QR.
   Future<void> scanQrWithCamera() async {
-    if (isQrDisabled) return;
     if (isSubmitting.value || isImportingQr.value || isScanningQr.value) {
       return;
     }
@@ -140,7 +144,6 @@ class DeviceActivationController extends GetxController {
   }
 
   Future<void> importQrPng() async {
-    if (isQrDisabled) return;
     _clearFeedback();
     if (isSubmitting.value || isScanningQr.value || isImportingQr.value) {
       return;
@@ -226,6 +229,7 @@ class DeviceActivationController extends GetxController {
     codeController.text = payload.code;
     tenantController.text = payload.tenantSchema;
     apiBaseUrlController.text = posUrl;
+    qrApplied.value = true;
     _clearFeedback();
 
     // Point Dio at the QR POS URL immediately (before activate completes).
@@ -251,6 +255,7 @@ class DeviceActivationController extends GetxController {
     isSubmitting.value = true;
     try {
       final result = await _deviceRepository.activateFromAbsoluteUrl(url);
+      qrApplied.value = true;
       tenantController.text = result.tenantSchema;
       apiBaseUrlController.text = result.apiBaseUrl;
 
@@ -304,13 +309,13 @@ class DeviceActivationController extends GetxController {
     final code = DeviceActivationMapper.normalizeCode(codeController.text);
     final tenant =
         DeviceActivationMapper.normalizeTenantSchema(tenantController.text);
-    final posServer = DeviceActivationBypass.enabled
+    final posServer = usesStaticBypassApi
         ? DeviceActivationBypass.apiBaseUrl
         : apiBaseUrlController.text.trim();
 
     if (code.length < 8) {
       _showError(
-        DeviceActivationBypass.enabled
+        usesStaticBypassApi
             ? 'Utilisez le code de bypass ${DeviceActivationBypass.activationCode}.'
             : 'Saisissez un code d\'activation valide.',
       );
@@ -318,7 +323,7 @@ class DeviceActivationController extends GetxController {
     }
     if (tenant.isEmpty) {
       _showError(
-        DeviceActivationBypass.enabled
+        usesStaticBypassApi
             ? 'Saisissez le schéma restaurant (X-Tenant-Schema), '
                 'pas le code de bypass.'
             : 'Saisissez le schéma restaurant.',
@@ -327,7 +332,7 @@ class DeviceActivationController extends GetxController {
     }
     if (posServer.isEmpty) {
       _showError(
-        DeviceActivationBypass.enabled
+        usesStaticBypassApi
             ? 'Saisissez l\'URL API (ex. ${DeviceActivationBypass.apiBaseUrl}).'
             : 'Saisissez l\'URL / IP du poste (ex. 192.168.1.10) ou scannez le QR.',
       );
@@ -348,10 +353,10 @@ class DeviceActivationController extends GetxController {
       return;
     }
 
-    if (!DeviceActivationBypass.enabled) {
-      apiBaseUrlController.text = apiBaseUrl;
-    } else {
+    if (usesStaticBypassApi) {
       _pinBypassDisplayUrl();
+    } else {
+      apiBaseUrlController.text = apiBaseUrl;
     }
     logDeviceActivation(
       phase: 'ACTIVATE_START',
@@ -388,7 +393,7 @@ class DeviceActivationController extends GetxController {
           'message': result.message,
         },
       );
-      if (!DeviceActivationBypass.enabled) {
+      if (!usesStaticBypassApi) {
         apiBaseUrlController.text = result.apiBaseUrl;
       }
       _showSuccess(result.message ?? 'Device activated');
@@ -416,7 +421,7 @@ class DeviceActivationController extends GetxController {
         error: e.toString(),
       );
       _showError(
-        DeviceActivationBypass.enabled
+        usesStaticBypassApi
             ? 'Activation impossible. Vérifiez l\'URL API, le schéma '
                 'et le réseau.'
             : 'Activation impossible. Vérifiez que le téléphone est sur '

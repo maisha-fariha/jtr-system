@@ -4,7 +4,8 @@
 class DeviceActivationBypass {
   DeviceActivationBypass._();
 
-  /// When true: prefill test API + bypass code, hide QR UI.
+  /// When true: prefill test API + bypass code.
+  /// QR scan/import stays available; API stays static until a QR is applied.
   static const bool enabled = true;
 
   static const String activationCode = 'JTR-BYPASS';

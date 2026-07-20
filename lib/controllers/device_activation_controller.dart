@@ -8,6 +8,7 @@ import '../core/config/api_config.dart';
 import '../core/config/device_activation_bypass.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/device_activation_mapper.dart';
+import '../data/models/device_activation_models.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
 import '../data/repositories/session_repository.dart';
@@ -192,14 +193,62 @@ class DeviceActivationController extends GetxController {
       qrPayload: {'raw': qrText},
     );
 
-    // QR is a full activation URL (e.g. mocki.io) → GET it and log RESPONSE.
+    // 1) Full JSON / jtrpos deep-link → POST on scanned api_base_url.
+    if (DeviceActivationMapper.isStructuredActivationQr(qrText)) {
+      await _activateFromParsedQr(qrText, format: 'structured');
+      return;
+    }
+
+    // 2) QR is only POS IP / api base → POST using code + tenant from the form.
+    final posBaseOnly = DeviceActivationMapper.tryParsePosBaseQrWithFallbacks(
+      qrText,
+      fallbackCode: codeController.text,
+      fallbackTenantSchema: tenantController.text,
+    );
+    if (posBaseOnly != null) {
+      await _activateFromPayload(posBaseOnly, format: 'pos_base_url');
+      return;
+    }
+
+    // 3) Mock / dashboard GET URL (e.g. mocki.io).
     final activationUrl = DeviceActivationMapper.activationUrlFromQrText(qrText);
     if (activationUrl != null) {
+      logDeviceActivation(
+        phase: 'QR_ROUTE',
+        posUrl: activationUrl,
+        request: {'method': 'GET', 'reason': 'mock_activation_url'},
+      );
       await _activateFromQrUrl(activationUrl);
       return;
     }
 
-    final payload = DeviceActivationMapper.parseQrText(qrText);
+    // 4) Plain activation code in QR — needs POS URL + tenant on the form.
+    await _activateFromParsedQr(
+      qrText,
+      format: 'plain_code',
+      fallbackApiBaseUrl: apiBaseUrlController.text,
+      fallbackTenantSchema: tenantController.text,
+    );
+  }
+
+  Future<void> _activateFromParsedQr(
+    String qrText, {
+    required String format,
+    String? fallbackApiBaseUrl,
+    String? fallbackTenantSchema,
+  }) async {
+    final payload = DeviceActivationMapper.parseQrText(
+      qrText,
+      fallbackApiBaseUrl: fallbackApiBaseUrl,
+      fallbackTenantSchema: fallbackTenantSchema,
+    );
+    await _activateFromPayload(payload, format: format);
+  }
+
+  Future<void> _activateFromPayload(
+    ActivationQrPayload payload, {
+    required String format,
+  }) async {
     final posUrl =
         DeviceActivationMapper.normalizePosApiBaseUrl(payload.apiBaseUrl);
 
@@ -207,18 +256,24 @@ class DeviceActivationController extends GetxController {
       phase: 'QR_PARSED',
       posUrl: posUrl,
       qrPayload: {
-        'format': DeviceActivationMapper.isActivationDeepLink(qrText)
-            ? 'jtrpos_deeplink'
-            : (qrText.trim().startsWith('{') ? 'json' : 'plain_or_other'),
+        'format': format,
+        'route': 'POST /api/devices/activate',
         'code': payload.code,
         'type': payload.type,
         'tenant_schema': payload.tenantSchema,
         'api_base_url': payload.apiBaseUrl,
+        'dio_origin': ApiConfig.normalizeOriginBaseUrl(posUrl),
         'v': payload.version,
       },
     );
 
     if (DeviceActivationMapper.isUnreachableFromMobileHost(posUrl)) {
+      logDeviceActivation(
+        phase: 'QR_SKIPPED',
+        posUrl: posUrl,
+        error:
+            'QR api_base_url is localhost/127.0.0.1 — regenerate with LAN IP.',
+      );
       _showError(
         'Le QR contient 127.0.0.1 / localhost. '
         'Régénérez le QR depuis le dashboard avec l\'IP LAN du poste.',
@@ -239,6 +294,16 @@ class DeviceActivationController extends GetxController {
     );
     _deviceRepository.applyRuntimeConfigOnly();
 
+    logDeviceActivation(
+      phase: 'QR_ROUTE',
+      posUrl: posUrl,
+      request: {
+        'method': 'POST',
+        'path': '/api/devices/activate',
+        'reason': 'qr_scan',
+      },
+    );
+
     // After a successful scan/import, activate immediately so the console
     // shows POST /api/devices/activate + request/response.
     await activate();
@@ -254,7 +319,15 @@ class DeviceActivationController extends GetxController {
 
     isSubmitting.value = true;
     try {
-      final result = await _deviceRepository.activateFromAbsoluteUrl(url);
+      final result = await _deviceRepository.activateFromAbsoluteUrl(
+        url,
+        fallbackTenantSchema: tenantController.text.trim().isNotEmpty
+            ? tenantController.text
+            : DeviceActivationBypass.tenantSchema,
+        fallbackApiBaseUrl: apiBaseUrlController.text.trim().isNotEmpty
+            ? apiBaseUrlController.text
+            : null,
+      );
       qrApplied.value = true;
       tenantController.text = result.tenantSchema;
       apiBaseUrlController.text = result.apiBaseUrl;
@@ -314,6 +387,10 @@ class DeviceActivationController extends GetxController {
         : apiBaseUrlController.text.trim();
 
     if (code.length < 8) {
+      logDeviceActivation(
+        phase: 'ACTIVATE_VALIDATION',
+        error: 'code too short',
+      );
       _showError(
         usesStaticBypassApi
             ? 'Utilisez le code de bypass ${DeviceActivationBypass.activationCode}.'
@@ -322,6 +399,10 @@ class DeviceActivationController extends GetxController {
       return;
     }
     if (tenant.isEmpty) {
+      logDeviceActivation(
+        phase: 'ACTIVATE_VALIDATION',
+        error: 'tenant_schema empty',
+      );
       _showError(
         usesStaticBypassApi
             ? 'Saisissez le schéma restaurant (X-Tenant-Schema), '
@@ -331,6 +412,10 @@ class DeviceActivationController extends GetxController {
       return;
     }
     if (posServer.isEmpty) {
+      logDeviceActivation(
+        phase: 'ACTIVATE_VALIDATION',
+        error: 'api_base_url empty',
+      );
       _showError(
         usesStaticBypassApi
             ? 'Saisissez l\'URL API (ex. ${DeviceActivationBypass.apiBaseUrl}).'
@@ -343,12 +428,21 @@ class DeviceActivationController extends GetxController {
     try {
       apiBaseUrl = DeviceActivationMapper.normalizePosApiBaseUrl(posServer);
       if (DeviceActivationMapper.isUnreachableFromMobileHost(apiBaseUrl)) {
+        logDeviceActivation(
+          phase: 'ACTIVATE_VALIDATION',
+          posUrl: apiBaseUrl,
+          error: 'localhost/127.0.0.1 not reachable from phone',
+        );
         _showError(
           'Utilisez l\'IP LAN du poste (ex. 192.168.x.x), pas 127.0.0.1.',
         );
         return;
       }
     } on FormatException catch (e) {
+      logDeviceActivation(
+        phase: 'ACTIVATE_VALIDATION',
+        error: e.message,
+      );
       _showError(e.message);
       return;
     }

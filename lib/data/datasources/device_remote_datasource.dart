@@ -125,10 +125,8 @@ class DeviceRemoteDataSource {
     }
   }
 
-  /// GET an absolute activation URL (e.g. mocki.io) and parse the envelope.
-  ///
-  /// Always logs REQUEST + RESPONSE to the console.
-  Future<DeviceActivationResult> activateFromUrl(String absoluteUrl) async {
+  /// GET an absolute URL and return the JSON body (always logged).
+  Future<Map<String, dynamic>> fetchJsonFromAbsoluteUrl(String absoluteUrl) async {
     final url = absoluteUrl.trim();
     final request = {'url': url, 'method': 'GET'};
 
@@ -171,29 +169,7 @@ class DeviceRemoteDataSource {
         );
       }
 
-      final envelope = ApiEnvelope.parseResponse(raw);
-      if (!envelope.success || envelope.data is! Map) {
-        throw ApiException(
-          message: envelope.message?.trim().isNotEmpty == true
-              ? envelope.message!.trim()
-              : 'Activation impossible.',
-          statusCode: envelope.status,
-          responseBody: raw,
-        );
-      }
-
-      try {
-        return DeviceActivationMapper.activationFromJson(
-          Map<String, dynamic>.from(envelope.data as Map),
-          message: envelope.message,
-        );
-      } on FormatException catch (e) {
-        throw ApiException(
-          message: e.message,
-          statusCode: envelope.status,
-          responseBody: raw,
-        );
-      }
+      return raw;
     } on DioException catch (e) {
       logDeviceApi(
         method: 'GET',
@@ -221,6 +197,37 @@ class DeviceRemoteDataSource {
         error: e.toString(),
       );
       rethrow;
+    }
+  }
+
+  /// GET an absolute activation URL (e.g. mocki.io) and parse the envelope.
+  ///
+  /// Always logs REQUEST + RESPONSE to the console.
+  Future<DeviceActivationResult> activateFromUrl(String absoluteUrl) async {
+    final raw = await fetchJsonFromAbsoluteUrl(absoluteUrl);
+
+    final envelope = ApiEnvelope.parseResponse(raw);
+    if (!envelope.success || envelope.data is! Map) {
+      throw ApiException(
+        message: envelope.message?.trim().isNotEmpty == true
+            ? envelope.message!.trim()
+            : 'Activation impossible.',
+        statusCode: envelope.status,
+        responseBody: raw,
+      );
+    }
+
+    try {
+      return DeviceActivationMapper.activationFromJson(
+        Map<String, dynamic>.from(envelope.data as Map),
+        message: envelope.message,
+      );
+    } on FormatException catch (e) {
+      throw ApiException(
+        message: e.message,
+        statusCode: envelope.status,
+        responseBody: raw,
+      );
     }
   }
 

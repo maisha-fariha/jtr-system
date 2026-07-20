@@ -5,6 +5,7 @@ import '../../core/storage/device_secure_storage.dart';
 import '../../utils/api_log.dart';
 import '../datasources/device_remote_datasource.dart';
 import '../mappers/device_activation_mapper.dart';
+import '../models/api_envelope.dart';
 import '../models/device_activation_models.dart';
 import 'dart:io';
 import 'dart:math';
@@ -130,14 +131,17 @@ class DeviceRepository {
     required String tenantSchema,
     required String apiBaseUrl,
   }) async {
-    final payload = DeviceActivationMapper.parseQrText(
-      code,
-      fallbackApiBaseUrl: apiBaseUrl,
-      fallbackTenantSchema: tenantSchema,
-    );
-    if (!payload.isMobile) {
-      throw ApiException(message: 'Le type d\'activation doit être "mobile".');
+    final normalizedCode = DeviceActivationMapper.normalizeCode(code);
+    if (normalizedCode.length < 8) {
+      throw const FormatException('Code d\'activation invalide.');
     }
+    final payload = ActivationQrPayload(
+      version: 1,
+      apiBaseUrl: DeviceActivationMapper.normalizePosApiBaseUrl(apiBaseUrl),
+      code: normalizedCode,
+      type: 'mobile',
+      tenantSchema: DeviceActivationMapper.normalizeTenantSchema(tenantSchema),
+    );
     return _activatePayload(payload);
   }
 
@@ -150,12 +154,63 @@ class DeviceRepository {
   }
 
   /// GET a full activation URL from the QR (mock / dashboard deep link).
-  Future<DeviceActivationResult> activateFromAbsoluteUrl(String url) async {
-    final result = await _remote.activateFromUrl(url);
-    return _persistActivationResult(
-      result: result,
-      contactedApiBaseUrl: result.apiBaseUrl,
-    );
+  ///
+  /// If the GET body is a QR payload (`code`, `api_base_url`, …), chains
+  /// `POST /api/devices/activate` on that host. Otherwise expects a full
+  /// activate envelope with `device_token`.
+  Future<DeviceActivationResult> activateFromAbsoluteUrl(
+    String url, {
+    String? fallbackTenantSchema,
+    String? fallbackApiBaseUrl,
+  }) async {
+    final raw = await _remote.fetchJsonFromAbsoluteUrl(url);
+
+    final qrPayload =
+        DeviceActivationMapper.tryActivationQrPayloadFromResponse(raw);
+    if (qrPayload != null) {
+      logDeviceActivation(
+        phase: 'ACTIVATE_URL_QR_PAYLOAD',
+        posUrl: qrPayload.apiBaseUrl,
+        qrPayload: {
+          'code': qrPayload.code,
+          'type': qrPayload.type,
+          'tenant_schema': qrPayload.tenantSchema,
+          'api_base_url': qrPayload.apiBaseUrl,
+          'next': 'POST /api/devices/activate',
+        },
+      );
+      return _activatePayload(qrPayload);
+    }
+
+    final envelope = ApiEnvelope.parseResponse(raw);
+    if (!envelope.success || envelope.data is! Map) {
+      throw ApiException(
+        message: envelope.message?.trim().isNotEmpty == true
+            ? envelope.message!.trim()
+            : 'Activation impossible.',
+        statusCode: envelope.status,
+        responseBody: raw,
+      );
+    }
+
+    try {
+      final result = DeviceActivationMapper.activationFromJson(
+        Map<String, dynamic>.from(envelope.data as Map),
+        message: envelope.message,
+        fallbackTenantSchema: fallbackTenantSchema,
+        fallbackApiBaseUrl: fallbackApiBaseUrl,
+      );
+      return _persistActivationResult(
+        result: result,
+        contactedApiBaseUrl: result.apiBaseUrl,
+      );
+    } on FormatException catch (e) {
+      throw ApiException(
+        message: e.message,
+        statusCode: envelope.status,
+        responseBody: raw,
+      );
+    }
   }
 
   Future<DeviceActivationResult> _activatePayload(

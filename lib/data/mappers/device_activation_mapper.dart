@@ -93,6 +93,16 @@ class DeviceActivationMapper {
     return null;
   }
 
+  /// JSON or `jtrpos://` QR — always POST activate on [api_base_url].
+  static bool isStructuredActivationQr(String raw) {
+    final text = raw.trim();
+    if (text.startsWith('\uFEFF')) {
+      return isStructuredActivationQr(text.substring(1));
+    }
+    if (text.startsWith('{')) return true;
+    return isActivationDeepLink(text);
+  }
+
   /// True when [raw] looks like a POS deep-link QR (`jtrpos://activate?...`).
   static bool isActivationDeepLink(String raw) {
     final uri = Uri.tryParse(raw.trim());
@@ -190,13 +200,13 @@ class DeviceActivationMapper {
   /// Extracts a GET activation URL from QR text (bare URL or JSON field).
   ///
   /// Used for mocks like https://mocki.io/v1/... where POST /devices/activate
-  /// is not available. Does not treat `jtrpos://` deep links as GET URLs.
+  /// is not available. Full JSON / `jtrpos://` payloads always use POST instead.
   static String? activationUrlFromQrText(String raw) {
     final text = raw.trim();
     if (text.startsWith('\uFEFF')) {
       return activationUrlFromQrText(text.substring(1));
     }
-    if (isActivationDeepLink(text)) return null;
+    if (isStructuredActivationQr(text)) return null;
     if (isAbsoluteHttpUrl(text) && !isPosBaseOnlyUrl(text)) {
       return text;
     }
@@ -206,14 +216,17 @@ class DeviceActivationMapper {
       final decoded = jsonDecode(text);
       if (decoded is! Map) return null;
       final map = Map<String, dynamic>.from(decoded);
+      // Full activation JSON → POST on api_base_url, not GET.
+      try {
+        payloadFromActivationFields(map);
+        return null;
+      } catch (_) {
+        // Partial JSON may still carry a mock activation_url.
+      }
       const keys = <String>[
         'activation_url',
         'activate_url',
         'url',
-        'api_base_url',
-        'apiBaseUrl',
-        'base_url',
-        'baseUrl',
       ];
       for (final key in keys) {
         final value = map[key]?.toString().trim() ?? '';
@@ -226,6 +239,54 @@ class DeviceActivationMapper {
       return null;
     }
     return null;
+  }
+
+  /// QR is only a POS base URL / IP — combine with typed or bypass fields.
+  static ActivationQrPayload? tryParsePosBaseQrWithFallbacks(
+    String raw, {
+    required String fallbackCode,
+    required String fallbackTenantSchema,
+  }) {
+    final text = raw.trim();
+    if (!isPosBaseOnlyUrl(text)) return null;
+
+    final code = normalizeCode(fallbackCode);
+    final tenant = normalizeTenantSchema(fallbackTenantSchema);
+    if (code.length < 8 || tenant.isEmpty) return null;
+
+    return ActivationQrPayload(
+      version: 1,
+      apiBaseUrl: normalizePosApiBaseUrl(text),
+      code: code,
+      type: 'mobile',
+      tenantSchema: tenant,
+    );
+  }
+
+  /// GET mock URL may return a QR payload (step 1) instead of device_token.
+  static ActivationQrPayload? tryActivationQrPayloadFromResponse(
+    Map<String, dynamic> raw,
+  ) {
+    if (_responseHasDeviceToken(raw)) return null;
+
+    final data = raw['data'];
+    if (data is Map) {
+      final dataMap = Map<String, dynamic>.from(data);
+      if (_responseHasDeviceToken(dataMap)) return null;
+      try {
+        return payloadFromActivationFields(dataMap);
+      } catch (_) {}
+    }
+
+    try {
+      return payloadFromActivationFields(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static bool _responseHasDeviceToken(Map<String, dynamic> map) {
+    return map['device_token']?.toString().trim().isNotEmpty == true;
   }
 
   /// Parses QR text. Accepts:
@@ -287,6 +348,12 @@ class DeviceActivationMapper {
     );
   }
 
+  static String _fieldOrFallback(String? fromResponse, String? fallback) {
+    final response = fromResponse?.trim() ?? '';
+    if (response.isNotEmpty) return response;
+    return fallback?.trim() ?? '';
+  }
+
   static DeviceActivationResult activationFromJson(
     Map<String, dynamic> data, {
     String? message,
@@ -295,20 +362,18 @@ class DeviceActivationMapper {
   }) {
     final deviceId = data['device_id'];
     final token = data['device_token']?.toString() ?? '';
-    final tenant = (data['tenant_schema']?.toString() ??
-            fallbackTenantSchema ??
-            '')
-        .trim();
-    final apiRaw = (data['api_base_url']?.toString() ??
-            fallbackApiBaseUrl ??
-            '')
-        .trim();
+    final tenant = _fieldOrFallback(
+      data['tenant_schema']?.toString(),
+      fallbackTenantSchema,
+    );
+    final apiRaw = _fieldOrFallback(
+      data['api_base_url']?.toString(),
+      fallbackApiBaseUrl,
+    );
     if (token.isEmpty || tenant.isEmpty || apiRaw.isEmpty) {
-      throw FormatException(
-        message?.trim().isNotEmpty == true
-            ? message!.trim()
-            : 'Réponse d\'activation incomplète '
-                '(device_id / device_token requis).',
+      throw const FormatException(
+        'Réponse d\'activation incomplète '
+        '(device_token, tenant_schema et api_base_url requis).',
       );
     }
 

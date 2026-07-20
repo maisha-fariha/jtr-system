@@ -1625,4 +1625,407 @@ void main() {
       'test grammage',
     ]);
   });
+
+  test('relogin split hint keeps both duplicate tops above DEMANDÉE', () {
+    // Waiter: 2× Avocat, À SUIVRE, 3× BASE ORANGE — split saved as [2].
+    // API drift: 2nd Avocat wrongly on course 2 with oranges.
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T09:16:58Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 1,
+                  'course_id': 101,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:10:00Z',
+                  'product': {'id': 20, 'name': 'AVOCAT FRUITS SEC'},
+                  'sub_total': 55,
+                },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'requested_at': '2026-07-20T09:16:58Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:11:00Z',
+                  'product': {'id': 20, 'name': 'AVOCAT FRUITS SEC'},
+                  'sub_total': 55,
+                },
+                {
+                  'id': 3,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:15:00Z',
+                  'product': {'id': 30, 'name': 'BASE ORANGE'},
+                  'sub_total': 0.01,
+                },
+                {
+                  'id': 4,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:15:01Z',
+                  'product': {'id': 30, 'name': 'BASE ORANGE'},
+                  'sub_total': 0.01,
+                },
+                {
+                  'id': 5,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:15:02Z',
+                  'product': {'id': 30, 'name': 'BASE ORANGE'},
+                  'sub_total': 0.01,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final fromApiOnly = OrderMapper.finalizeDisplayEntries(
+      detail,
+      suivreSplitHints: const [],
+      applyKitchenDemande: true,
+    );
+    final namesUnderDemandeApi = <String>[];
+    var pastDivider = false;
+    for (final e in fromApiOnly) {
+      if (e.isSectionDivider) {
+        pastDivider = true;
+        continue;
+      }
+      if (pastDivider && e.product != null) {
+        namesUnderDemandeApi.add(e.product!.name);
+      }
+    }
+    expect(namesUnderDemandeApi.first, 'AVOCAT FRUITS SEC');
+
+    final fromHints = OrderMapper.finalizeDisplayEntries(
+      detail,
+      suivreSplitHints: const [2],
+      applyKitchenDemande: true,
+    );
+    expect(OrderMapper.demandeSeparatorCount(fromHints), 1);
+
+    final above = <String>[];
+    final under = <String>[];
+    var section = 0;
+    for (final e in fromHints) {
+      if (e.isSectionDivider) {
+        section = 1;
+        continue;
+      }
+      if (e.product == null) continue;
+      if (section == 0) {
+        above.add(e.product!.name);
+      } else {
+        under.add(e.product!.name);
+      }
+    }
+    expect(above, ['AVOCAT FRUITS SEC', 'AVOCAT FRUITS SEC']);
+    expect(under, ['BASE ORANGE', 'BASE ORANGE', 'BASE ORANGE']);
+  });
+
+  test('flat layout always appends to course 1 even if product.courseNumber is 2',
+      () {
+    final flatWithStaleCourseNumbers = [
+      OrderDisplayEntry.product(
+        product: const OrderProduct(quantity: '1', name: 'A', price: '5'),
+        lineIndex: 0,
+        courseNumber: 2,
+        itemId: 1,
+      ),
+    ];
+    expect(
+      OrderMapper.resolveAppendCourseNumberFromLayout(
+        flatWithStaleCourseNumbers,
+      ),
+      1,
+    );
+  });
+
+  test('relogin split hints restore DEMANDÉE then pending À SUIVRE', () {
+    // 3× Coca, demand suite (Diver + Coca Zero), new À SUIVRE (Hawaii) — splits [3, 5].
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T10:00:00Z',
+              'status': 'requested',
+              'items': [
+                for (var i = 1; i <= 3; i++)
+                  {
+                    'id': i,
+                    'course_id': 101,
+                    'qty': 1,
+                    'status': 'sent',
+                    'created_at': '2026-07-20T09:${10 + i}:00Z',
+                    'product': {'id': 10, 'name': 'COCA COLA'},
+                    'sub_total': 25,
+                  },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'requested_at': '2026-07-20T10:05:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 4,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:20:00Z',
+                  'product': {'id': 20, 'name': 'DIVER BOISSON'},
+                  'sub_total': 0,
+                },
+                {
+                  'id': 5,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'sent',
+                  'created_at': '2026-07-20T09:21:00Z',
+                  'product': {'id': 30, 'name': 'COCA ZERO'},
+                  'sub_total': 25,
+                },
+              ],
+            },
+            {
+              'id': 103,
+              'course_number': 3,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 6,
+                  'course_id': 103,
+                  'qty': 1,
+                  'status': 'pending',
+                  'created_at': '2026-07-20T09:22:00Z',
+                  'product': {'id': 40, 'name': 'HAWAII'},
+                  'sub_total': 25,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      suivreSplitHints: const [3, 5],
+      suivreCountHint: 1,
+    );
+
+    expect(OrderMapper.sectionDividerCount(entries), 2);
+    expect(OrderMapper.demandeSeparatorCount(entries), 1);
+    expect(OrderMapper.suivreSeparatorCount(entries), 1);
+
+    final namesAbove = <String>[];
+    final namesUnderDemande = <String>[];
+    final namesUnderSuivre = <String>[];
+    var section = 0;
+    for (final e in entries) {
+      if (e.type == OrderDisplayEntryType.demandeSeparator) {
+        section = 1;
+        continue;
+      }
+      if (e.type == OrderDisplayEntryType.suivreSeparator) {
+        section = 2;
+        continue;
+      }
+      if (e.product == null) continue;
+      if (section == 0) {
+        namesAbove.add(e.product!.name);
+      } else if (section == 1) {
+        namesUnderDemande.add(e.product!.name);
+      } else {
+        namesUnderSuivre.add(e.product!.name);
+      }
+    }
+
+    expect(namesAbove, ['COCA COLA', 'COCA COLA', 'COCA COLA']);
+    expect(namesUnderDemande, ['DIVER BOISSON', 'COCA ZERO']);
+    expect(namesUnderSuivre, ['HAWAII']);
+  });
+
+  test('relogin keeps back-to-back dividers at same product boundary', () {
+    // Demand empty section then open new À SUIVRE — split hints [3, 3].
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T10:00:00Z',
+              'status': 'requested',
+              'items': [
+                for (var i = 1; i <= 3; i++)
+                  {
+                    'id': i,
+                    'course_id': 101,
+                    'qty': 1,
+                    'status': 'sent',
+                    'created_at': '2026-07-20T09:${10 + i}:00Z',
+                    'product': {'id': 10, 'name': 'COCA COLA'},
+                    'sub_total': 25,
+                  },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'requested_at': '2026-07-20T10:05:00Z',
+              'status': 'requested',
+              'items': <dynamic>[],
+            },
+            {
+              'id': 103,
+              'course_number': 3,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 6,
+                  'course_id': 103,
+                  'qty': 1,
+                  'status': 'pending',
+                  'created_at': '2026-07-20T09:22:00Z',
+                  'product': {'id': 40, 'name': 'HAWAII'},
+                  'sub_total': 25,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      suivreSplitHints: const [3, 3],
+      suivreCountHint: 1,
+    );
+
+    expect(OrderMapper.sectionDividerCount(entries), 2);
+    expect(OrderMapper.demandeSeparatorCount(entries), 1);
+    expect(OrderMapper.suivreSeparatorCount(entries), 1);
+
+    final namesUnderSuivre = <String>[];
+    var pastSuivre = false;
+    for (final e in entries) {
+      if (e.type == OrderDisplayEntryType.suivreSeparator) {
+        pastSuivre = true;
+        continue;
+      }
+      if (pastSuivre && e.product != null) {
+        namesUnderSuivre.add(e.product!.name);
+      }
+    }
+    expect(namesUnderSuivre, ['HAWAII']);
+  });
+
+  test('extractKitchenSendCourseIds returns every pending course', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 101,
+              'course_number': 1,
+              'requested_at': '2026-07-20T10:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 1,
+                  'course_id': 101,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 1, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 102,
+              'course_number': 2,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 2,
+                  'course_id': 102,
+                  'qty': 1,
+                  'status': 'pending',
+                  'product': {'id': 2, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'id': 103,
+              'course_number': 3,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 3,
+                  'course_id': 103,
+                  'qty': 1,
+                  'status': 'pending',
+                  'product': {'id': 3, 'name': 'C'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.demande(
+        sectionIndex: 1,
+        courseNumber: 1,
+        demandeTimeLabel: '10:00',
+      ),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+
+    final ids = OrderMapper.extractKitchenSendCourseIds(
+      detail,
+      layoutHints: layout,
+    );
+    expect(ids.toSet(), {102, 103});
+  });
 }

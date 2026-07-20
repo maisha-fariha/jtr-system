@@ -4062,12 +4062,39 @@ class OrderRepository {
 
     try {
       apiLog.writeln('── GET /api/orders/$orderId (current) ──');
-      final detail = await _remote.fetchOrderDetail(orderId);
+      var detail = await _remote.fetchOrderDetail(orderId);
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
 
-      final courseIds = OrderMapper.extractKitchenSendCourseIds(detail);
+      if (previousDisplayEntries != null &&
+          previousDisplayEntries.isNotEmpty &&
+          (OrderMapper.layoutHasProductsUnderPendingSuivre(
+                previousDisplayEntries,
+              ) ||
+              OrderMapper.suivreSeparatorCount(previousDisplayEntries) > 0 ||
+              OrderMapper.sectionDividerCount(previousDisplayEntries) > 0)) {
+        final aligned = OrderMapper.alignPendingSuivreLayoutOntoCourses(
+          detail,
+          layout: previousDisplayEntries,
+        );
+        if (aligned.changed) {
+          apiLog.writeln('── Align local suite layout onto courses (PUT) ──');
+          detail = await _putOrderUpdate(
+            orderId: orderId,
+            payload: OrderMapper.buildOrderUpdatePayload(aligned.detail),
+            apiLog: apiLog,
+          );
+          await _local.saveOrderDetail(orderId, detail);
+          detail = await _remote.fetchOrderDetail(orderId);
+          await _local.saveOrderDetail(orderId, detail);
+        }
+      }
+
+      final courseIds = OrderMapper.extractKitchenSendCourseIds(
+        detail,
+        layoutHints: previousDisplayEntries,
+      );
       apiLog.writeln('course_ids=${courseIds.join(',')}');
       if (courseIds.isEmpty) {
         throw ApiException(
@@ -4075,7 +4102,7 @@ class OrderRepository {
         );
       }
 
-      apiLog.writeln('── POST /api/orders/$orderId/courses ──');
+      apiLog.writeln('── POST /api/orders/$orderId/request-courses ──');
       await _remote.requestCourses(orderId, courseIds);
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
@@ -4092,14 +4119,22 @@ class OrderRepository {
       print(lastKitchenSendLog);
       debugPrint(lastKitchenSendLog!);
 
-      // Explicit Envoyer — allow À SUIVRE → DEMANDÉE from kitchen timestamps.
-      // Pass pre-send layout so a flat burst stays above DEMANDÉE even when the
-      // API splits lines across courses.
-      final order = OrderMapper.fromOrderDetail(
+      var order = OrderMapper.fromOrderDetail(
         updated,
         previousDisplayEntries: previousDisplayEntries,
         applyKitchenDemande: true,
       );
+      if (previousDisplayEntries != null &&
+          previousDisplayEntries.isNotEmpty &&
+          OrderMapper.suivreSeparatorCount(order.displayEntries) > 0) {
+        final converted = OrderMapper.convertAllPendingSuivreWithItemsToDemande(
+          order.displayEntries,
+          detail: updated,
+        );
+        if (!identical(converted, order.displayEntries)) {
+          order = order.copyWith(displayEntries: converted);
+        }
+      }
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
       await _sessionLocal.upsertOpenOrderInList(updated);
       return order;

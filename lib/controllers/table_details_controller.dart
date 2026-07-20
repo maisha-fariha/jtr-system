@@ -1810,11 +1810,12 @@ class TableDetailsController extends GetxController {
             final reopeningEmpty = live == null ||
                 live.products.isEmpty ||
                 (lastResult == null && snapshot.products.isEmpty);
-            final layoutHints = reopeningEmpty
-                ? null
-                : (live != null && live.displayEntries.isNotEmpty
-                    ? live.displayEntries
-                    : lastResult?.displayEntries ?? snapshot.displayEntries);
+            final layoutHints = live != null && live.displayEntries.isNotEmpty
+                ? live.displayEntries
+                : lastResult?.displayEntries ??
+                    (snapshot.displayEntries.isNotEmpty
+                        ? snapshot.displayEntries
+                        : null);
 
             final id = await _resolveOrderIdForBackgroundSync();
             if (epochAtEnqueue != _ticketMutationEpoch ||

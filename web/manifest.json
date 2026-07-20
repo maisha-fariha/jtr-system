@@ -1,6 +1,6 @@
 {
-    "name": "jtr_system",
-    "short_name": "jtr_system",
+    "name": "JTR System",
+    "short_name": "JTR System",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -3,6 +3,7 @@ import 'package:get/get.dart' hide Response;
 
 import '../config/api_config.dart';
 import 'api_exception.dart';
+import 'lan_connection_message.dart';
 
 class ApiClient extends GetxService {
   ApiClient() {
@@ -132,13 +133,14 @@ class ApiClient extends GetxService {
 
   ApiException _mapError(DioException error) {
     final response = error.response;
-    if (response?.data is Map<String, dynamic>) {
-      final data = response!.data as Map<String, dynamic>;
-      final message = data['message'] as String?;
+    final body = response?.data;
+    if (body is Map<String, dynamic>) {
+      final message = body['message'] as String?;
       if (message != null && message.isNotEmpty) {
         return ApiException(
           message: message,
-          statusCode: response.statusCode,
+          statusCode: response?.statusCode,
+          responseBody: body,
         );
       }
     }
@@ -147,19 +149,35 @@ class ApiClient extends GetxService {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.receiveTimeout:
       case DioExceptionType.sendTimeout:
-        return ApiException(
-          message: 'Connection timed out. Please try again.',
-          statusCode: response?.statusCode,
-        );
       case DioExceptionType.connectionError:
         return ApiException(
-          message: 'No internet connection.',
+          message: ApiConfig.isLocalPosBaseUrl
+              ? lanPosConnectionUserMessage(
+                  error: error,
+                  targetHost: hostFromBaseUrl(ApiConfig.baseUrl),
+                )
+              : (error.type == DioExceptionType.connectionError
+                  ? 'No internet connection.'
+                  : 'Connection timed out. Please try again.'),
           statusCode: response?.statusCode,
+          responseBody: body,
         );
       default:
+        if (ApiConfig.isLocalPosBaseUrl &&
+            (error.message ?? '').toLowerCase().contains('refused')) {
+          return ApiException(
+            message: lanPosConnectionUserMessage(
+              error: error,
+              targetHost: hostFromBaseUrl(ApiConfig.baseUrl),
+            ),
+            statusCode: response?.statusCode,
+            responseBody: body,
+          );
+        }
         return ApiException(
           message: error.message ?? 'An unexpected error occurred.',
           statusCode: response?.statusCode,
+          responseBody: body,
         );
     }
   }

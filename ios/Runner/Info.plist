@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Jtr System</string>
+	<string>JTR System</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>jtr_system</string>
+	<string>JTR System</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -30,6 +30,21 @@
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scanner le QR d'activation du poste Windows (caisse).</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>JTR System doit accéder au poste de caisse Windows sur le Wi‑Fi local pour l'activation et les commandes.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

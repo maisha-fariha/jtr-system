@@ -7,6 +7,7 @@ import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../routes/app_pages.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../data/mappers/order_mapper.dart';
@@ -134,7 +135,18 @@ class SessionController extends GetxController {
         ),
       );
       unawaited(_prefetchTables());
+      unawaited(_prefetchCreateCatalog());
     }
+  }
+
+  /// Warm product cache + create seed so the first POST /api/orders is not
+  /// blocked on a full paginated products download.
+  Future<void> _prefetchCreateCatalog() async {
+    try {
+      final catalog = Get.find<CatalogRepository>();
+      unawaited(catalog.getProducts());
+      await catalog.resolveSeedProductForEmptyOrder();
+    } catch (_) {}
   }
 
   void _hydrateOrdersFromCache() {
@@ -433,14 +445,35 @@ class SessionController extends GetxController {
     final incomingDisplay = incoming.displayEntries.length;
     final previousDisplay = previous.displayEntries.length;
 
+    final incomingSuivre =
+        OrderMapper.suivreSeparatorCount(incoming.displayEntries);
+    final previousSuivre =
+        OrderMapper.suivreSeparatorCount(previous.displayEntries);
+    final incomingDividers =
+        OrderMapper.sectionDividerCount(incoming.displayEntries);
+    final previousDividers =
+        OrderMapper.sectionDividerCount(previous.displayEntries);
+    // Pending À SUIVRE → DEMANDÉE is not a thinner ticket.
+    final lostPendingSuivre = incomingSuivre < previousSuivre &&
+        incomingDividers < previousDividers;
+
     // Lightweight / stale background rows must not demote a richer ticket.
     final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
         (incomingLines > 0 &&
             previousLines > 0 &&
             incomingLines < previousLines) ||
-        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0);
+        (incomingDisplay == 0 && previousDisplay > 0 && previousLines > 0) ||
+        (lostPendingSuivre && previousLines > 0);
 
     if (incomingThinner) {
+      final keptDisplay = lostPendingSuivre &&
+              incoming.products.isNotEmpty &&
+              incoming.products.length >= previous.products.length
+          ? OrderMapper.reconcileSuivreDisplay(
+              previous: previous.displayEntries,
+              next: incoming.displayEntries,
+            )
+          : previous.displayEntries;
       return previous.copyWith(
         impressionCount: incoming.impressionCount,
         impressionColor: incoming.impressionColor,
@@ -455,6 +488,12 @@ class SessionController extends GetxController {
             : (incoming.itemCount > 0
                 ? incoming.itemCount
                 : previous.products.length),
+        products: incoming.products.length >= previous.products.length
+            ? incoming.products
+            : previous.products,
+        displayEntries: keptDisplay.isNotEmpty
+            ? keptDisplay
+            : previous.displayEntries,
       );
     }
 
@@ -463,6 +502,17 @@ class SessionController extends GetxController {
         previous.itemCount > incoming.itemCount &&
         previous.itemCount > 0) {
       return incoming.copyWith(itemCount: previous.itemCount);
+    }
+
+    // Local delete in flight: never adopt a fatter API ticket.
+    if (previous.id > 0 &&
+        _orderRepository.hasPendingLocalDelete(previous.id) &&
+        incomingLines > previousLines) {
+      return OrderMapper.mergeLiveOptimisticDetail(
+        server: incoming,
+        live: previous,
+        suppressItemIds: _orderRepository.suppressedItemIdsFor(previous.id),
+      );
     }
 
     return incoming;
@@ -531,13 +581,20 @@ class SessionController extends GetxController {
             );
             // Keep brand-new tables empty until a real line is added — do not
             // clear the lock just because cache still holds the API seed.
+            // If the session already has optimistic lines, lift the lock.
             if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
-              detail = detail.copyWith(
-                products: const [],
-                displayEntries: const [],
-                itemCount: 0,
-                total: OrderMapper.formatPrice('0'),
-              );
+              if (previous != null &&
+                  (previous.products.isNotEmpty ||
+                      previous.displayEntries.isNotEmpty)) {
+                _orderRepository.clearEmptyShellDisplay(summary.id);
+              } else {
+                detail = detail.copyWith(
+                  products: const [],
+                  displayEntries: const [],
+                  itemCount: 0,
+                  total: OrderMapper.formatPrice('0'),
+                );
+              }
             }
           } else {
             detail = await _orderRepository.getOrderDetail(summary.id);
@@ -548,10 +605,14 @@ class SessionController extends GetxController {
               _orderRepository.detailRevision(summary.id)) {
             return;
           }
-          // Allow empty-shell to replace a brief seed flash already in memory.
+          // Empty-shell may replace a brief seed flash — never wipe a ticket
+          // that already shows waiter-added lines (add after delete-all).
           final emptyShellOverride =
               _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
-                  detail.products.isEmpty;
+                  detail.products.isEmpty &&
+                  (previous == null ||
+                      (previous.products.isEmpty &&
+                          previous.displayEntries.isEmpty));
           if (!emptyShellOverride &&
               _wouldDowngradeDetail(detail, previous)) {
             return;
@@ -570,7 +631,8 @@ class SessionController extends GetxController {
   bool _stillInList(int orderId) =>
       orders.any((order) => order.id == orderId);
 
-  /// True when applying [incoming] would erase lines the UI already shows.
+  /// True when applying [incoming] would erase lines the UI already shows,
+  /// or resurrect lines the waiter already deleted (suppress in flight).
   bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
     if (previous == null) return false;
     if (incoming.products.isEmpty && previous.products.isNotEmpty) {
@@ -584,6 +646,13 @@ class SessionController extends GetxController {
     if (incoming.displayEntries.isEmpty &&
         previous.displayEntries.isNotEmpty &&
         previous.products.isNotEmpty) {
+      return true;
+    }
+    // Fatter server snapshot during local delete undo / cancel — keep thinner.
+    if (previous.id > 0 &&
+        _orderRepository.hasPendingLocalDelete(previous.id) &&
+        OrderMapper.productEntryCount(incoming.displayEntries) >
+            OrderMapper.productEntryCount(previous.displayEntries)) {
       return true;
     }
     return false;
@@ -623,20 +692,36 @@ class SessionController extends GetxController {
     var forceReplace = replaceDetail;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
-      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
+      // A forced non-empty replace is a real add after delete-all — lift the lock.
+      if (forceReplace &&
+          (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+        _orderRepository.clearEmptyShellDisplay(order.id);
+      } else if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
         safeOrder = order.copyWith(
           products: const [],
           displayEntries: const [],
           itemCount: 0,
           total: OrderMapper.formatPrice('0'),
         );
+        // PreferDetailed would otherwise keep a seed that already leaked in.
+        forceReplace = true;
+      } else {
+        forceReplace = true;
       }
-      // PreferDetailed would otherwise keep a seed that already leaked in.
-      forceReplace = true;
     }
 
-    SessionOrder merged(SessionOrder incoming, SessionOrder previous) =>
-        forceReplace ? incoming : _preferDetailedOrder(incoming, previous);
+    SessionOrder merged(SessionOrder incoming, SessionOrder previous) {
+      if (!forceReplace) {
+        return _preferDetailedOrder(incoming, previous);
+      }
+      // Intentional empty ticket (last line deleted / empty shell).
+      if (incoming.products.isEmpty && incoming.displayEntries.isEmpty) {
+        return incoming;
+      }
+      // Forced replace is authoritative — suite/line deletes intentionally have
+      // fewer À SUIVRE / products. Never reconcile previous suites back in.
+      return incoming;
+    }
 
     if (safeOrder.id <= 0) {
       final byNumber = orders.indexWhere(
@@ -776,8 +861,11 @@ class SessionController extends GetxController {
 
     try {
       final previous = orders[idx];
-      final layoutHints =
-          previousDisplayEntries ?? previous.displayEntries;
+      // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
+      final layoutHints = OrderMapper.coalesceLayoutHints(
+            previousDisplayEntries,
+          ) ??
+          OrderMapper.coalesceLayoutHints(previous.displayEntries);
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
         previousDisplayEntries: layoutHints,
@@ -789,7 +877,13 @@ class SessionController extends GetxController {
       // leaving the row showing its lightweight total with no items).
       final freshIdx = orders.indexWhere((order) => order.id == existing.id);
       if (freshIdx >= 0) {
-        orders[freshIdx] = detail;
+        final live = orders[freshIdx];
+        // Stale GET during delete undo must not flash removed lines back.
+        orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
+          server: detail,
+          live: live,
+          suppressItemIds: _orderRepository.suppressedItemIdsFor(existing.id),
+        );
         orders.refresh();
       }
     } on ApiException catch (e) {
@@ -908,16 +1002,20 @@ class SessionController extends GetxController {
     var blockRecovery = false;
 
     try {
-      // Fresh tables list — stale cache can block create (false "already active")
-      // or skip the occupied dialog incorrectly after a recent delete/close.
-      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      // Prefer cached tables for speed; refresh only if the table is missing
+      // or create fails with a stale "already active" guard.
+      var tables = await _sessionRepository.getTablesList();
       logOrderFlow(
         OrderMapper.buildTablesPostOrderAvailabilityLog(
           tables,
           targetTableNumber: tableNumber,
         ),
       );
-      final target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      var target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      if (target == null) {
+        tables = await _sessionRepository.getTablesList(forceRefresh: true);
+        target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+      }
       if (target == null) {
         logOrderFlow('_createTableAndOpenDetails ABORT table not found');
         _showSnack('Erreur', 'Table $tableNumber introuvable.');
@@ -966,29 +1064,38 @@ class SessionController extends GetxController {
 
       attemptedCreate = true;
       try {
-        final result = await _orderRepository.createTableOrder(
+        created = await _createTableOrderWithFreshTablesRetry(
           waiterId: waiterId,
           tableNumber: tableNumber,
-          numberOfGuests: guests,
+          guests: guests,
           tables: tables,
           salesZoneId: salesZoneId,
+          context: context,
         );
-        created = result.order;
-        final createdWaiter = created.waiterId;
-        if (createdWaiter != null &&
-            createdWaiter > 0 &&
-            createdWaiter != waiterId) {
-          created = null;
-          blockRecovery = true;
-          if (context.mounted) {
-            await TableOccupiedDialog.show(
-              context: context,
-              userName: _currentUserDisplayName,
-              tableNumber: tableNumber,
-            );
-          }
-          return;
-        }
+        if (created == null) return;
+
+        final opened = created!;
+        _clearSuppressedTable(tableNumber);
+        _clearSuppressedTable(opened.number);
+        _upsertOrderInList(opened);
+        isCreatingOrder.value = false;
+        logOrderFlow(
+          '_createTableAndOpenDetails OPEN table=${opened.number} '
+          'orderId=${opened.id}',
+        );
+        openTableDetails(
+          opened.number,
+          orderId: opened.id,
+          deferDetailFetch: true,
+          seedOrder: opened,
+        );
+        unawaited(
+          refreshOrderList(
+            pinOrder: opened,
+            background: true,
+          ),
+        );
+        return;
       } on ApiException catch (e) {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: tableNumber,
@@ -1082,6 +1189,60 @@ class SessionController extends GetxController {
         }
       }
     }
+  }
+
+  Future<SessionOrder?> _createTableOrderWithFreshTablesRetry({
+    required int waiterId,
+    required String tableNumber,
+    required int guests,
+    required List<Map<String, dynamic>> tables,
+    required int? salesZoneId,
+    required BuildContext context,
+  }) async {
+    Future<SessionOrder> run(List<Map<String, dynamic>> snapshot) async {
+      final result = await _orderRepository.createTableOrder(
+        waiterId: waiterId,
+        tableNumber: tableNumber,
+        numberOfGuests: guests,
+        tables: snapshot,
+        salesZoneId: salesZoneId,
+      );
+      return result.order;
+    }
+
+    SessionOrder order;
+    try {
+      order = await run(tables);
+    } on ApiException catch (error) {
+      final message = error.message.toLowerCase();
+      final staleTableGuard = message.contains('déjà') ||
+          message.contains('deja') ||
+          message.contains('active') ||
+          message.contains('already');
+      if (!staleTableGuard) rethrow;
+
+      logOrderFlow(
+        '_createTableOrderWithFreshTablesRetry refresh tables after: '
+        '${error.message}',
+      );
+      final fresh = await _sessionRepository.getTablesList(forceRefresh: true);
+      order = await run(fresh);
+    }
+
+    final createdWaiter = order.waiterId;
+    if (createdWaiter != null &&
+        createdWaiter > 0 &&
+        createdWaiter != waiterId) {
+      if (context.mounted) {
+        await TableOccupiedDialog.show(
+          context: context,
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber,
+        );
+      }
+      return null;
+    }
+    return order;
   }
 
   /// Finds an open order for [tableNumber] already shown in this waiter's list.
@@ -1237,8 +1398,27 @@ class SessionController extends GetxController {
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
       onConfirm: () async {
         try {
-          final updated = await _orderRepository.requestNextCourses(order.id);
-          _upsertOrderInList(updated);
+          var layoutSource = order;
+          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
+                  0 &&
+              layoutSource.id > 0) {
+            try {
+              layoutSource = await _orderRepository.getOrderDetail(
+                layoutSource.id,
+                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+                  layoutSource.displayEntries,
+                ),
+              );
+            } catch (_) {}
+          }
+
+          final updated = await _orderRepository.requestNextCourses(
+            layoutSource.id,
+            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
+              layoutSource.displayEntries,
+            ),
+          );
+          updateOrderRow(updated, replaceDetail: true);
           if (context.mounted) {
             _showSnack(
               'Suite demandée',

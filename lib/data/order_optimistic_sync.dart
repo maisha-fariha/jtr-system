@@ -8,11 +8,18 @@ typedef OrderApply = void Function(SessionOrder order);
 
 /// Serializes background API sync per order while UI updates apply immediately.
 ///
-/// Intermediate server responses are **not** pushed to the UI — only the result
-/// of the last pending mutation is applied, so rapid taps don't flash stale data.
+/// Design for responsiveness (no ANR):
+/// - Mutations run one-at-a-time per [syncKey], always yielding to the event
+///   loop between jobs so frames can paint.
+/// - While more mutations are queued, intermediate API results are **not**
+///   applied to the UI (avoids rebuild storms). The last job applies.
+/// - A generation token drops stale applies so deleted lines do not flash back.
+/// - Applies run inline after yields (no microtask defer) to close the race
+///   where a newer optimistic delete landed before a deferred apply ran.
 class OrderOptimisticSync {
   final Map<int, Future<void>> _queues = {};
   final Map<int, int> _pending = {};
+  final Map<int, int> _generation = {};
 
   void enqueue({
     required int syncKey,
@@ -23,11 +30,14 @@ class OrderOptimisticSync {
     void Function(Object error)? onError,
   }) {
     _pending[syncKey] = (_pending[syncKey] ?? 0) + 1;
+    final jobGeneration = (_generation[syncKey] ?? 0) + 1;
+    _generation[syncKey] = jobGeneration;
 
     final task = (_queues[syncKey] ?? Future<void>.value())
         .catchError((_) {})
         .then((_) => _runQueuedMutation(
               syncKey: syncKey,
+              applyGeneration: jobGeneration,
               snapshot: snapshot,
               apply: apply,
               sync: sync,
@@ -39,14 +49,25 @@ class OrderOptimisticSync {
     unawaited(task);
   }
 
+  /// Bumps generation so in-flight jobs drop their apply without enqueueing.
+  ///
+  /// Call when the waiter mutates the ticket locally (add / À SUIVRE) so a
+  /// late delete response cannot rebuild the visible layout.
+  void invalidateApplies(int syncKey) {
+    _generation[syncKey] = (_generation[syncKey] ?? 0) + 1;
+  }
+
   Future<void> _runQueuedMutation({
     required int syncKey,
+    required int applyGeneration,
     required SessionOrder snapshot,
     required OrderApply apply,
     required Future<SessionOrder> Function() sync,
     required Future<SessionOrder> Function(SessionOrder snapshot) recover,
     void Function(Object error)? onError,
   }) async {
+    await Future<void>.delayed(Duration.zero);
+
     SessionOrder? reconciled;
     Object? error;
     try {
@@ -55,6 +76,8 @@ class OrderOptimisticSync {
       error = e;
     }
 
+    await Future<void>.delayed(Duration.zero);
+
     final remaining = (_pending[syncKey] ?? 1) - 1;
     if (remaining <= 0) {
       _pending.remove(syncKey);
@@ -62,30 +85,61 @@ class OrderOptimisticSync {
       _pending[syncKey] = remaining;
     }
 
-    if (remaining > 0) {
-      if (error != null) {
-        onError?.call(error);
-      }
-      return;
-    }
-
     if (error != null) {
-      try {
-        final recovered = await recover(snapshot);
-        apply(recovered);
-      } catch (_) {
-        apply(snapshot);
+      if (remaining <= 0) {
+        try {
+          final recovered = await recover(snapshot);
+          _safeApply(
+            syncKey: syncKey,
+            applyGeneration: applyGeneration,
+            apply: apply,
+            order: recovered,
+          );
+        } catch (_) {
+          // Never apply the pre-delete snapshot — that resurrects lines.
+        }
       }
       onError?.call(error);
       return;
     }
 
+    if (remaining > 0) return;
+
     if (reconciled != null) {
-      apply(reconciled);
+      _safeApply(
+        syncKey: syncKey,
+        applyGeneration: applyGeneration,
+        apply: apply,
+        order: reconciled,
+      );
     }
   }
 
+  void _safeApply({
+    required int syncKey,
+    required int applyGeneration,
+    required OrderApply apply,
+    required SessionOrder order,
+  }) {
+    if ((_pending[syncKey] ?? 0) > 0) return;
+    if ((_generation[syncKey] ?? 0) != applyGeneration) return;
+    try {
+      apply(order);
+    } catch (_) {}
+  }
+
   bool hasPending(int syncKey) => (_pending[syncKey] ?? 0) > 0;
+
+  Future<void> waitUntilIdle(int syncKey) async {
+    final pending = _queues[syncKey];
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+  }
 
   static SessionOrder deepSnapshot(SessionOrder order) {
     return order.copyWith(

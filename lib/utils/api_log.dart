@@ -131,25 +131,28 @@ void logPaymentApi({
 void logDeviceApi({
   required String method,
   required String path,
+  String? baseUrl,
   Object? request,
   Object? response,
   int? statusCode,
   String? error,
 }) {
+  final fullUrl = _joinBaseAndPath(baseUrl, path);
   final buffer = StringBuffer()
     ..writeln('════════ DEVICE $method $path'
-        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+        '${statusCode != null ? ' → $statusCode' : ''} ════════')
+    ..writeln('API: $method $fullUrl');
 
   if (request != null) {
     buffer
       ..writeln('REQUEST:')
-      ..writeln(_encode(request));
+      ..writeln(_encode(_redactSecrets(request)));
   }
 
   if (response != null) {
     buffer
       ..writeln('RESPONSE:')
-      ..writeln(_encode(response));
+      ..writeln(_encode(_redactSecrets(response)));
   }
 
   if (error != null && error.isNotEmpty) {
@@ -166,6 +169,85 @@ void logDeviceApi({
   final text = buffer.toString();
   print(text);
   debugPrint(text);
+}
+
+String _joinBaseAndPath(String? baseUrl, String path) {
+  final base = (baseUrl ?? '').trim();
+  if (base.isEmpty) return path;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  final normalizedBase =
+      base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+  final normalizedPath = path.startsWith('/') ? path : '/$path';
+  return '$normalizedBase$normalizedPath';
+}
+
+/// QR / activation flow: always print POS URL + payload (never log device_token).
+void logDeviceActivation({
+  required String phase,
+  String? posUrl,
+  Object? qrPayload,
+  Object? request,
+  Object? response,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ DEVICE ACTIVATION [$phase] ════════');
+
+  if (posUrl != null && posUrl.isNotEmpty) {
+    buffer
+      ..writeln('POS_URL / api_base_url:')
+      ..writeln(posUrl);
+  }
+
+  if (qrPayload != null) {
+    buffer
+      ..writeln('QR_PAYLOAD:')
+      ..writeln(_encode(_redactSecrets(qrPayload)));
+  }
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(_redactSecrets(request)));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(_redactSecrets(response)));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('STATUS: ERREUR')
+      ..writeln('ERROR:')
+      ..writeln(error);
+  } else if (response != null || posUrl != null) {
+    buffer.writeln('STATUS: OK');
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
+Object _redactSecrets(Object value) {
+  if (value is! Map) return value;
+  final copy = Map<String, dynamic>.from(value);
+  for (final key in copy.keys.toList()) {
+    final lower = key.toLowerCase();
+    if (lower.contains('token') ||
+        lower.contains('secret') ||
+        lower.contains('password')) {
+      final raw = copy[key]?.toString() ?? '';
+      copy[key] = raw.isEmpty ? '***' : '***${raw.length}ch';
+    } else if (copy[key] is Map) {
+      copy[key] = _redactSecrets(copy[key] as Map);
+    }
+  }
+  return copy;
 }
 
 /// Logs API request/response to the debug console (visible in `flutter run`).

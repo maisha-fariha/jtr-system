@@ -43,6 +43,7 @@ class DeviceActivationResult {
     this.label,
     this.companyCode,
     this.bootstrap,
+    this.message,
   });
 
   final String deviceId;
@@ -53,6 +54,9 @@ class DeviceActivationResult {
   final String? label;
   final String? companyCode;
   final Map<String, dynamic>? bootstrap;
+
+  /// Server envelope `message` (e.g. "Device activated").
+  final String? message;
 }
 
 enum DeviceGateOutcome {

@@ -6,7 +6,6 @@ import 'package:get/get.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
-import '../controllers/theme_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -224,6 +223,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _lastRowKey = GlobalKey();
   int _lastProductCount = -1;
+  int _lastDisplayRowCount = -1;
 
   TableDetailsController get controller => Get.find<TableDetailsController>();
 
@@ -239,19 +239,24 @@ class _OrderSummaryState extends State<_OrderSummary> {
     final lineCount = order.displayEntries
         .where((entry) => entry.type == OrderDisplayEntryType.product)
         .length;
+    final rowCount = order.displayEntries.length;
 
     if (_lastProductCount < 0) {
       _lastProductCount = lineCount;
+      _lastDisplayRowCount = rowCount;
       return;
     }
 
-    if (lineCount <= _lastProductCount) {
-      _lastProductCount = lineCount;
-      return;
-    }
+    // Scroll on new product, or when À SUIVRE is created (rows grow, products don't).
+    final shouldScroll =
+        lineCount > _lastProductCount || rowCount > _lastDisplayRowCount;
 
     _lastProductCount = lineCount;
-    _scrollToLastRow();
+    _lastDisplayRowCount = rowCount;
+
+    if (shouldScroll) {
+      _scrollToLastRow();
+    }
   }
 
   void _scrollToLastRow() {
@@ -477,72 +482,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
               ],
             ),
           ),
-          const _DeleteUndoBanner(),
         ],
-      );
-    });
-  }
-}
-
-class _DeleteUndoBanner extends GetView<TableDetailsController> {
-  const _DeleteUndoBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Obx(() {
-      final label = controller.undoDeleteLabel.value;
-      if (label == null || label.isEmpty) {
-        return const SizedBox.shrink();
-      }
-      // Rebuild when theme toggles.
-      if (Get.isRegistered<ThemeController>()) {
-        ThemeController.to.isDark.value;
-      }
-
-      return Material(
-        color: AppTheme.lightButton,
-        child: Padding(
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            left: 16,
-            right: 8,
-            top: 10,
-            bottom: 10,
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.darkText,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: controller.undoPendingDelete,
-                style: TextButton.styleFrom(
-                  foregroundColor: AppTheme.primary,
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
-                ),
-                child: Text(
-                  'Annuler',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.primary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
       );
     });
   }

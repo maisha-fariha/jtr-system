@@ -47,10 +47,59 @@ class DeviceActivationMapper {
         host == '0.0.0.0';
   }
 
+  /// Origin (scheme + host + port) used to compare contacted vs activate response.
+  static Uri activationOriginFromApiBase(String apiBaseUrl) {
+    final uri = Uri.parse(normalizePosApiBaseUrl(apiBaseUrl));
+    return Uri(
+      scheme: uri.scheme.toLowerCase(),
+      host: uri.host.toLowerCase(),
+      port: uri.hasPort
+          ? uri.port
+          : (uri.scheme.toLowerCase() == 'https' ? 443 : 80),
+    );
+  }
+
+  static bool activationOriginsMatch(
+    String contactedApiBaseUrl,
+    String responseApiBaseUrl,
+  ) {
+    final contacted = activationOriginFromApiBase(contactedApiBaseUrl);
+    final response = activationOriginFromApiBase(responseApiBaseUrl);
+    return contacted.scheme == response.scheme &&
+        contacted.host == response.host &&
+        contacted.port == response.port;
+  }
+
+  static String activationOriginMismatchMessage({
+    required String contactedApiBaseUrl,
+    required String responseApiBaseUrl,
+  }) {
+    final contacted = activationOriginFromApiBase(contactedApiBaseUrl);
+    final response = activationOriginFromApiBase(responseApiBaseUrl);
+    if (contacted.port != response.port) {
+      final defaultPort = contacted.scheme == 'https' ? 443 : 80;
+      if (contacted.port != defaultPort && response.port == defaultPort) {
+        return 'Le port :${contacted.port} est requis dans l\'URL du poste '
+            '(ex. ${contacted.host}:${contacted.port}). '
+            'Le serveur a répondu sans ce port — la connexion échouerait au login.';
+      }
+      if (response.port != defaultPort && contacted.port == defaultPort) {
+        return 'Port manquant : le poste écoute sur :${response.port}. '
+            'Saisissez ${response.host}:${response.port} dans l\'URL / IP.';
+      }
+      return 'Port incompatible (saisi :${contacted.port}, '
+          'serveur :${response.port}). Corrigez l\'URL / IP du poste.';
+    }
+    return 'L\'URL du poste ne correspond pas à celle renvoyée par le serveur.';
+  }
+
   /// Prefer the LAN IP the phone used to reach the POS (from QR / typed IP).
   ///
   /// Activate responses often echo `http://127.0.0.1/api` because the Windows
   /// service binds locally — that must not overwrite the real POS LAN address.
+  ///
+  /// Throws [FormatException] when response origin (host/port) differs from
+  /// [contactedApiBaseUrl] so login uses the same URL as activation.
   static String resolveStoredPosApiBaseUrl({
     required String contactedApiBaseUrl,
     required String responseApiBaseUrl,
@@ -63,7 +112,18 @@ class DeviceActivationMapper {
         !isUnreachableFromMobileHost(contacted)) {
       return contacted;
     }
-    return response;
+
+    if (!activationOriginsMatch(contacted, response)) {
+      throw FormatException(
+        activationOriginMismatchMessage(
+          contactedApiBaseUrl: contacted,
+          responseApiBaseUrl: response,
+        ),
+      );
+    }
+
+    // Always persist the URL the phone actually used (same host/port for login).
+    return contacted;
   }
 
   /// Reads POS base URL / IP from QR JSON (dashboard may use several keys).

@@ -246,11 +246,21 @@ class DeviceRepository {
   }) async {
     // Never persist 127.0.0.1 / localhost from the activate response — keep the
     // LAN IP that successfully reached the Windows POS when available.
-    final storedApiBaseUrl =
-        DeviceActivationMapper.resolveStoredPosApiBaseUrl(
-      contactedApiBaseUrl: contactedApiBaseUrl,
-      responseApiBaseUrl: result.apiBaseUrl,
-    );
+    late final String storedApiBaseUrl;
+    try {
+      storedApiBaseUrl = DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+        contactedApiBaseUrl: contactedApiBaseUrl,
+        responseApiBaseUrl: result.apiBaseUrl,
+      );
+    } on FormatException catch (e) {
+      logDeviceActivation(
+        phase: 'STORE_RUNTIME_ERROR',
+        posUrl: contactedApiBaseUrl,
+        response: {'response_api_base_url': result.apiBaseUrl},
+        error: e.message,
+      );
+      rethrow;
+    }
 
     logDeviceActivation(
       phase: 'STORE_RUNTIME',

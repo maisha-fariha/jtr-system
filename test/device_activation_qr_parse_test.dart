@@ -109,6 +109,44 @@ void main() {
     });
   });
 
+  group('DeviceActivationMapper.resolveStoredPosApiBaseUrl', () {
+    test('stores contacted URL when origins match with port', () {
+      final stored = DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+        contactedApiBaseUrl: 'http://192.168.0.100:8080',
+        responseApiBaseUrl: 'http://192.168.0.100:8080/api',
+      );
+      expect(stored, 'http://192.168.0.100:8080/api');
+    });
+
+    test('throws when response omits port user typed', () {
+      expect(
+        () => DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+          contactedApiBaseUrl: '192.168.0.100:8080',
+          responseApiBaseUrl: 'http://192.168.0.100/api',
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('throws when user omits port but server expects custom port', () {
+      expect(
+        () => DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+          contactedApiBaseUrl: '192.168.0.100',
+          responseApiBaseUrl: 'http://192.168.0.100:8080',
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('keeps LAN contacted URL when response is localhost', () {
+      final stored = DeviceActivationMapper.resolveStoredPosApiBaseUrl(
+        contactedApiBaseUrl: 'http://192.168.0.100:8080',
+        responseApiBaseUrl: 'http://127.0.0.1/api',
+      );
+      expect(stored, 'http://192.168.0.100:8080/api');
+    });
+  });
+
   group('DeviceActivationMapper.activationFromJson', () {
     test('uses fallbacks when bypass response omits tenant / api url', () {
       final result = DeviceActivationMapper.activationFromJson(

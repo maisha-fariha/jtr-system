@@ -1389,6 +1389,40 @@ class TableDetailsController extends GetxController {
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);
           }
+
+          try {
+            final printed = await _orderRepository.markOrderPrinted(
+              id,
+              previousDisplayEntries: updated.displayEntries,
+            );
+            _syncOrderInSession(
+              printed,
+              orderNumber,
+              displayEntriesOverride: printed.displayEntries,
+            );
+            if (_orderRepository.lastPrintLog != null) {
+              debugPrint(_orderRepository.lastPrintLog);
+            }
+          } on ApiException catch (e) {
+            if (context.mounted) {
+              AppSnackbar.show(
+                'Impression',
+                'Envoi OK — ticket non imprimé: ${e.message}',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+            }
+          } catch (_) {
+            if (context.mounted) {
+              AppSnackbar.show(
+                'Impression',
+                'Envoi OK — impossible d\'imprimer le ticket.',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+            }
+          }
+
           _returnToSessionPage();
         } on ApiException catch (e) {
           if (_orderRepository.lastKitchenSendLog != null) {

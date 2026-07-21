@@ -54,26 +54,6 @@ class SessionRepository {
     );
   }
 
-  /// Hive decode off UI thread when the open-orders blob is large.
-  Future<List<SessionOrder>> getCachedSessionOrdersAsync({int? waiterId}) async {
-    if (_openOrdersMemory != null && _openOrdersMemory!.isNotEmpty) {
-      return OrderMapper.sessionOrdersFromOrdersList(
-        _openOrdersMemory!,
-        waiterId: waiterId,
-        lightweight: true,
-      );
-    }
-    final cached = await _local.readOpenOrdersListAsync();
-    if (cached.isEmpty) return const [];
-    _openOrdersMemory = cached;
-    await Future<void>.delayed(Duration.zero);
-    return OrderMapper.sessionOrdersFromOrdersList(
-      cached,
-      waiterId: waiterId,
-      lightweight: true,
-    );
-  }
-
   Future<ActiveDayInfo> getActiveDay({bool forceRefresh = false}) async {
     if (!forceRefresh) {
       final cached = _local.readActiveDay();
@@ -273,11 +253,8 @@ class SessionRepository {
     }
 
     onProgress?.call(0.95);
-    // Let the connect progress bar repaint before heavy encode + map.
-    await Future<void>.delayed(Duration.zero);
     _openOrdersMemory = pageMaps;
     await _local.saveOpenOrdersList(pageMaps);
-    await Future<void>.delayed(Duration.zero);
     final mapped = OrderMapper.sessionOrdersFromOrdersList(
       pageMaps,
       waiterId: scopedId,

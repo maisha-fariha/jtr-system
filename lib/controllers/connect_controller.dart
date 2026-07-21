@@ -82,14 +82,12 @@ class ConnectController extends GetxController {
           )
           .timeout(_syncTimeout);
       _setProgress(_ordersEnd);
-      await Future<void>.delayed(Duration.zero);
 
       _beginPhase(floor: _ordersEnd, ceiling: _activeDayEnd);
       await _sessionRepository
           .getActiveDay(forceRefresh: true)
           .timeout(_syncTimeout);
       _setProgress(_activeDayEnd);
-      await Future<void>.delayed(Duration.zero);
 
       _beginPhase(floor: _activeDayEnd, ceiling: _tablesEnd);
       await _sessionRepository

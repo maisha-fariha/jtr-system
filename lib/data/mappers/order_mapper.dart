@@ -1713,6 +1713,21 @@ class OrderMapper {
     };
   }
 
+  /// Session list row already has full detail for expand (dividers or hydrated products).
+  static bool sessionListDetailIsHydrated(SessionOrder order) {
+    if (order.displayEntries.isEmpty) return false;
+    if (sectionDividerCount(order.displayEntries) > 0) return true;
+    if (demandeSeparatorCount(order.displayEntries) > 0) return true;
+
+    final productEntries = order.displayEntries
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .toList();
+    if (productEntries.isEmpty) return false;
+    if (productEntries.length != order.products.length) return true;
+
+    return (productEntries.first.itemId ?? 0) > 0;
+  }
+
   /// Guest demanded the follow-up course (`status: requested` + timestamp).
   static bool courseWasGuestDemanded(Map<String, dynamic> course) {
     final status = course['status']?.toString().toLowerCase();

@@ -852,7 +852,7 @@ class SessionController extends GetxController {
     if (idx < 0) return;
     if (existing.isLocalOnly) return;
 
-    if (!forceRefresh && existing.products.isNotEmpty) return;
+    if (!forceRefresh && OrderMapper.sessionListDetailIsHydrated(existing)) return;
 
     if (loadingDetailOrderNumbers.contains(orderNumber)) return;
 

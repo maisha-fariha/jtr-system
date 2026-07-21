@@ -533,7 +533,9 @@ class _OrderRow extends GetView<SessionController> {
               ),
               if (isExpanded) ...[
                 Divider(height: 1, color: AppTheme.cardBorder),
-                if (controller.isLoadingOrderDetail(order.number))
+                if (controller.isLoadingOrderDetail(order.number) ||
+                    (order.displayEntries.isEmpty &&
+                        (order.products.isNotEmpty || order.itemCount > 0)))
                   Padding(
                     padding: JtrResponsive.getResponsivePadding(
                       context,
@@ -550,7 +552,8 @@ class _OrderRow extends GetView<SessionController> {
                       ),
                     ),
                   )
-                else if (order.displayEntries.isEmpty)
+                else if (order.displayEntries.isEmpty &&
+                    order.products.isEmpty)
                   Padding(
                     padding: JtrResponsive.getResponsivePadding(
                       context,

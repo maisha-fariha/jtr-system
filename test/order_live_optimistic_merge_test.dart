@@ -2862,4 +2862,58 @@ void main() {
     );
     expect(ids, [103]);
   });
+
+  test('session list summary is not hydrated until detail layout loads', () {
+    final summary = OrderMapper.sessionOrderSummaryFromListMap({
+      'id': 408,
+      'table_number': 'T1',
+      'total_price': '345',
+      'number_of_guests': 3,
+      'items_count': 10,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'quantity': 1,
+                  'product': {'name': 'COUPE KIDS', 'price': 45},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(summary.displayEntries, isEmpty);
+    expect(summary.itemCount, 10);
+    expect(OrderMapper.sessionListDetailIsHydrated(summary), isFalse);
+  });
+
+  test('sessionListDetailIsHydrated true when course dividers present', () {
+    final order = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    expect(OrderMapper.sessionListDetailIsHydrated(order), isTrue);
+  });
+
+  test('sessionListDetailIsHydrated true for single-course detail with item ids', () {
+    final order = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    expect(OrderMapper.sessionListDetailIsHydrated(order), isTrue);
+  });
 }

@@ -75,6 +75,44 @@ void main() {
     expect(OrderMapper.productEntryCount(merged.displayEntries), 4);
   });
 
+  test('merge adopts new menu line under open À SUIVRE after bg sync', () {
+    final live = _order(
+      display: [
+        _product(0, 'OULMES', itemId: 1),
+        _product(1, 'OULMES', itemId: 2),
+        _product(2, 'OULMES', itemId: 3),
+        _product(3, 'OULMES', itemId: 4),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      ],
+      total: '60,00 €',
+    );
+    final server = _order(
+      display: [
+        _product(0, 'OULMES', itemId: 1),
+        _product(1, 'OULMES', itemId: 2),
+        _product(2, 'OULMES', itemId: 3),
+        _product(3, 'OULMES', itemId: 4),
+        _product(4, 'MENU DU JOUR', itemId: 99),
+      ],
+      total: '135,00 €',
+    );
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: server,
+      live: live,
+      preferAdoptingNewServerLines: true,
+      selectedSuivreSectionIndex: 1,
+    );
+
+    expect(OrderMapper.productEntryCount(merged.displayEntries), 5);
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 1);
+    expect(
+      merged.displayEntries.last.product?.name,
+      'MENU DU JOUR',
+    );
+    expect(merged.products.length, 5);
+  });
+
   test('merge does not restore a deleted line from stale server', () {
     final live = _order(
       display: [
@@ -2861,6 +2899,54 @@ void main() {
       layout: layout,
     );
     expect(ids, [103]);
+  });
+
+  test('ensureSessionDisplayHydrated keeps empty display for summary rows', () {
+    final summary = OrderMapper.sessionOrderSummaryFromListMap({
+      'id': 408,
+      'table_number': 'T1',
+      'total_price': '345',
+      'number_of_guests': 3,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'sub_total': 45,
+                  'product': {'name': 'COUPE KIDS'},
+                },
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'sub_total': 45,
+                  'product': {'name': 'MENU'},
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'sub_total': 30,
+                  'product': {'name': 'DESSERT'},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    final hydrated = OrderMapper.ensureSessionDisplayHydrated(summary);
+    expect(hydrated.displayEntries, isEmpty);
+    expect(OrderMapper.sessionListDetailIsHydrated(hydrated), isFalse);
   });
 
   test('session list summary is not hydrated until detail layout loads', () {

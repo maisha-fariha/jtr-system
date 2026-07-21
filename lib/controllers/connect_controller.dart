@@ -33,7 +33,6 @@ class ConnectController extends GetxController {
   static const _tablesEnd = 1.0;
 
   final progress = 0.0.obs;
-  final statusDetail = 'ptxListOrders'.obs;
   final isConnected = false.obs;
   final syncError = RxnString();
 
@@ -62,7 +61,6 @@ class ConnectController extends GetxController {
     final waiterId = _authRepository.cachedSession?.user.id ?? 0;
 
     _setProgress(0);
-    statusDetail.value = 'ptxListOrders';
     _beginPhase(floor: 0, ceiling: 0.08);
 
     // Fresh login: start from an empty cache, then fill it before session opens.
@@ -72,7 +70,6 @@ class ConnectController extends GetxController {
 
     try {
       _beginPhase(floor: 0.05, ceiling: _ordersEnd);
-      statusDetail.value = 'ptxListOrders';
 
       // Orders first — session must not open until this list is ready.
       await _sessionRepository
@@ -87,14 +84,12 @@ class ConnectController extends GetxController {
       _setProgress(_ordersEnd);
 
       _beginPhase(floor: _ordersEnd, ceiling: _activeDayEnd);
-      statusDetail.value = 'ptxActiveDay';
       await _sessionRepository
           .getActiveDay(forceRefresh: true)
           .timeout(_syncTimeout);
       _setProgress(_activeDayEnd);
 
       _beginPhase(floor: _activeDayEnd, ceiling: _tablesEnd);
-      statusDetail.value = 'ptxListTables';
       await _sessionRepository
           .getTablesList(forceRefresh: true)
           .timeout(_syncTimeout);
@@ -103,7 +98,6 @@ class ConnectController extends GetxController {
       syncError.value = error.toString();
       // Still try one last orders pull so session is not empty if possible.
       try {
-        statusDetail.value = 'ptxListOrders';
         await _sessionRepository.getSessionOrders(
           forceRefresh: true,
           waiterId: waiterId,

@@ -1725,7 +1725,67 @@ class OrderMapper {
     if (productEntries.isEmpty) return false;
     if (productEntries.length != order.products.length) return true;
 
-    return (productEntries.first.itemId ?? 0) > 0;
+    // Flat list — only skip detail fetch when every visible line has a server id.
+    return productEntries.every((entry) => (entry.itemId ?? 0) > 0);
+  }
+
+  static List<OrderDisplayEntry> coalesceDisplayEntriesWithProducts(
+    List<OrderProduct> products,
+    List<OrderDisplayEntry> entries,
+  ) {
+    final covered = productEntryCount(entries);
+    if (products.isEmpty || covered >= products.length) return entries;
+
+    if (entries.isEmpty) {
+      return [
+        for (var i = 0; i < products.length; i++)
+          OrderDisplayEntry.product(
+            product: products[i],
+            lineIndex: i,
+          ),
+      ];
+    }
+
+    final result = entries.toList();
+    for (var i = covered; i < products.length; i++) {
+      result.add(
+        OrderDisplayEntry.product(
+          product: products[i],
+          lineIndex: i,
+          itemId: 0,
+        ),
+      );
+    }
+    return reindexDisplayEntries(result);
+  }
+
+  static SessionOrder ensureSessionDisplayHydrated(SessionOrder order) {
+    if (order.products.isEmpty) return order;
+    // Summary rows keep displayEntries empty until GET detail — never invent a
+    // flat fallback layout (that hides À SUIVRE / DEMANDÉE and breaks adds).
+    if (order.displayEntries.isEmpty) return order;
+    if (productEntryCount(order.displayEntries) >= order.products.length) {
+      return order;
+    }
+    return order.copyWith(
+      displayEntries: coalesceDisplayEntriesWithProducts(
+        order.products,
+        order.displayEntries,
+      ),
+    );
+  }
+
+  static List<OrderDisplayEntry>? layoutHintsFromSessionOrder(
+    SessionOrder? order,
+  ) {
+    if (order == null) return null;
+    final fromDisplay = coalesceLayoutHints(order.displayEntries);
+    if (fromDisplay != null) return fromDisplay;
+    if (order.products.isEmpty || order.displayEntries.isEmpty) return null;
+    return coalesceDisplayEntriesWithProducts(
+      order.products,
+      order.displayEntries,
+    );
   }
 
   /// Guest demanded the follow-up course (`status: requested` + timestamp).
@@ -1826,6 +1886,8 @@ class OrderMapper {
     required SessionOrder server,
     required SessionOrder? live,
     Set<int> suppressItemIds = const {},
+    bool preferAdoptingNewServerLines = false,
+    int? selectedSuivreSectionIndex,
   }) {
     if (live == null) {
       return _stripSuppressedItems(server, suppressItemIds);
@@ -1874,36 +1936,64 @@ class OrderMapper {
         if (productEntryCount(display) < liveCount ||
             (suivreSeparatorCount(display) < liveSuivre &&
                 sectionDividerCount(display) < liveDividers)) {
-          display = live.displayEntries;
+          display = appendUnmatchedServerProducts(
+            liveDisplay: live.displayEntries,
+            serverDisplay: server.displayEntries,
+          );
         }
       }
     } else if (liveCount < serverCount && liveCount > 0) {
-      // Live deleted some lines the server still returns — keep live's id set.
-      // (liveCount == 0 is a lightweight session row / fresh open: adopt server.)
-      final liveIds = productItemIds(live.displayEntries);
-      display = [
-        for (final entry in server.displayEntries)
-          if (entry.type != OrderDisplayEntryType.product)
-            entry
-          else if ((entry.itemId ?? 0) <= 0 ||
-              liveIds.contains(entry.itemId))
-            entry,
-      ];
-      display = reconcileSuivreDisplay(
-        previous: live.displayEntries,
-        next: display,
-      );
-      if (liveSuivre > suivreSeparatorCount(display) &&
-          liveDividers > sectionDividerCount(display)) {
-        display = ensureSuivreSeparatorCount(
-          display,
-          liveSuivre,
-          forceAppend: true,
+      if (preferAdoptingNewServerLines && suppressItemIds.isEmpty) {
+        // Background add sync (menu/catalog): server gained lines live never
+        // painted yet — append them under the waiter's open layout.
+        display = appendUnmatchedServerProducts(
+          liveDisplay: live.displayEntries,
+          serverDisplay: server.displayEntries,
+          selectedSuivreSectionIndex: selectedSuivreSectionIndex,
         );
-      }
-      if (suivreSeparatorCount(display) > liveSuivre &&
-          !(liveSuivre == 0 && serverMultiCourse)) {
-        display = limitSuivreSeparatorCount(display, liveSuivre);
+        display = reconcileSuivreDisplay(
+          previous: live.displayEntries,
+          next: display,
+        );
+        if (liveSuivre > suivreSeparatorCount(display) &&
+            liveDividers > sectionDividerCount(display)) {
+          display = ensureSuivreSeparatorCount(
+            display,
+            liveSuivre,
+            forceAppend: true,
+          );
+        }
+        display = pinProductsRelativeToDividers(
+          previous: live.displayEntries,
+          next: display,
+        );
+      } else {
+        // Live deleted some lines the server still returns — keep live's id set.
+        final liveIds = productItemIds(live.displayEntries);
+        display = [
+          for (final entry in server.displayEntries)
+            if (entry.type != OrderDisplayEntryType.product)
+              entry
+            else if ((entry.itemId ?? 0) <= 0 ||
+                liveIds.contains(entry.itemId))
+              entry,
+        ];
+        display = reconcileSuivreDisplay(
+          previous: live.displayEntries,
+          next: display,
+        );
+        if (liveSuivre > suivreSeparatorCount(display) &&
+            liveDividers > sectionDividerCount(display)) {
+          display = ensureSuivreSeparatorCount(
+            display,
+            liveSuivre,
+            forceAppend: true,
+          );
+        }
+        if (suivreSeparatorCount(display) > liveSuivre &&
+            !(liveSuivre == 0 && serverMultiCourse)) {
+          display = limitSuivreSeparatorCount(display, liveSuivre);
+        }
       }
     } else {
       display = server.displayEntries;
@@ -1932,10 +2022,13 @@ class OrderMapper {
     }
     // No waiter suite on live → drop invented À SUIVRE, unless the server
     // ticket already reflects real API multi-course groups (course 1 + 2+).
-    if (liveSuivre == 0 && !serverMultiCourse) {
+    if (liveSuivre == 0 &&
+        !serverMultiCourse &&
+        !preferAdoptingNewServerLines) {
       display = limitSuivreSeparatorCount(display, 0);
     }
-    if (liveCount > 0 &&
+    if (!preferAdoptingNewServerLines &&
+        liveCount > 0 &&
         liveCount < serverCount &&
         productEntryCount(display) > liveCount) {
       final liveIds = productItemIds(live.displayEntries);
@@ -1979,13 +2072,17 @@ class OrderMapper {
           entry.product!,
     ];
 
+    final mergedTotal = products.isEmpty
+        ? formatPrice('0')
+        : (products.length == server.products.length
+            ? (server.products.isNotEmpty ? server.total : live.total)
+            : _sumFormattedPrices(products));
+
     return server.copyWith(
       products: products,
       displayEntries: display,
       itemCount: products.length,
-      total: products.isEmpty
-          ? formatPrice('0')
-          : (server.products.isNotEmpty ? server.total : live.total),
+      total: mergedTotal,
     );
   }
 
@@ -2372,6 +2469,117 @@ class OrderMapper {
       displayEntries: display,
       itemCount: products.length,
       total: products.isEmpty ? formatPrice('0') : live.total,
+    );
+  }
+
+  static List<OrderDisplayEntry> appendUnmatchedServerProducts({
+    required List<OrderDisplayEntry> liveDisplay,
+    required List<OrderDisplayEntry> serverDisplay,
+    int? selectedSuivreSectionIndex,
+  }) {
+    final representedIds = productItemIds(liveDisplay);
+    final representedKeys = <String>{
+      for (final entry in liveDisplay)
+        if (entry.type == OrderDisplayEntryType.product)
+          _productFingerprint(entry.product) ?? '',
+    }..remove('');
+
+    var result = liveDisplay.toList();
+    for (final entry in serverDisplay) {
+      if (entry.type != OrderDisplayEntryType.product ||
+          entry.product == null) {
+        continue;
+      }
+      final id = entry.itemId ?? 0;
+      if (id > 0 && representedIds.contains(id)) continue;
+      final key = _productFingerprint(entry.product);
+      if (key != null && representedKeys.contains(key)) continue;
+
+      final lineIndex = productEntryCount(result);
+      result = _appendProductToDisplayEntries(
+        result,
+        product: entry.product!,
+        lineIndex: lineIndex,
+        selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+      );
+      final last = result.last;
+      if (last.type == OrderDisplayEntryType.product) {
+        result[result.length - 1] = OrderDisplayEntry.product(
+          product: last.product!,
+          lineIndex: last.lineIndex ?? lineIndex,
+          sectionIndex: last.sectionIndex ?? 0,
+          courseNumber: entry.courseNumber ?? last.courseNumber,
+          itemId: entry.itemId,
+        );
+      }
+      if (id > 0) representedIds.add(id);
+      if (key != null) representedKeys.add(key);
+    }
+    return result;
+  }
+
+  static SessionOrder mergeLiveWithPendingSuivreAdds({
+    required SessionOrder server,
+    required SessionOrder live,
+    int? selectedSuivreSectionIndex,
+    bool preferAdoptingNewServerLines = false,
+  }) {
+    final liveHydrated = ensureSessionDisplayHydrated(live);
+    final serverHydrated = ensureSessionDisplayHydrated(server);
+
+    final needsSuivrePreserve =
+        layoutHasProductsUnderPendingSuivre(liveHydrated.displayEntries) ||
+            hasOptimisticProductEntries(liveHydrated.displayEntries) ||
+            suivreSeparatorCount(liveHydrated.displayEntries) >
+                suivreSeparatorCount(serverHydrated.displayEntries) ||
+            sectionDividerCount(liveHydrated.displayEntries) >
+                sectionDividerCount(serverHydrated.displayEntries);
+
+    if (!needsSuivrePreserve) {
+      return mergeLiveOptimisticDetail(
+        server: serverHydrated,
+        live: liveHydrated,
+        preferAdoptingNewServerLines: preferAdoptingNewServerLines,
+        selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+      );
+    }
+
+    var patched = patchServerItemIdsOntoLive(
+      live: liveHydrated,
+      server: serverHydrated,
+    );
+    var display = appendUnmatchedServerProducts(
+      liveDisplay: patched.displayEntries,
+      serverDisplay: serverHydrated.displayEntries,
+      selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+    );
+    display = preferLivePendingSuivre(
+      live: liveHydrated.displayEntries,
+      next: display,
+    );
+    display = pinProductsRelativeToDividers(
+      previous: liveHydrated.displayEntries,
+      next: display,
+    );
+
+    final products = [
+      for (final entry in display)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          entry.product!,
+    ];
+
+    final mergedTotal = products.length == serverHydrated.products.length
+        ? serverHydrated.total
+        : (products.isEmpty
+            ? formatPrice('0')
+            : _sumFormattedPrices(products));
+
+    return serverHydrated.copyWith(
+      products: products,
+      displayEntries: display,
+      itemCount: products.length,
+      total: mergedTotal,
     );
   }
 
@@ -7325,12 +7533,30 @@ class OrderMapper {
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
     List<OrderDisplayEntry>? layoutHints,
+    int? selectedSuivreSectionIndex,
   }) {
     final effectiveLayout = layoutHints ?? current.displayEntries;
-    final workingCurrent = layoutHints != null
-        ? current.copyWith(displayEntries: layoutHints)
-        : current;
+    final workingCurrent = ensureSessionDisplayHydrated(
+      layoutHints != null
+          ? current.copyWith(displayEntries: layoutHints)
+          : current,
+    );
     final subTotal = basePrice + _menuSelectionsSupplement(menuSelections);
+
+    // Open À SUIVRE: append on the session ticket like simple catalog taps.
+    if ((selectedSuivreSectionIndex != null && selectedSuivreSectionIndex > 0) ||
+        layoutHasTrailingPendingSuivre(effectiveLayout) ||
+        layoutHasProductsUnderPendingSuivre(effectiveLayout)) {
+      return _predictAppendOnSessionOrder(
+        current: workingCurrent,
+        productName: productName,
+        unitPrice: subTotal,
+        qty: 1,
+        menuItems: menuSelectionLabelsFromMaps(menuSelections),
+        selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+      );
+    }
+
     final detail = _cachedDetailAlignedWithSession(cachedDetail, workingCurrent);
     if (detail != null) {
       final simulated = simulateDetailAfterAppendComposedItem(
@@ -7343,6 +7569,7 @@ class OrderMapper {
         suivreSectionCount: suivreSectionCount,
         suivreSplitHints: suivreSplitHints,
         layoutHints: effectiveLayout,
+        selectedSuivreSectionIndex: selectedSuivreSectionIndex,
       );
       return fromOrderDetail(
         simulated,
@@ -7358,6 +7585,7 @@ class OrderMapper {
       unitPrice: subTotal,
       qty: 1,
       menuItems: menuSelectionLabelsFromMaps(menuSelections),
+      selectedSuivreSectionIndex: selectedSuivreSectionIndex,
     );
   }
 
@@ -7594,10 +7822,15 @@ class OrderMapper {
     products.add(newProduct);
     final lineIndex = products.length - 1;
 
+    final baseEntries = coalesceDisplayEntriesWithProducts(
+      current.products,
+      current.displayEntries,
+    );
+
     return current.copyWith(
       products: products,
       displayEntries: _appendProductToDisplayEntries(
-        current.displayEntries,
+        baseEntries,
         product: newProduct,
         lineIndex: lineIndex,
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,

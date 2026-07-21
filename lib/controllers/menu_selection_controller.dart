@@ -10,10 +10,10 @@ import '../data/repositories/order_repository.dart';
 import '../models/menu_active_selection.dart';
 import '../models/menu_item.dart';
 import '../models/menu_message_target.dart';
+import '../models/menu_selection_submit_result.dart';
 import '../models/order_display_entry.dart';
 import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
-import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_choice_number_dialog.dart';
 import '../widgets/menu_message_picker_dialog.dart';
@@ -75,18 +75,6 @@ class MenuSelectionController extends GetxController {
     if (sessionOrder != null && sessionOrder.id > 0) {
       orderId = sessionOrder.id;
     }
-  }
-
-  List<OrderDisplayEntry>? _layoutHintsFromSession() {
-    if (!Get.isRegistered<SessionController>()) return null;
-
-    final sessionOrder = Get.find<SessionController>().findOrder(
-      orderNumber: orderNumber,
-      orderId: orderId,
-    );
-    final entries = sessionOrder?.displayEntries;
-    if (entries == null || entries.isEmpty) return null;
-    return entries;
   }
 
   Future<void> _loadMenus() async {
@@ -404,12 +392,6 @@ class MenuSelectionController extends GetxController {
     _resolveOrderIdFromSession();
 
     if (orderId == null || orderId! <= 0) {
-      final diagnostic = StringBuffer()
-        ..writeln('orderNumber=$orderNumber')
-        ..writeln('orderId=$orderId')
-        ..writeln()
-        ..writeln('Aucune commande active trouvée pour cette table.');
-      debugPrint(diagnostic.toString());
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
@@ -418,7 +400,6 @@ class MenuSelectionController extends GetxController {
         ? 1
         : selection.choiceNumber;
 
-    // For each CHOIX category, we require selecting exactly N items.
     for (final category in selection.menu.categories) {
       if (category.items.isEmpty) continue;
 
@@ -449,42 +430,15 @@ class MenuSelectionController extends GetxController {
         .where((message) => message.trim().isNotEmpty)
         .join(' | ');
 
-    final layoutHints = _layoutHintsFromSession();
-
-    isSaving.value = true;
-    try {
-      final updated = await _orderRepository.addComposedProductToOrder(
-        orderId: orderId!,
+    // Optimistic only — table details syncs API in background (like catalog tap).
+    Get.back(
+      result: MenuSelectionSubmitResult(
         productId: selection.menu.productId,
+        productName: selection.menu.label,
         basePrice: selection.menu.priceValue,
         menuSelections: menuSelections,
         comment: comment,
-        layoutHints: layoutHints,
-        tableNumber: orderNumber,
-        waiterId: Get.isRegistered<SessionController>()
-            ? Get.find<SessionController>()
-                    .findOrder(orderNumber: orderNumber, orderId: orderId)
-                    ?.waiterId
-            : null,
-      );
-      orderId = updated.id;
-
-      if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().updateOrderRow(
-          updated,
-          replaceDetail: true,
-        );
-      }
-
-      Get.back(result: true);
-    } on ApiException catch (error) {
-      debugPrint(_orderRepository.lastAddItemLog);
-      ApiDebugDialog.show(title: 'Erreur ajout menu', body: error.message);
-    } catch (error) {
-      debugPrint(_orderRepository.lastAddItemLog ?? '$error');
-      AppSnackbar.show('Erreur', 'Impossible d\'ajouter le menu à la commande.');
-    } finally {
-      isSaving.value = false;
-    }
+      ),
+    );
   }
 }

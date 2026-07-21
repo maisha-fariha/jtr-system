@@ -985,6 +985,19 @@ class TableDetailsController extends GetxController {
     Get.back();
   }
 
+  /// After a successful kitchen send, return to the session list.
+  void _returnToSessionPage() {
+    final currentOrder = order;
+    if (Get.isRegistered<SessionController>() && currentOrder != null) {
+      Get.find<SessionController>().updateOrderRow(currentOrder);
+    }
+    if (Get.currentRoute == AppRoutes.tableDetails) {
+      Get.back();
+      return;
+    }
+    Get.offNamed(AppRoutes.session);
+  }
+
   void toggleBottomPanel() {
     isBottomPanelExpanded.value = !isBottomPanelExpanded.value;
     if (isBottomPanelExpanded.value) {
@@ -1158,7 +1171,10 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.keyboard_return_outlined) {
-      unawaited(navigateBackOrExitTable());
+      if (canNavigateCategoryBack) {
+        navigateCategoryBack();
+        activeToolbarIcon.value = Icons.grid_view;
+      }
       return;
     }
 
@@ -1219,6 +1235,9 @@ class TableDetailsController extends GetxController {
     }
     if (icon == Icons.send_outlined) {
       return canSendToKitchen;
+    }
+    if (icon == Icons.keyboard_return_outlined) {
+      return canNavigateCategoryBack;
     }
     return true;
   }
@@ -1313,13 +1332,7 @@ class TableDetailsController extends GetxController {
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);
           }
-          AppSnackbar.show(
-            'Envoyé',
-            'La commande a été envoyée en cuisine.',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 2),
-            margin: const EdgeInsets.all(16),
-          );
+          _returnToSessionPage();
         } on ApiException catch (e) {
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);

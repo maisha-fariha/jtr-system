@@ -1321,14 +1321,13 @@ class TableDetailsController extends GetxController {
             previousDisplayEntries: layoutBeforeSend,
           );
           selectedSuivreSection.value = null;
-          // Use kitchen-mapped layout (DEMANDÉE) as the only display source.
+          // Keep waiter layout (À SUIVRE stays until manual Demande).
           _syncOrderInSession(
             updated,
             orderNumber,
             displayEntriesOverride: updated.displayEntries,
           );
-          // requestAllCourses already prints the raw request/response log,
-          // but we mirror it here so it is visible even if logs are filtered.
+          // requestAllCourses aligns layout only — no request-courses POST.
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);
           }
@@ -1862,6 +1861,7 @@ class TableDetailsController extends GetxController {
                   orderId: created.id,
                   items: rest,
                   layoutHints: created.displayEntries,
+                  selectedSuivreSectionIndex: selectedSuivreSection.value,
                   tableNumber: orderNumber,
                   waiterId: _currentWaiterId,
                 );
@@ -1874,6 +1874,7 @@ class TableDetailsController extends GetxController {
                 orderId: id,
                 items: lines,
                 layoutHints: layoutHints,
+                selectedSuivreSectionIndex: selectedSuivreSection.value,
                 tableNumber: orderNumber,
                 waiterId: _currentWaiterId,
                 expectEmptyShell: reopeningEmpty,
@@ -1987,6 +1988,7 @@ class TableDetailsController extends GetxController {
       current: current,
       productName: product.name,
       unitPrice: product.unitPrice,
+      selectedSuivreSectionIndex: selectedSuivreSection.value,
     );
     _syncOrderInSession(
       predicted,
@@ -2106,6 +2108,7 @@ class TableDetailsController extends GetxController {
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
           layoutHints: hints,
+          selectedSuivreSectionIndex: selectedSuivreSection.value,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
           expectEmptyShell: snapshot.products.isEmpty,

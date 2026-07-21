@@ -533,43 +533,7 @@ class _OrderRow extends GetView<SessionController> {
               ),
               if (isExpanded) ...[
                 Divider(height: 1, color: AppTheme.cardBorder),
-                if (controller.isLoadingOrderDetail(order.number) ||
-                    (order.displayEntries.isEmpty &&
-                        (order.products.isNotEmpty || order.itemCount > 0)))
-                  Padding(
-                    padding: JtrResponsive.getResponsivePadding(
-                      context,
-                      vertical: 16,
-                    ),
-                    child: Center(
-                      child: SizedBox(
-                        width: JtrResponsive.getResponsiveSize(context, 20),
-                        height: JtrResponsive.getResponsiveSize(context, 20),
-                        child: const CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppTheme.primary,
-                        ),
-                      ),
-                    ),
-                  )
-                else if (order.displayEntries.isEmpty &&
-                    order.products.isEmpty)
-                  Padding(
-                    padding: JtrResponsive.getResponsivePadding(
-                      context,
-                      vertical: 12,
-                    ),
-                    child: Text(
-                      'Aucun produit',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  )
-                else
-                  ..._buildExpandedDetailRows(context, order),
+                _OrderRowExpandedDetail(order: order),
                 JtrResponsive.getResponsiveSpacing(context, 4),
               ],
             ],
@@ -577,6 +541,67 @@ class _OrderRow extends GetView<SessionController> {
           ),
           ),
         ),
+      );
+    });
+  }
+}
+
+/// Expanded lines + loading spinner — isolated Obx so loading one table does
+/// not rebuild every collapsed row in the session list.
+class _OrderRowExpandedDetail extends GetView<SessionController> {
+  const _OrderRowExpandedDetail({required this.order});
+
+  final SessionOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final live = controller.findOrder(
+            orderNumber: order.number,
+            orderId: order.id > 0 ? order.id : null,
+          ) ??
+          order;
+
+      if (controller.isLoadingOrderDetail(live.number) ||
+          (live.displayEntries.isEmpty &&
+              (live.products.isNotEmpty || live.itemCount > 0))) {
+        return Padding(
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            vertical: 16,
+          ),
+          child: Center(
+            child: SizedBox(
+              width: JtrResponsive.getResponsiveSize(context, 20),
+              height: JtrResponsive.getResponsiveSize(context, 20),
+              child: const CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppTheme.primary,
+              ),
+            ),
+          ),
+        );
+      }
+
+      if (live.displayEntries.isEmpty && live.products.isEmpty) {
+        return Padding(
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            vertical: 12,
+          ),
+          child: Text(
+            'Aucun produit',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+              color: AppTheme.textSecondary,
+            ),
+          ),
+        );
+      }
+
+      return Column(
+        children: _buildExpandedDetailRows(context, live),
       );
     });
   }

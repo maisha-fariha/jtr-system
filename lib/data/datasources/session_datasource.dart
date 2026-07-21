@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../../core/constants/storage_constants.dart';
 import '../../core/storage/hive_storage.dart';
 import '../../core/network/api_client.dart';
@@ -8,6 +10,7 @@ import '../../core/network/api_exception.dart';
 import '../models/active_day_info.dart';
 import '../models/api_envelope.dart';
 import '../models/day_statistics_info.dart';
+import 'session_json_codec.dart';
 
 class SessionRemoteDataSource {
   SessionRemoteDataSource(this._client);
@@ -456,9 +459,12 @@ class SessionLocalDataSource {
   }
 
   Future<void> saveOpenOrdersList(List<Map<String, dynamic>> orders) async {
+    final encoded = orders.length >= 25
+        ? await compute(encodeOpenOrdersListJson, orders)
+        : jsonEncode(orders);
     await _storage.writeString(
       StorageConstants.openOrdersKey,
-      jsonEncode(orders),
+      encoded,
     );
   }
 
@@ -488,10 +494,17 @@ class SessionLocalDataSource {
     final raw = _storage.readString(StorageConstants.openOrdersKey);
     if (raw == null || raw.isEmpty) return const [];
 
-    final decoded = jsonDecode(raw);
-    if (decoded is! List) return const [];
+    return decodeOpenOrdersListJson(raw);
+  }
 
-    return decoded.whereType<Map<String, dynamic>>().toList();
+  /// Async decode for large cached lists — avoids ANR on session paint.
+  Future<List<Map<String, dynamic>>> readOpenOrdersListAsync() async {
+    final raw = _storage.readString(StorageConstants.openOrdersKey);
+    if (raw == null || raw.isEmpty) return const [];
+    if (raw.length < 50000) {
+      return decodeOpenOrdersListJson(raw);
+    }
+    return compute(decodeOpenOrdersListJson, raw);
   }
 
   Future<void> clearOpenOrdersList() async {

@@ -109,7 +109,7 @@ class SessionController extends GetxController {
     if (preloadedRows != null && preloadedRows.isNotEmpty) {
       orders.assignAll(preloadedRows);
     } else {
-      _hydrateOrdersFromCache();
+      unawaited(_hydrateOrdersFromCacheAsync());
     }
 
     unawaited(loadActiveDay(forceRefresh: !justPreloaded));
@@ -149,9 +149,9 @@ class SessionController extends GetxController {
     } catch (_) {}
   }
 
-  void _hydrateOrdersFromCache() {
+  Future<void> _hydrateOrdersFromCacheAsync() async {
     try {
-      final cached = _sessionRepository.getCachedSessionOrders(
+      final cached = await _sessionRepository.getCachedSessionOrdersAsync(
         waiterId: _currentWaiterId,
       );
       if (cached.isNotEmpty) {
@@ -870,6 +870,8 @@ class SessionController extends GetxController {
         existing.id,
         previousDisplayEntries: layoutHints,
       );
+      // Yield before layout merge so expand tap stays responsive.
+      await Future<void>.delayed(Duration.zero);
       // Re-resolve the row by id — a background list refresh may have
       // mutated `orders` while this request was in flight, so the index
       // captured before the `await` can no longer be trusted (writing to

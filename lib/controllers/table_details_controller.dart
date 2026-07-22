@@ -273,22 +273,19 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    // Live ticket already empty after delete — never refill from a fatter
-    // add/cancel response (new server ids may not be in suppress yet).
+    // Live ticket already empty after delete — never refill from a stale GET
+    // while delete suppress ids are still active.
     final emptyShell = orderKey > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(orderKey);
     if (liveCount == 0 &&
-        (suppress.isNotEmpty || pendingDelete || emptyShell) &&
+        (suppress.isNotEmpty || pendingDelete) &&
         updatedCount > 0) {
-      if (orderKey > 0) {
-        _orderRepository.rememberEmptyShellDisplay(orderKey);
-      }
       return;
     }
-    if (liveCount == 0 && (suppress.isNotEmpty || pendingDelete || emptyShell)) {
-      if (orderKey > 0) {
-        _orderRepository.rememberEmptyShellDisplay(orderKey);
-      }
+    if (liveCount == 0 && emptyShell && updatedCount > 0) {
+      _orderRepository.clearEmptyShellDisplay(orderKey);
+    }
+    if (liveCount == 0 && (suppress.isNotEmpty || pendingDelete)) {
       if (updatedCount == 0) {
         _releaseDeletedLinesConfirmedBy(updated);
         _orderRepository.clearSuppressedOrderItemIds(orderKey);
@@ -607,11 +604,8 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
-    // Fresh empty create already has a local shell — open immediately.
-    if (_deferDetailFetch && orderId != null && orderId! > 0) {
-      return;
-    }
     await _ensureResolvedOrderId();
+    // Always load GET /api/orders/:id — create snapshots may omit lines.
     await _refreshOrder();
   }
 

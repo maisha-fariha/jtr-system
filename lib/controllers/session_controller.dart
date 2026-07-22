@@ -421,9 +421,13 @@ class SessionController extends GetxController {
   ) {
     if (previous == null) return incoming;
 
-    // Brand-new empty table: never keep a leaked API seed in memory.
+    // Intentional empty ticket after delete-all — keep empty until real lines arrive.
     if (previous.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(previous.id)) {
+      if (incoming.products.isNotEmpty || incoming.displayEntries.isNotEmpty) {
+        _orderRepository.clearEmptyShellDisplay(previous.id);
+        return incoming;
+      }
       return previous.copyWith(
         products: const [],
         displayEntries: const [],
@@ -572,30 +576,9 @@ class SessionController extends GetxController {
           final cached = _orderRepository.cachedOrderDetail(summary.id);
           SessionOrder detail;
           if (cached != null) {
-            final seedId = _orderRepository.lastEmptyOrderSeedProductId;
-            detail = OrderMapper.sessionOrderHidingCreateSeed(
-              cached,
-              seedProductId: seedId,
-            ).copyWith(
+            detail = OrderMapper.fromOrderDetail(cached).copyWith(
               id: summary.id,
             );
-            // Keep brand-new tables empty until a real line is added — do not
-            // clear the lock just because cache still holds the API seed.
-            // If the session already has optimistic lines, lift the lock.
-            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
-              if (previous != null &&
-                  (previous.products.isNotEmpty ||
-                      previous.displayEntries.isNotEmpty)) {
-                _orderRepository.clearEmptyShellDisplay(summary.id);
-              } else {
-                detail = detail.copyWith(
-                  products: const [],
-                  displayEntries: const [],
-                  itemCount: 0,
-                  total: OrderMapper.formatPrice('0'),
-                );
-              }
-            }
           } else {
             detail = await _orderRepository.getOrderDetail(summary.id);
           }
@@ -605,7 +588,7 @@ class SessionController extends GetxController {
               _orderRepository.detailRevision(summary.id)) {
             return;
           }
-          // Empty-shell may replace a brief seed flash — never wipe a ticket
+          // Empty-shell may replace a brief stale row — never wipe a ticket
           // that already shows waiter-added lines (add after delete-all).
           final emptyShellOverride =
               _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
@@ -687,24 +670,12 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Never let create-seed flash into the session list / table details.
     var safeOrder = order;
     var forceReplace = replaceDetail;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
-      // A forced non-empty replace is a real add after delete-all — lift the lock.
-      if (forceReplace &&
-          (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
         _orderRepository.clearEmptyShellDisplay(order.id);
-      } else if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
-        safeOrder = order.copyWith(
-          products: const [],
-          displayEntries: const [],
-          itemCount: 0,
-          total: OrderMapper.formatPrice('0'),
-        );
-        // PreferDetailed would otherwise keep a seed that already leaked in.
-        forceReplace = true;
       } else {
         forceReplace = true;
       }
@@ -1030,7 +1001,6 @@ class SessionController extends GetxController {
         openTableDetails(
           opened.number,
           orderId: opened.id,
-          deferDetailFetch: true,
           seedOrder: opened,
         );
         unawaited(
@@ -1110,7 +1080,6 @@ class SessionController extends GetxController {
           openTableDetails(
             usable.number,
             orderId: usable.id,
-            deferDetailFetch: true,
             seedOrder: usable,
           );
           // Keep empty shell pinned if list soft-refresh races ahead of API.

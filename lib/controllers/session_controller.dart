@@ -972,140 +972,33 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Delete suppress must not block the recreate upsert / details open.
     _clearSuppressedTable(tableNumber);
 
-    isCreatingOrder.value = true;
-    SessionOrder? created;
-    var attemptedCreate = false;
-    var blockRecovery = false;
-
-    try {
-      attemptedCreate = true;
-      try {
-        created = await _createTableOrderFromNumber(
-          waiterId: waiterId,
-          tableNumber: tableNumber,
-          guests: guests,
-          salesZoneId: activeDay.value.salesZoneId,
-          waiterName: _currentUserFullName,
-          context: context,
-        );
-        if (created == null) return;
-
-        final opened = created!;
-        _clearSuppressedTable(tableNumber);
-        _clearSuppressedTable(opened.number);
-        _upsertOrderInList(opened);
-        isCreatingOrder.value = false;
-        logOrderFlow(
-          '_createTableAndOpenDetails OPEN table=${opened.number} '
-          'orderId=${opened.id}',
-        );
-        openTableDetails(
-          opened.number,
-          orderId: opened.id,
-          seedOrder: opened,
-        );
-        unawaited(
-          refreshOrderList(
-            pinOrder: opened,
-            background: true,
-          ),
-        );
-        return;
-      } on ApiException catch (e) {
-        final recovered = await _orderRepository.tryRecoverCreatedOrder(
-          tableNumber: tableNumber,
-        );
-        created = recovered?.order;
-        if (created != null) {
-          final recoveredWaiter = created.waiterId;
-          if (recoveredWaiter != null &&
-              recoveredWaiter > 0 &&
-              recoveredWaiter != waiterId) {
-            created = null;
-            blockRecovery = true;
-            if (context.mounted) {
-              await TableOccupiedDialog.show(
-                context: context,
-                userName: _currentUserDisplayName,
-                tableNumber: tableNumber,
-              );
-            }
-            return;
-          }
-        } else {
-          if (OrderMapper.isTableOwnershipDeniedMessage(e.message)) {
-            blockRecovery = true;
-            if (context.mounted) {
-              await TableOccupiedDialog.show(
-                context: context,
-                userName: _currentUserDisplayName,
-                tableNumber: tableNumber,
-              );
-            }
-          } else {
-            _showSnack('Erreur', e.message);
-          }
-        }
-      }
-    } catch (_) {
-      // Background refresh may still surface the order if the backend created it.
-    } finally {
-      isCreatingOrder.value = false;
-      if (attemptedCreate && !blockRecovery) {
-        if (created == null) {
-          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
-            tableNumber,
-          );
-          if (resolved != null && resolved > 0) {
-            try {
-              created = await _orderRepository.openAsEmptyTableOrder(resolved);
-            } catch (_) {
-              created = null;
-            }
-          }
-        }
-
-        final usable = created;
-        if (usable != null &&
-            usable.id > 0 &&
-            (usable.waiterId == null ||
-                usable.waiterId == 0 ||
-                usable.waiterId == waiterId)) {
-          // Delete suppress is keyed by table number — clear so recreate shows.
-          _clearSuppressedTable(tableNumber);
-          _clearSuppressedTable(usable.number);
-          _upsertOrderInList(usable);
-          logOrderFlow(
-            '_createTableAndOpenDetails OPEN table=${usable.number} orderId=${usable.id}',
-          );
-          openTableDetails(
-            usable.number,
-            orderId: usable.id,
-            seedOrder: usable,
-          );
-          // Keep empty shell pinned if list soft-refresh races ahead of API.
-          unawaited(
-            refreshOrderList(
-              pinOrder: usable,
-              background: true,
-            ),
-          );
-        } else if (usable != null &&
-            usable.waiterId != null &&
-            usable.waiterId != waiterId) {
-          if (context.mounted) {
-            await TableOccupiedDialog.show(
-              context: context,
-              userName: _currentUserDisplayName,
-              tableNumber: tableNumber,
-            );
-          }
-        }
-      }
+    final parsedTableNumber =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
+            int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
+            0;
+    if (parsedTableNumber < 1) {
+      _showSnack('Erreur', 'Numéro de table invalide.');
+      return;
     }
+
+    // Local-first: no POST /api/orders until Send All — items stay on-device.
+    final placeholder = OrderMapper.buildSessionPlaceholderOrder(
+      tableNumber: parsedTableNumber,
+      numberOfGuests: guests,
+    );
+
+    _upsertOrderInList(placeholder);
+    logOrderFlow(
+      '_createTableAndOpenDetails LOCAL DRAFT table=$parsedTableNumber '
+      'guests=$guests',
+    );
+    openTableDetails(
+      placeholder.number,
+      deferDetailFetch: true,
+      seedOrder: placeholder,
+    );
   }
 
   Future<SessionOrder?> _createTableOrderFromNumber({

@@ -4,6 +4,7 @@ import '../../core/network/api_exception.dart';
 import '../../models/order_display_entry.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
+import '../models/local_draft_line.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/order_item_uid.dart';
 
@@ -3645,6 +3646,64 @@ class OrderMapper {
     // Optional: some backends also accept table_id; session start usually binds it.
     if (tableId != null) payload['table_id'] = tableId;
 
+    return payload;
+  }
+
+  /// POST /api/orders with all locally drafted lines (no seed product).
+  static Map<String, dynamic> buildCreateOrderFromDraftLines({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+    required List<LocalDraftLine> lines,
+  }) {
+    if (lines.isEmpty) {
+      throw ArgumentError('Cannot create an order without items.');
+    }
+
+    const defaultSeat = 1;
+    final byCourse = <int, List<LocalDraftLine>>{};
+    for (final line in lines) {
+      final courseNumber = line.courseNumber > 0 ? line.courseNumber : 1;
+      byCourse.putIfAbsent(courseNumber, () => []).add(line);
+    }
+
+    final courseNumbers = byCourse.keys.toList()..sort();
+    final courses = [
+      for (final courseNumber in courseNumbers)
+        {
+          'id': 0,
+          'course_number': courseNumber,
+          'seat_number': defaultSeat,
+          'items': [
+            for (final line in byCourse[courseNumber]!)
+              _buildNewItemPayload(
+                seatNumber: line.seatNumber > 0 ? line.seatNumber : defaultSeat,
+                courseId: 0,
+                productId: line.productId,
+                qty: line.qty,
+                subTotal: line.unitPrice * line.qty,
+                status: 'to_be_continued',
+                comment: line.comment,
+                menuSelections: line.menuSelections,
+                forCreate: true,
+              ),
+          ],
+        },
+    ];
+
+    final payload = <String, dynamic>{
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+      'table_id': tableId,
+      'seat_orders': [
+        {
+          'seat_number': defaultSeat,
+          'courses': courses,
+        },
+      ],
+    };
+    if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
     return payload;
   }
 

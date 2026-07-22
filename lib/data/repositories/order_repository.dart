@@ -7,6 +7,7 @@ import '../../core/network/api_endpoints.dart';
 import '../../models/session_order.dart';
 import '../../models/order_display_entry.dart';
 import '../models/create_table_order_result.dart';
+import '../models/local_draft_line.dart';
 import '../../services/connectivity_service.dart';
 import '../datasources/order_local_datasource.dart';
 import '../datasources/order_remote_datasource.dart';
@@ -618,6 +619,168 @@ class OrderRepository {
       'items=${order.itemCount}',
     );
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
+  }
+
+  /// Opens the table, POSTs /api/orders with draft lines (no seed), then sends.
+  Future<SessionOrder> createAndSendLocalDraft({
+    required String tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    required List<LocalDraftLine> lines,
+    int? salesZoneId,
+    String? waiterName,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+  }) async {
+    if (lines.isEmpty) {
+      throw ApiException(
+        message: 'Ajoutez au moins un article avant l\'envoi.',
+      );
+    }
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final apiLog = StringBuffer()
+      ..writeln('── Create + send local draft ──')
+      ..writeln('table=$tableNumber lines=${lines.length}');
+    lastCreateOrderLog = apiLog.toString();
+
+    final table = await _openTableByNumberForCreate(
+      tableNumber: tableNumber,
+      numberOfGuests: numberOfGuests,
+      waiterId: waiterId,
+      waiterName: waiterName,
+      salesZoneId: salesZoneId,
+      apiLog: apiLog,
+    );
+
+    final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: salesZoneId ?? table.salesZoneId,
+      lines: lines,
+    );
+
+    apiLog.writeln('── POST /api/orders (local draft items) ──');
+    apiLog.writeln(formatApiPayload(createPayload));
+    logOrderFlow(
+      'POST /api/orders local draft table=${table.tableNumber} '
+      'items=${lines.length}',
+    );
+
+    final createdPayload = await _tryPostCreateOrder(
+      payload: createPayload,
+      label: 'local-draft',
+      apiLog: apiLog,
+    );
+    if (createdPayload == null) {
+      lastCreateOrderLog = apiLog.toString();
+      throw ApiException(
+        message: 'Impossible de créer la commande sur la table $tableNumber.',
+      );
+    }
+
+    final orderId = OrderMapper.extractOrderIdFromPayload(createdPayload);
+    if (orderId == null || orderId <= 0) {
+      lastCreateOrderLog = apiLog.toString();
+      throw ApiException(
+        message: 'Impossible de créer la commande sur la table $tableNumber.',
+      );
+    }
+
+    var detail = OrderMapper.unwrapOrderDetail(createdPayload);
+    detail = <String, dynamic>{
+      ...detail,
+      'id': orderId,
+      'table_id': table.id,
+      'table_number': table.tableNumber,
+    };
+
+    try {
+      detail = await _remote.fetchOrderDetail(orderId);
+      apiLog.writeln('── GET /api/orders/$orderId après create draft ──');
+    } catch (e) {
+      apiLog.writeln('── GET detail après create draft échoué: $e ──');
+    }
+
+    await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
+    lastCreateOrderLog = apiLog.toString();
+
+    final sent = await requestAllCourses(
+      orderId,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+
+    return sent.copyWith(
+      id: orderId,
+      number: OrderMapper.displayKey(
+        orderId: orderId,
+        tableNumber: table.tableNumber,
+      ),
+    );
+  }
+
+  Future<ResolvedTable> _openTableByNumberForCreate({
+    required String tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    String? waiterName,
+    int? salesZoneId,
+    required StringBuffer apiLog,
+  }) async {
+    final parsedTableNumber =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber);
+    if (parsedTableNumber == null || parsedTableNumber < 1) {
+      throw ApiException(message: 'Numéro de table invalide.');
+    }
+
+    final openPayload = OrderMapper.buildOpenTableByNumberPayload(
+      tableNumber: parsedTableNumber,
+      numberOfGuests: numberOfGuests,
+      waiterId: waiterId,
+      waiterName: waiterName,
+      salesZoneId: salesZoneId,
+    );
+
+    apiLog
+      ..writeln()
+      ..writeln('── POST /api/tables/open-by-number ──')
+      ..writeln(formatApiPayload(openPayload));
+
+    try {
+      logOrderFlow('POST /api/tables/open-by-number START table=$parsedTableNumber');
+      final tableData = await _sessionRemote.openTableByNumber(openPayload);
+      final table = OrderMapper.resolvedTableFromPayload(tableData);
+      logOrderFlow(
+        'POST /api/tables/open-by-number OK tableId=${table.id} '
+        'number=${table.tableNumber}',
+      );
+      return table;
+    } on ApiException catch (error) {
+      if (error.statusCode == 409) {
+        final activeOrderId =
+            OrderMapper.activeOrderIdFromConflictBody(error.responseBody);
+        if (activeOrderId != null && activeOrderId > 0) {
+          apiLog.writeln(
+            '── open-by-number 409 resume active_order=$activeOrderId ──',
+          );
+          final conflictTable = OrderMapper.resolvedTableFromConflictBody(
+                error.responseBody,
+                fallbackTableNumber: parsedTableNumber,
+              ) ??
+              ResolvedTable(
+                id: 0,
+                tableNumber: parsedTableNumber,
+              );
+          return conflictTable;
+        }
+      }
+      rethrow;
+    }
   }
 
   Future<CreateTableOrderResult> _resumeExistingOrderForTableCreate({

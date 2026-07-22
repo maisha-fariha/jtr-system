@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
 import '../data/mappers/order_mapper.dart';
+import '../data/models/local_draft_line.dart';
 import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
 import '../data/order_optimistic_sync.dart';
@@ -65,6 +66,15 @@ class TableDetailsController extends GetxController {
 
   /// When true (fresh empty create), skip blocking GET detail on open.
   bool _deferDetailFetch = false;
+
+  /// Lines queued locally until Send All POSTs /api/orders (no seed product).
+  final List<LocalDraftLine> _localDraftLines = [];
+
+  bool get _isLocalDraft {
+    final current = _rawSessionOrder ?? seedOrder;
+    if (current != null && current.isLocalOnly) return true;
+    return _deferDetailFetch && (orderId == null || orderId! <= 0);
+  }
 
   /// Snapshot from navigation — avoids empty flashes and keeps latest total.
   SessionOrder? seedOrder;
@@ -606,6 +616,7 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
+    if (_deferDetailFetch || _isLocalDraft) return;
     await _ensureResolvedOrderId();
     // Always load GET /api/orders/:id — create snapshots may omit lines.
     await _refreshOrder();
@@ -1145,8 +1156,9 @@ class TableDetailsController extends GetxController {
     if (currentOrder == null) return false;
     if (isOrderOffered) return false;
     if (currentOrder.products.isEmpty) return false;
-    if (resolvedOrderId == null || resolvedOrderId! <= 0) return false;
     if (isAddingProduct.value) return false;
+    if (_isLocalDraft) return true;
+    if (resolvedOrderId == null || resolvedOrderId! <= 0) return false;
     return true;
   }
 
@@ -1211,7 +1223,9 @@ class TableDetailsController extends GetxController {
       if (icon == Icons.send_outlined) {
         AppSnackbar.show(
           'Envoi indisponible',
-          'Ajoutez des articles à une commande active avant l\'envoi.',
+          order?.products.isEmpty ?? true
+              ? 'Ajoutez au moins un article avant l\'envoi.'
+              : 'Ajoutez des articles à une commande active avant l\'envoi.',
           snackPosition: SnackPosition.BOTTOM,
           duration: const Duration(seconds: 2),
           margin: const EdgeInsets.all(16),
@@ -1342,6 +1356,24 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> sendToKitchen({required BuildContext context}) async {
+    final currentOrder = order;
+    if (currentOrder == null) return;
+
+    if (currentOrder.products.isEmpty) {
+      AppSnackbar.show(
+        'Envoi impossible',
+        'Ajoutez au moins un article avant l\'envoi.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    if (_isLocalDraft) {
+      _sendLocalDraftToKitchen(context: context, currentOrder: currentOrder);
+      return;
+    }
+
     final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1384,33 +1416,7 @@ class TableDetailsController extends GetxController {
             if (_orderRepository.lastKitchenSendLog != null) {
               debugPrint(_orderRepository.lastKitchenSendLog);
             }
-
-            try {
-              final printed = await _orderRepository.markOrderPrinted(
-                id,
-                previousDisplayEntries: updated.displayEntries,
-              );
-              if (_orderRepository.lastPrintLog != null) {
-                debugPrint(_orderRepository.lastPrintLog);
-              }
-              return printed;
-            } on ApiException catch (e) {
-              AppSnackbar.show(
-                'Impression',
-                'Envoi OK — ticket non imprimé: ${e.message}',
-                snackPosition: SnackPosition.BOTTOM,
-                margin: const EdgeInsets.all(16),
-              );
-              return updated;
-            } catch (_) {
-              AppSnackbar.show(
-                'Impression',
-                'Envoi OK — impossible d\'imprimer le ticket.',
-                snackPosition: SnackPosition.BOTTOM,
-                margin: const EdgeInsets.all(16),
-              );
-              return updated;
-            }
+            return updated;
           },
           recover: (snap) async {
             try {
@@ -1422,6 +1428,84 @@ class TableDetailsController extends GetxController {
               return snap;
             }
           },
+          onError: (error) => _showKitchenMutationError(
+            title: 'Erreur envoi',
+            action: 'envoyer en cuisine',
+            error: error,
+          ),
+        );
+      },
+    );
+  }
+
+  void _sendLocalDraftToKitchen({
+    required BuildContext context,
+    required SessionOrder currentOrder,
+  }) {
+    AppConfirmDialog.show(
+      context: context,
+      title: 'Envoyer en cuisine',
+      message:
+          'Envoyer toutes les commandes en attente pour la table $orderNumber ?',
+      onConfirm: () {
+        final draftLines = _buildDraftLinesForSend();
+        if (draftLines.isEmpty) {
+          AppSnackbar.show(
+            'Envoi impossible',
+            'Ajoutez au moins un article avant l\'envoi.',
+            snackPosition: SnackPosition.BOTTOM,
+            margin: const EdgeInsets.all(16),
+          );
+          return;
+        }
+
+        activeToolbarIcon.value = Icons.send_outlined;
+        showPaymentOptions.value = false;
+        selectedSuivreSection.value = null;
+
+        final layoutBeforeSend = List<OrderDisplayEntry>.from(
+          currentOrder.displayEntries,
+        );
+        final snapshot = OrderOptimisticSync.deepSnapshot(currentOrder);
+        final guests = int.tryParse(currentOrder.couverts) ?? 1;
+
+        int? salesZoneId;
+        if (Get.isRegistered<SessionController>()) {
+          salesZoneId =
+              Get.find<SessionController>().activeDay.value.salesZoneId;
+        }
+        String? waiterName;
+        if (Get.isRegistered<AuthRepository>()) {
+          final user = Get.find<AuthRepository>().cachedSession?.user;
+          waiterName = user?.name;
+        }
+
+        _returnToSessionPage();
+
+        _optimisticSync.enqueue(
+          syncKey: _optimisticSyncKey,
+          snapshot: snapshot,
+          apply: _applySyncedOrder,
+          sync: () async {
+            final sent = await _orderRepository.createAndSendLocalDraft(
+              tableNumber: orderNumber,
+              numberOfGuests: guests,
+              waiterId: _currentWaiterId,
+              lines: draftLines,
+              salesZoneId: salesZoneId,
+              waiterName: waiterName,
+              previousDisplayEntries: layoutBeforeSend,
+            );
+            orderId = sent.id;
+            seedOrder = sent;
+            _localDraftLines.clear();
+            _deferDetailFetch = false;
+            if (_orderRepository.lastKitchenSendLog != null) {
+              debugPrint(_orderRepository.lastKitchenSendLog);
+            }
+            return sent;
+          },
+          recover: (snap) async => snap,
           onError: (error) => _showKitchenMutationError(
             title: 'Erreur envoi',
             action: 'envoyer en cuisine',
@@ -1620,6 +1704,16 @@ class TableDetailsController extends GetxController {
   Future<void> requestNextCourse({BuildContext? context}) async {
     if (_blockIfOrderOffered()) return;
 
+    if (_isLocalDraft) {
+      AppSnackbar.show(
+        'Envoi requis',
+        'Envoyez d\'abord la commande avant une demande.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -1808,6 +1902,10 @@ class TableDetailsController extends GetxController {
     if (isProductInOrder(product, source: _rawSessionOrder)) {
       selectedProductId.value = product.id;
       selectedOrderLineIndex.value = null;
+    }
+    if (_isLocalDraft) {
+      _trackLocalDraftAddSimple(product);
+      return;
     }
     _queuedSimpleAdds.add(product);
     // Always debounce. Never flush-on-pending — that spawned one sync job per
@@ -2061,6 +2159,13 @@ class TableDetailsController extends GetxController {
         menuSelections: menuSelections,
         layoutHints: layoutHints,
       );
+      if (_isLocalDraft) {
+        _trackLocalDraftAddComposed(
+          product: detail,
+          menuSelections: menuSelections,
+        );
+        return;
+      }
       unawaited(
         _syncAddComposedProductInBackground(
           product: detail,
@@ -2300,10 +2405,24 @@ class TableDetailsController extends GetxController {
 
   Future<void> _setOrderLineQuantity(int lineIndex, int qty) async {
     final id = resolvedOrderId;
-    if (id == null || id <= 0) return;
-
     final current = order;
     if (current == null) return;
+
+    if (id == null || id <= 0) {
+      if (!_isLocalDraft) return;
+      if (qty <= 0) {
+        cancelOrderLine(lineIndex);
+        return;
+      }
+      final predicted = OrderMapper.predictAfterSetLineQuantityAtIndex(
+        current: current,
+        lineIndex: lineIndex,
+        qty: qty,
+      );
+      _syncOrderInSession(predicted, orderNumber);
+      _setLocalDraftLineQtyAt(lineIndex, qty);
+      return;
+    }
 
     await _optimisticSetLineQuantity(
       orderId: id,
@@ -2453,11 +2572,6 @@ class TableDetailsController extends GetxController {
 
   Future<void> _mutateLineQuantity(int productIndex, int delta) async {
     final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
-      return;
-    }
-
     final currentOrder = order;
     if (currentOrder == null ||
         productIndex < 0 ||
@@ -2472,6 +2586,22 @@ class TableDetailsController extends GetxController {
         cancelOrderLine(productIndex);
         return;
       }
+    }
+
+    if (id == null || id <= 0) {
+      if (!_isLocalDraft) {
+        AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
+        return;
+      }
+      final predicted = OrderMapper.predictAfterAdjustLineQuantityAtIndex(
+        current: currentOrder,
+        lineIndex: productIndex,
+        delta: delta,
+      );
+      _syncOrderInSession(predicted, orderNumber);
+      final newQty = (int.tryParse(line.quantity) ?? 1) + delta;
+      _setLocalDraftLineQtyAt(productIndex, newQty);
+      return;
     }
 
     await _optimisticAdjustLineQuantity(
@@ -2702,6 +2832,10 @@ class TableDetailsController extends GetxController {
       displayEntriesOverride: predicted.displayEntries,
     );
 
+    if (_isLocalDraft) {
+      _removeLocalDraftLineAt(productIndex);
+    }
+
     // Clearing the ticket: one cancel-all that keeps/recreates an open order.
     // Per-line cancels let the API cancel the whole order → "ORDER ID not found".
     if (predicted.products.isEmpty) {
@@ -2777,7 +2911,11 @@ class TableDetailsController extends GetxController {
 
   @override
   void onClose() {
-    _flushQueuedSimpleAddsNow();
+    if (_isLocalDraft) {
+      _discardPendingSimpleAdds();
+    } else {
+      _flushQueuedSimpleAddsNow();
+    }
     super.onClose();
   }
 
@@ -3009,5 +3147,100 @@ class TableDetailsController extends GetxController {
       snackPosition: SnackPosition.BOTTOM,
       margin: const EdgeInsets.all(16),
     );
+  }
+
+  int _resolveDraftCourseNumber() {
+    final layout = order?.displayEntries ?? const [];
+    return OrderMapper.resolveAppendCourseNumberFromLayout(
+          layout,
+          selectedSectionIndex: selectedSuivreSection.value,
+        ) ??
+        1;
+  }
+
+  double _parseFormattedLineTotal(String price) {
+    final normalized = price
+        .replaceAll('€', '')
+        .replaceAll('\u00a0', '')
+        .replaceAll(' ', '')
+        .replaceAll(',', '.')
+        .trim();
+    return double.tryParse(normalized) ?? 0;
+  }
+
+  void _trackLocalDraftAddSimple(CatalogProductModel product) {
+    _localDraftLines.add(
+      LocalDraftLine(
+        productId: product.id,
+        unitPrice: product.unitPrice,
+        courseNumber: _resolveDraftCourseNumber(),
+      ),
+    );
+  }
+
+  void _trackLocalDraftAddComposed({
+    required CatalogProductModel product,
+    required List<Map<String, dynamic>> menuSelections,
+    String comment = '',
+  }) {
+    final supplement = MenuMapper.menuSelectionsSupplement(menuSelections);
+    _localDraftLines.add(
+      LocalDraftLine(
+        productId: product.id,
+        unitPrice: product.unitPrice + supplement,
+        menuSelections: menuSelections,
+        comment: comment,
+        courseNumber: _resolveDraftCourseNumber(),
+      ),
+    );
+  }
+
+  void _removeLocalDraftLineAt(int index) {
+    if (index >= 0 && index < _localDraftLines.length) {
+      _localDraftLines.removeAt(index);
+    }
+  }
+
+  void _setLocalDraftLineQtyAt(int index, int qty) {
+    if (index < 0 || index >= _localDraftLines.length || qty < 1) return;
+    _localDraftLines[index] = _localDraftLines[index].copyWith(qty: qty);
+  }
+
+  List<LocalDraftLine> _buildDraftLinesForSend() {
+    final current = order;
+    if (current == null) return const [];
+
+    if (_localDraftLines.length == current.products.length) {
+      return List<LocalDraftLine>.from(_localDraftLines);
+    }
+
+    final rebuilt = <LocalDraftLine>[];
+    for (var i = 0; i < current.products.length; i++) {
+      final line = current.products[i];
+      final catalog = catalogProductByName(line.name);
+      if (catalog == null) continue;
+
+      final qty = int.tryParse(line.quantity) ?? 1;
+      var courseNumber = 1;
+      for (final entry in current.displayEntries) {
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == i &&
+            entry.courseNumber != null) {
+          courseNumber = entry.courseNumber!;
+          break;
+        }
+      }
+
+      final lineTotal = _parseFormattedLineTotal(line.price);
+      rebuilt.add(
+        LocalDraftLine(
+          productId: catalog.id,
+          unitPrice: qty > 0 ? lineTotal / qty : catalog.unitPrice,
+          qty: qty,
+          courseNumber: courseNumber,
+        ),
+      );
+    }
+    return rebuilt;
   }
 }

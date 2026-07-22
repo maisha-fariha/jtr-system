@@ -645,8 +645,13 @@ class _ProductLine extends GetView<TableDetailsController> {
           children: [
             _ProductSlidableAction(
               icon: Icons.edit_outlined,
-              backgroundColor: AppTheme.lightButton,
-              iconColor: AppTheme.primary,
+              backgroundColor:
+                  (product.message?.trim().isNotEmpty ?? false)
+                      ? AppTheme.lightButton
+                      : null,
+              iconColor: (product.message?.trim().isNotEmpty ?? false)
+                  ? AppTheme.primary
+                  : null,
               onPressed: () => controller.editOrderLineComment(
                 productIndex,
                 context: context,
@@ -654,8 +659,12 @@ class _ProductLine extends GetView<TableDetailsController> {
             ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
-              backgroundColor: AppTheme.lightButton,
-              iconColor: AppTheme.primary,
+              backgroundColor: product.isOffered || controller.isOrderOffered
+                  ? AppTheme.lightButton
+                  : null,
+              iconColor: product.isOffered || controller.isOrderOffered
+                  ? AppTheme.primary
+                  : null,
               onPressed: () => controller.offerProduct(productIndex),
             ),
             _ProductSlidableAction(

@@ -7596,7 +7596,7 @@ class OrderMapper {
         : 'Article';
     final qty = item['qty'] ?? 1;
     final subTotal = item['sub_total']?.toString() ?? '0';
-    final isOffer = item['is_offer'] == true;
+    final isOffer = _isOfferedLineItem(item);
     final comment = item['comment'];
     final message = comment is String && comment.trim().isNotEmpty
         ? comment.trim()
@@ -7608,6 +7608,7 @@ class OrderMapper {
       price: isOffer ? '0,00 €' : formatPrice(subTotal),
       message: message,
       menuItems: menuSelectionLabelsFromItem(item),
+      isOffered: isOffer,
     );
   }
 

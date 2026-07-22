@@ -925,6 +925,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
                   ? Icons.keyboard_arrow_down
                   : Icons.keyboard_arrow_up,
               isActive: expanded && !controller.showPaymentOptions.value,
+              isEnabled: !controller.isOrderOffered,
               onPressed: controller.toggleBottomPanel,
               compact: isLarge,
             ),

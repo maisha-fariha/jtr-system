@@ -1198,7 +1198,6 @@ class TableDetailsController extends GetxController {
   bool get canSendToKitchen {
     final currentOrder = order;
     if (currentOrder == null) return false;
-    if (isOrderOffered) return false;
     if (currentOrder.products.isEmpty) return false;
     if (isAddingProduct.value) return false;
     if (_isLocalDraft) return true;
@@ -1333,12 +1332,11 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconActive(IconData icon) => activeToolbarIcon.value == icon;
 
   bool isToolbarIconEnabled(IconData icon) {
-    if (isOrderOffered &&
-        (icon == Icons.grid_view ||
-            icon == Icons.menu_book ||
-            icon == Icons.restaurant ||
-            icon == Icons.restaurant_menu ||
-            icon == Icons.send_outlined)) {
+    // Offered order: only ticket, payment, and send stay available.
+    if (isOrderOffered) {
+      if (icon == Icons.receipt_long_outlined) return true;
+      if (icon == Icons.payments_outlined) return true;
+      if (icon == Icons.send_outlined) return canSendToKitchen;
       return false;
     }
     if (icon == Icons.send_outlined) {

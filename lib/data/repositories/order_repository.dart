@@ -516,8 +516,8 @@ class OrderRepository {
     required int waiterId,
     required String tableNumber,
     required int numberOfGuests,
-    required List<Map<String, dynamic>> tables,
     int? salesZoneId,
+    String? waiterName,
   }) async {
     logOrderFlow(
       'createTableOrder START table=$tableNumber guests=$numberOfGuests waiter=$waiterId',
@@ -530,140 +530,94 @@ class OrderRepository {
       );
     }
 
-    final table = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
-    if (table == null) {
-      throw ApiException(message: 'Table $tableNumber introuvable.');
+    final parsedTableNumber =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber);
+    if (parsedTableNumber == null || parsedTableNumber < 1) {
+      throw ApiException(message: 'Numéro de table invalide.');
     }
 
-    if (OrderMapper.isAssignedToOtherWaiter(
-      tables,
-      tableNumber,
+    final openPayload = OrderMapper.buildOpenTableByNumberPayload(
+      tableNumber: parsedTableNumber,
+      numberOfGuests: numberOfGuests,
       waiterId: waiterId,
-    )) {
-      throw ApiException(
-        message: 'You are not allowed to release this table.',
+      waiterName: waiterName,
+      salesZoneId: salesZoneId,
+    );
+
+    apiLog
+      ..writeln()
+      ..writeln('── POST /api/tables/open-by-number ──')
+      ..writeln(formatApiPayload(openPayload));
+
+    ResolvedTable table;
+    try {
+      logOrderFlow('POST /api/tables/open-by-number START table=$parsedTableNumber');
+      final tableData = await _sessionRemote.openTableByNumber(openPayload);
+      table = OrderMapper.resolvedTableFromPayload(tableData);
+      logOrderFlow(
+        'POST /api/tables/open-by-number OK tableId=${table.id} '
+        'number=${table.tableNumber}',
+      );
+      apiLog.writeln(
+        '── open-by-number OK id=${table.id} number=${table.tableNumber} '
+        'status=${table.status ?? '—'} activeOrder=${table.existingOrderId ?? '—'}',
+      );
+    } on ApiException catch (error) {
+      logOrderFlow(
+        'POST /api/tables/open-by-number FAILED: ${error.message}'
+        '${error.statusCode != null ? ' (HTTP ${error.statusCode})' : ''}',
+      );
+      apiLog.writeln('── open-by-number failed: ${error.message} ──');
+      if (error.statusCode == 409) {
+        final activeOrderId =
+            OrderMapper.activeOrderIdFromConflictBody(error.responseBody);
+        if (activeOrderId != null && activeOrderId > 0) {
+          apiLog.writeln(
+            '── open-by-number 409 resume active_order=$activeOrderId ──',
+          );
+          final conflictTable = OrderMapper.resolvedTableFromConflictBody(
+                error.responseBody,
+                fallbackTableNumber: parsedTableNumber,
+              ) ??
+              ResolvedTable(
+                id: 0,
+                tableNumber: parsedTableNumber,
+              );
+          return _resumeExistingOrderForTableCreate(
+            orderId: activeOrderId,
+            table: conflictTable,
+            tableNumber: tableNumber,
+            apiLog: apiLog,
+          );
+        }
+      }
+      rethrow;
+    }
+
+    if (table.hasActiveOrder && table.existingOrderId != null) {
+      apiLog.writeln(
+        '── open-by-number returned active_order=${table.existingOrderId} ──',
+      );
+      return _resumeExistingOrderForTableCreate(
+        orderId: table.existingOrderId!,
+        table: table,
+        tableNumber: tableNumber,
+        apiLog: apiLog,
       );
     }
 
-    final resolvedSalesZoneId = OrderMapper.inferSalesZoneId(
-      tables,
-      preferred: salesZoneId,
-      table: table,
-    );
+    final resolvedSalesZoneId = salesZoneId != null && salesZoneId > 0
+        ? salesZoneId
+        : table.salesZoneId;
 
     apiLog.writeln(
-      'Table résolue: id=${table.id}, numéro=${table.tableNumber}, '
-      'status=${table.status ?? '—'}, '
-      'activeOrder=${table.existingOrderId ?? '—'}, '
+      'Table ouverte: id=${table.id}, numéro=${table.tableNumber}, '
       'sales_zone_id=${resolvedSalesZoneId ?? '—'}',
     );
 
-    // After cancel, tables/list can still list our active_order briefly.
-    // Reopen that order when still open; if already closed, clear session and
-    // continue with a fresh POST.
-    final ownActiveId = OrderMapper.ownReusableActiveOrderId(
-      tables,
-      tableNumber,
-      waiterId: waiterId,
-    );
-    if (ownActiveId != null) {
-      apiLog.writeln('── Reclaim own active_order=$ownActiveId ──');
-      try {
-        final detail = await _remote.fetchOrderDetail(ownActiveId);
-        if (!OrderMapper.isOrderClosedOrCancelled(detail)) {
-          final seedId = await _resolveSeedProductIdForDisplay();
-          final onlySeed = OrderMapper.hasOnlyEmptyCreateSeed(
-            detail,
-            seedProductId: seedId,
-          );
-          // Seed-only leftover after cancel/recreate → show empty + strip.
-          if (onlySeed || OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-            _rememberEmptyShellDisplay(ownActiveId);
-            if (onlySeed) {
-              unawaited(
-                _stripCreateSeedInBackground(
-                  ownActiveId,
-                  detail,
-                  apiLog,
-                ),
-              );
-            }
-            final shell = OrderMapper.asOpenEmptyOrderShell(detail);
-            await _local.saveOrderDetail(ownActiveId, shell);
-            await _sessionLocal.upsertOpenOrderInList(shell);
-            final displayNumber = OrderMapper.displayKey(
-              orderId: ownActiveId,
-              tableNumber: table.tableNumber,
-            );
-            final mapped = OrderMapper.fromOrderDetail(shell).copyWith(
-              id: ownActiveId,
-              number: displayNumber,
-              products: const [],
-              displayEntries: const [],
-              itemCount: 0,
-              total: OrderMapper.formatPrice('0'),
-            );
-            lastCreateOrderLog = apiLog.toString();
-            logOrderFlow(
-              'createTableOrder RECLAIM empty shell orderId=$ownActiveId '
-              'table=$tableNumber',
-            );
-            return CreateTableOrderResult(
-              order: mapped,
-              apiLog: apiLog.toString(),
-            );
-          }
-
-          // Still open with real articles — reopen as-is.
-          await _local.saveOrderDetail(ownActiveId, detail);
-          await _sessionLocal.upsertOpenOrderInList(detail);
-          final displayNumber = OrderMapper.displayKey(
-            orderId: ownActiveId,
-            tableNumber: table.tableNumber,
-          );
-          final mapped = OrderMapper.fromOrderDetail(detail).copyWith(
-            id: ownActiveId,
-            number: displayNumber,
-          );
-          lastCreateOrderLog = apiLog.toString();
-          logOrderFlow(
-            'createTableOrder RECLAIM own orderId=$ownActiveId table=$tableNumber',
-          );
-          return CreateTableOrderResult(
-            order: mapped,
-            apiLog: apiLog.toString(),
-          );
-        }
-        await _local.removeOrderDetail(ownActiveId);
-        await _sessionLocal.removeOpenOrderFromList(ownActiveId);
-      } catch (e) {
-        apiLog.writeln('── Reclaim active_order failed: $e ──');
-      }
-      await _clearOrphanTableSession(table.id, apiLog: apiLog);
-    } else if (OrderMapper.canReclaimOrphanTableSession(
-      tables,
-      tableNumber,
-      waiterId: waiterId,
-    )) {
-      // Session-only create can leave a lock with no active_order. Clear our
-      // own orphan session before starting a fresh one.
-      await _clearOrphanTableSession(table.id, apiLog: apiLog);
-    } else if (table.hasActiveOrder) {
-      throw ApiException(
-        message: 'La table $tableNumber a déjà une commande active.',
-      );
-    }
-
-    // Resolve seed while session POST runs — seed needs the product catalog once.
     final seedFuture = _catalog.resolveSeedProductForEmptyOrder();
-    await _tryStartTableSession(
-      table: table,
-      waiterId: waiterId,
-      numberOfGuests: numberOfGuests,
-      apiLog: apiLog,
-    );
 
-    // Recommended: POST /api/orders (all nested id:0 + uid) → save ids from response.
+    // open-by-number already started the session — do not POST /tables/{id}/session.
     final createdPayload = await _postCreateEmptyOrderRecord(
       table: table,
       waiterId: waiterId,
@@ -733,6 +687,94 @@ class OrderRepository {
       '(fast open, seed strip background)',
     );
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
+  }
+
+  Future<CreateTableOrderResult> _resumeExistingOrderForTableCreate({
+    required int orderId,
+    required ResolvedTable table,
+    required String tableNumber,
+    required StringBuffer apiLog,
+  }) async {
+    try {
+      final detail = await _remote.fetchOrderDetail(orderId);
+      if (OrderMapper.isOrderClosedOrCancelled(detail)) {
+        await _local.removeOrderDetail(orderId);
+        await _sessionLocal.removeOpenOrderFromList(orderId);
+        lastCreateOrderLog = apiLog.toString();
+        throw ApiException(
+          message: 'La commande active sur la table $tableNumber est fermée.',
+        );
+      }
+
+      final tableNumberForDisplay = table.tableNumber > 0
+          ? table.tableNumber
+          : (OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ?? 0);
+
+      final seedId = await _resolveSeedProductIdForDisplay();
+      final onlySeed = OrderMapper.hasOnlyEmptyCreateSeed(
+        detail,
+        seedProductId: seedId,
+      );
+      if (onlySeed || OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+        _rememberEmptyShellDisplay(orderId);
+        if (onlySeed) {
+          unawaited(
+            _stripCreateSeedInBackground(
+              orderId,
+              detail,
+              apiLog,
+            ),
+          );
+        }
+        final shell = OrderMapper.asOpenEmptyOrderShell(detail);
+        await _local.saveOrderDetail(orderId, shell);
+        await _sessionLocal.upsertOpenOrderInList(shell);
+        final displayNumber = OrderMapper.displayKey(
+          orderId: orderId,
+          tableNumber: tableNumberForDisplay,
+        );
+        final mapped = OrderMapper.fromOrderDetail(shell).copyWith(
+          id: orderId,
+          number: displayNumber,
+          products: const [],
+          displayEntries: const [],
+          itemCount: 0,
+          total: OrderMapper.formatPrice('0'),
+        );
+        lastCreateOrderLog = apiLog.toString();
+        logOrderFlow(
+          'createTableOrder RESUME empty shell orderId=$orderId table=$tableNumber',
+        );
+        return CreateTableOrderResult(
+          order: mapped,
+          apiLog: apiLog.toString(),
+        );
+      }
+
+      await _local.saveOrderDetail(orderId, detail);
+      await _sessionLocal.upsertOpenOrderInList(detail);
+      final displayNumber = OrderMapper.displayKey(
+        orderId: orderId,
+        tableNumber: tableNumberForDisplay,
+      );
+      final mapped = OrderMapper.fromOrderDetail(detail).copyWith(
+        id: orderId,
+        number: displayNumber,
+      );
+      lastCreateOrderLog = apiLog.toString();
+      logOrderFlow(
+        'createTableOrder RESUME orderId=$orderId table=$tableNumber',
+      );
+      return CreateTableOrderResult(
+        order: mapped,
+        apiLog: apiLog.toString(),
+      );
+    } catch (e) {
+      if (e is ApiException) rethrow;
+      apiLog.writeln('── Resume active_order failed: $e ──');
+      lastCreateOrderLog = apiLog.toString();
+      rethrow;
+    }
   }
 
   Future<void> _stripCreateSeedInBackground(
@@ -3243,12 +3285,10 @@ class OrderRepository {
       try {
         final guests =
             (source?['number_of_guests'] as num?)?.toInt() ?? 1;
-        final tables = await _sessionRemote.fetchTablesList();
         final created = await createTableOrder(
           tableNumber: tableKey,
           waiterId: waiterId,
           numberOfGuests: guests < 1 ? 1 : guests,
-          tables: tables,
           salesZoneId: (source?['sales_zone_id'] as num?)?.toInt(),
         );
         final order = created.order;

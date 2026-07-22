@@ -3658,6 +3658,92 @@ class OrderMapper {
     };
   }
 
+  /// Parses a waiter-entered table key (`42`, `T42`) for open-by-number.
+  static int? parseTableNumberForOpenByNumber(String tableNumber) {
+    final normalized = normalizeTableKey(tableNumber);
+    if (normalized.isEmpty) return null;
+    return int.tryParse(normalized);
+  }
+
+  /// POST /api/tables/open-by-number request body.
+  static Map<String, dynamic> buildOpenTableByNumberPayload({
+    required int tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    String? waiterName,
+    int? salesZoneId,
+  }) {
+    final payload = <String, dynamic>{
+      'table_number': tableNumber,
+      'number_of_guests': numberOfGuests < 1 ? 1 : numberOfGuests,
+      'waiter_id': waiterId,
+    };
+    final name = waiterName?.trim();
+    if (name != null && name.isNotEmpty) {
+      payload['waiter_name'] =
+          name.length > 255 ? name.substring(0, 255) : name;
+    }
+    if (salesZoneId != null && salesZoneId > 0) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
+    return payload;
+  }
+
+  /// Table row from open-by-number success or conflict `data`.
+  static ResolvedTable resolvedTableFromPayload(
+    Map<String, dynamic> data, {
+    int? fallbackTableNumber,
+  }) {
+    return _toResolvedTable(data);
+  }
+
+  /// Active order id from a 409 open-by-number response (table or nested data).
+  static int? activeOrderIdFromConflictBody(Object? body) {
+    if (body is! Map<String, dynamic>) return null;
+
+    int? fromMap(Map<String, dynamic> map) {
+      final fromTable = _activeOrderId(map);
+      if (fromTable != null && fromTable > 0) return fromTable;
+
+      final active = map['active_order'];
+      if (active is Map<String, dynamic>) {
+        final id = (active['id'] as num?)?.toInt();
+        if (id != null && id > 0) return id;
+      }
+
+      final direct = map['order_id'] ?? map['active_order_id'];
+      if (direct is num && direct > 0) return direct.toInt();
+      return null;
+    }
+
+    final data = body['data'];
+    if (data is Map<String, dynamic>) {
+      final nested = fromMap(data);
+      if (nested != null) return nested;
+    }
+    return fromMap(body);
+  }
+
+  static ResolvedTable? resolvedTableFromConflictBody(
+    Object? body, {
+    required int fallbackTableNumber,
+  }) {
+    if (body is! Map<String, dynamic>) return null;
+
+    Map<String, dynamic>? tableMap;
+    final data = body['data'];
+    if (data is Map<String, dynamic>) {
+      if (data.containsKey('id') || data.containsKey('table_number')) {
+        tableMap = data;
+      }
+    }
+    tableMap ??= body.containsKey('id') || body.containsKey('table_number')
+        ? body
+        : null;
+    if (tableMap == null) return null;
+    return _toResolvedTable(tableMap);
+  }
+
   static ResolvedTable? resolveTable(
     List<Map<String, dynamic>> tables,
     String tableNumber,

@@ -9,6 +9,43 @@ void logOrderFlow(String message) {
   debugPrint(line);
 }
 
+/// Logs POST /api/tables/open-by-number (always printed — table create flow).
+void logOpenTableByNumber({
+  required String phase,
+  Object? request,
+  Object? response,
+  int? statusCode,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ POST /api/tables/open-by-number [$phase]'
+        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(request));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(response));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('ERROR:')
+      ..writeln(error);
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
 /// Logs POST /api/orders to the console (uses [print] so it always appears).
 void logOrderPost({
   required String phase,

@@ -986,6 +986,10 @@ class SessionController extends GetxController {
     // Own open order already in this app's session list → reopen + optional guest PUT.
     final existingOwn = _findOwnOpenOrderForTable(tableNumber);
     if (existingOwn != null) {
+      logOrderFlow(
+        '_createTableAndOpenDetails SKIP open-by-number — '
+        'own order already in list orderId=${existingOwn.id}',
+      );
       await _reopenOwnOrderAndUpdateGuests(
         existing: existingOwn,
         guests: guests,
@@ -1002,74 +1006,14 @@ class SessionController extends GetxController {
     var blockRecovery = false;
 
     try {
-      // Prefer cached tables for speed; refresh only if the table is missing
-      // or create fails with a stale "already active" guard.
-      var tables = await _sessionRepository.getTablesList();
-      logOrderFlow(
-        OrderMapper.buildTablesPostOrderAvailabilityLog(
-          tables,
-          targetTableNumber: tableNumber,
-        ),
-      );
-      var target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
-      if (target == null) {
-        tables = await _sessionRepository.getTablesList(forceRefresh: true);
-        target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
-      }
-      if (target == null) {
-        logOrderFlow('_createTableAndOpenDetails ABORT table not found');
-        _showSnack('Erreur', 'Table $tableNumber introuvable.');
-        return;
-      }
-      final reclaimOwnOrphan = OrderMapper.canReclaimOrphanTableSession(
-        tables,
-        tableNumber,
-        waiterId: waiterId,
-      );
-
-      // Other waiter's table → Skip dialog (do not create / release).
-      if (OrderMapper.shouldShowSkipDialogForCreate(
-        tables,
-        tableNumber,
-        waiterId: waiterId,
-      )) {
-        logOrderFlow(
-          '_createTableAndOpenDetails ABORT skip dialog '
-          'table=$tableNumber '
-          'owner=${OrderMapper.activeOrderOwnerId(tables, tableNumber)} '
-          'status=${OrderMapper.activeOrderStatus(tables, tableNumber)}',
-        );
-        blockRecovery = true;
-        if (context.mounted) {
-          await TableOccupiedDialog.show(
-            context: context,
-            userName: _currentUserDisplayName,
-            tableNumber: tableNumber,
-          );
-        }
-        return;
-      }
-      if (reclaimOwnOrphan) {
-        logOrderFlow(
-          '_createTableAndOpenDetails reclaim orphan session '
-          'table=$tableNumber tableId=${target.id}',
-        );
-      }
-
-      final salesZoneId = OrderMapper.inferSalesZoneId(
-        tables,
-        preferred: activeDay.value.salesZoneId,
-        table: target,
-      );
-
       attemptedCreate = true;
       try {
-        created = await _createTableOrderWithFreshTablesRetry(
+        created = await _createTableOrderFromNumber(
           waiterId: waiterId,
           tableNumber: tableNumber,
           guests: guests,
-          tables: tables,
-          salesZoneId: salesZoneId,
+          salesZoneId: activeDay.value.salesZoneId,
+          waiterName: _currentUserFullName,
           context: context,
         );
         if (created == null) return;
@@ -1191,43 +1135,22 @@ class SessionController extends GetxController {
     }
   }
 
-  Future<SessionOrder?> _createTableOrderWithFreshTablesRetry({
+  Future<SessionOrder?> _createTableOrderFromNumber({
     required int waiterId,
     required String tableNumber,
     required int guests,
-    required List<Map<String, dynamic>> tables,
     required int? salesZoneId,
+    required String? waiterName,
     required BuildContext context,
   }) async {
-    Future<SessionOrder> run(List<Map<String, dynamic>> snapshot) async {
-      final result = await _orderRepository.createTableOrder(
-        waiterId: waiterId,
-        tableNumber: tableNumber,
-        numberOfGuests: guests,
-        tables: snapshot,
-        salesZoneId: salesZoneId,
-      );
-      return result.order;
-    }
-
-    SessionOrder order;
-    try {
-      order = await run(tables);
-    } on ApiException catch (error) {
-      final message = error.message.toLowerCase();
-      final staleTableGuard = message.contains('déjà') ||
-          message.contains('deja') ||
-          message.contains('active') ||
-          message.contains('already');
-      if (!staleTableGuard) rethrow;
-
-      logOrderFlow(
-        '_createTableOrderWithFreshTablesRetry refresh tables after: '
-        '${error.message}',
-      );
-      final fresh = await _sessionRepository.getTablesList(forceRefresh: true);
-      order = await run(fresh);
-    }
+    final result = await _orderRepository.createTableOrder(
+      waiterId: waiterId,
+      tableNumber: tableNumber,
+      numberOfGuests: guests,
+      salesZoneId: salesZoneId,
+      waiterName: waiterName,
+    );
+    final order = result.order;
 
     final createdWaiter = order.waiterId;
     if (createdWaiter != null &&
@@ -1333,28 +1256,30 @@ class SessionController extends GetxController {
   }
 
   String get _currentUserDisplayName {
+    final full = _currentUserFullName;
+    if (full == null || full.isEmpty) return 'Utilisateur';
+    return full.split(' ').first;
+  }
+
+  String? get _currentUserFullName {
     if (Get.isRegistered<AuthRepository>()) {
       final session = Get.find<AuthRepository>().cachedSession;
-      final name = session?.user.name;
-      if (name != null && name.isNotEmpty) {
-        return name.split(' ').first;
-      }
+      final name = session?.user.name?.trim();
+      if (name != null && name.isNotEmpty) return name;
     }
 
     if (Get.isRegistered<LoginController>()) {
       final login = Get.find<LoginController>();
       final selected = login.selectedUser.value;
-      if (selected != null) {
-        return selected.name.split(' ').first;
+      if (selected != null && selected.name.trim().isNotEmpty) {
+        return selected.name.trim();
       }
 
       final identifiant = login.identifiantController.text.trim();
-      if (identifiant.isNotEmpty) {
-        return identifiant.split(' ').first.toUpperCase();
-      }
+      if (identifiant.isNotEmpty) return identifiant;
     }
 
-    return 'Utilisateur';
+    return null;
   }
 
   int get _currentWaiterId {

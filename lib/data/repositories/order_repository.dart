@@ -2713,7 +2713,13 @@ class OrderRepository {
     lastAddItemLog = null;
 
     if (!await _connectivity.isOnline) {
-      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      apiLog.writeln('Hors ligne — annulation article impossible.');
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        error: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
@@ -2742,7 +2748,7 @@ class OrderRepository {
         payload: payload,
         apiLog: apiLog,
       );
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(apiLog, phase: 'api_ok', orderId: orderId);
 
       return _persistOrderAfterItemMutation(
         orderId: orderId,
@@ -2757,7 +2763,12 @@ class OrderRepository {
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        error: e.message,
+      );
       rethrow;
     }
   }
@@ -2778,7 +2789,14 @@ class OrderRepository {
     lastAddItemLog = null;
 
     if (!await _connectivity.isOnline) {
-      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      apiLog.writeln('Hors ligne — annulation article impossible.');
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        error: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
@@ -2788,7 +2806,6 @@ class OrderRepository {
     apiLog.writeln('order_id=$orderId table=${tableNumber ?? '—'}');
 
     Future<SessionOrder> finishRecreated(SessionOrder kept) async {
-      lastAddItemLog = apiLog.toString();
       _rememberEmptyShellDisplay(kept.id);
       clearPendingLocalDeleteFlag(kept.id);
       if (kept.id != orderId) {
@@ -2798,7 +2815,12 @@ class OrderRepository {
       }
       await _persistSuivreLayoutHints(kept.id, const []);
       apiLog.writeln('── Empty open order ready id=${kept.id} ──');
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_ok',
+        orderId: kept.id > 0 ? kept.id : orderId,
+        tableNumber: tableNumber,
+      );
       return kept;
     }
 
@@ -2817,7 +2839,13 @@ class OrderRepository {
         );
         return finishRecreated(kept);
       }
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        error: e.message,
+      );
       rethrow;
     }
 
@@ -2835,7 +2863,13 @@ class OrderRepository {
         );
         return finishRecreated(kept);
       }
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        error: e.message,
+      );
       rethrow;
     }
 
@@ -2888,7 +2922,12 @@ class OrderRepository {
     _rememberEmptyShellDisplay(orderId);
     clearPendingLocalDeleteFlag(orderId);
     await _persistSuivreLayoutHints(orderId, const []);
-    lastAddItemLog = apiLog.toString();
+    _logDeleteTrace(
+      apiLog,
+      phase: 'api_ok',
+      orderId: orderId,
+      tableNumber: tableNumber,
+    );
 
     return OrderMapper.fromOrderDetail(shell).copyWith(
       id: orderId,
@@ -3121,7 +3160,16 @@ class OrderRepository {
     lastAddItemLog = null;
 
     if (!await _connectivity.isOnline) {
-      lastAddItemLog = 'Hors ligne — annulation article impossible.';
+      apiLog.writeln('Hors ligne — annulation article impossible.');
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        lineIndex: lineIndex,
+        itemId: itemId,
+        error: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
+      );
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
@@ -3169,7 +3217,14 @@ class OrderRepository {
         apiLog.writeln(
           '── Last line → strip keep-open / recreate (not cancel) ──',
         );
-        lastAddItemLog = apiLog.toString();
+        _logDeleteTrace(
+          apiLog,
+          phase: 'last_line',
+          orderId: orderId,
+          tableNumber: tableNumber,
+          lineIndex: lineIndex,
+          itemId: itemId,
+        );
         return cancelAllVisibleLines(
           orderId: orderId,
           previousDisplayEntries: const [],
@@ -3183,7 +3238,14 @@ class OrderRepository {
 
       if (!cancelled) {
         // Already gone on server — do not PUT / error; return mapped empty/current.
-        lastAddItemLog = apiLog.toString();
+        _logDeleteTrace(
+          apiLog,
+          phase: 'api_ok',
+          orderId: orderId,
+          tableNumber: tableNumber,
+          lineIndex: lineIndex,
+          itemId: itemId,
+        );
         return _persistOrderAfterItemMutation(
           orderId: orderId,
           detail: localMutated,
@@ -3200,7 +3262,14 @@ class OrderRepository {
         payload: payload,
         apiLog: apiLog,
       );
-      lastAddItemLog = apiLog.toString();
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_ok',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        lineIndex: lineIndex,
+        itemId: itemId,
+      );
 
       final persisted = await _persistOrderAfterItemMutation(
         orderId: orderId,
@@ -3214,7 +3283,6 @@ class OrderRepository {
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
-      lastAddItemLog = apiLog.toString();
       if (_isOrderNotFoundError(e)) {
         final kept = await _recreateEmptyOpenOrderForTable(
           oldOrderId: orderId,
@@ -3222,11 +3290,27 @@ class OrderRepository {
           tableNumberHint: tableNumber,
           apiLog: apiLog,
         );
-        lastAddItemLog = apiLog.toString();
+        _logDeleteTrace(
+          apiLog,
+          phase: 'api_ok',
+          orderId: kept.id > 0 ? kept.id : orderId,
+          tableNumber: tableNumber,
+          lineIndex: lineIndex,
+          itemId: itemId,
+        );
         _rememberEmptyShellDisplay(kept.id);
         clearPendingLocalDeleteFlag(kept.id);
         return kept;
       }
+      _logDeleteTrace(
+        apiLog,
+        phase: 'api_error',
+        orderId: orderId,
+        tableNumber: tableNumber,
+        lineIndex: lineIndex,
+        itemId: itemId,
+        error: e.message,
+      );
       rethrow;
     }
   }
@@ -3384,6 +3468,27 @@ class OrderRepository {
       apiLog.writeln(_remote.lastApiLog);
     }
     return updated;
+  }
+
+  void _logDeleteTrace(
+    StringBuffer apiLog, {
+    required String phase,
+    int? orderId,
+    String? tableNumber,
+    int? lineIndex,
+    int? itemId,
+    String? error,
+  }) {
+    lastAddItemLog = apiLog.toString();
+    logOrderDelete(
+      phase: phase,
+      orderId: orderId,
+      tableNumber: tableNumber,
+      lineIndex: lineIndex,
+      itemId: itemId,
+      apiTrace: apiLog.toString(),
+      error: error,
+    );
   }
 
   /// Persists a post-mutation order. Empty shells stay open in the session list;

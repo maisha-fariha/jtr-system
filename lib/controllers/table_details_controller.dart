@@ -2671,6 +2671,15 @@ class TableDetailsController extends GetxController {
 
     final predictedAfterCancel = predicted;
     final activeId = orderId ?? currentOrder.id;
+    logOrderDelete(
+      phase: 'tap',
+      orderId: activeId > 0 ? activeId : null,
+      tableNumber: orderNumber,
+      lineIndex: productIndex,
+      itemId: deletedItemId,
+      productName: line.name,
+      clearingAll: predictedAfterCancel.products.isEmpty,
+    );
     _suppressDeletedLine(deletedItemId, orderId: activeId);
     // Also suppress every remaining line id when clearing the ticket so a
     // late add response (new ids) is still blocked by empty-shell + epoch.

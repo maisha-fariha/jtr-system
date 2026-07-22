@@ -326,14 +326,41 @@ class OrderRepository {
     if (orderId > 0) {
       final toWhom = cancelToWhom?.trim();
       final note = cancelNote?.trim();
-      if ((toWhom != null && toWhom.isNotEmpty) ||
-          (note != null && note.isNotEmpty)) {
+      final hasCancelMetadata = (toWhom != null && toWhom.isNotEmpty) ||
+          (note != null && note.isNotEmpty);
+
+      if (hasCancelMetadata) {
         logOrderFlow(
           'CLOSE order=$orderId'
           '${toWhom != null && toWhom.isNotEmpty ? ' toWhom="$toWhom"' : ''}'
           '${note != null && note.isNotEmpty ? ' note="$note"' : ''}',
         );
+
+        try {
+          final detail = await _remote.fetchOrderDetail(orderId);
+          if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+            final cancelReason = OrderMapper.buildCancelReason(
+              note: note ?? '',
+              reportedTo: toWhom ?? '',
+            );
+            final payload = OrderMapper.cancelAllVisibleItems(
+              detail,
+              cancelReason: cancelReason,
+            );
+            final apiLog = StringBuffer(
+              '── Table delete: cancel all items before close ──\n',
+            );
+            await _putOrderUpdate(
+              orderId: orderId,
+              payload: payload,
+              apiLog: apiLog,
+            );
+          }
+        } on ApiException {
+          rethrow;
+        }
       }
+
       await _remote.closeOrder(orderId);
       await _local.removeOrderDetail(orderId);
       await _sessionLocal.removeOpenOrderFromList(orderId);

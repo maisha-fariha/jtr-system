@@ -6247,6 +6247,21 @@ class OrderMapper {
   static const emptyCreateSeedCancelReason =
       'Commande vide — article automatique annulé';
 
+  /// Builds the server `cancel_reason` from the table-delete note dialog.
+  static String buildCancelReason({
+    required String note,
+    required String reportedTo,
+  }) {
+    final trimmedNote = note.trim();
+    final trimmedTo = reportedTo.trim();
+    if (trimmedNote.isEmpty && trimmedTo.isEmpty) {
+      return emptyCreateSeedCancelReason;
+    }
+    if (trimmedNote.isEmpty) return 'Signalé par $trimmedTo';
+    if (trimmedTo.isEmpty) return trimmedNote;
+    return '$trimmedNote — signalé par $trimmedTo';
+  }
+
   /// True when the ticket still has ONLY the empty-create seed line(s).
   static bool hasOnlyEmptyCreateSeed(
     Map<String, dynamic> orderDetail, {

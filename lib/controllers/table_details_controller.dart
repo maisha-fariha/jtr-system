@@ -667,11 +667,7 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  /// Presentation-only: hide create-seed while the ticket is still empty.
-  ///
-  /// While the empty-shell lock is set, hide API seed lines. If the session
-  /// already has waiter-added products (optimistic add after delete-all), lift
-  /// the lock immediately — never mask a non-empty ticket.
+  /// Presentation-only: empty-shell lock after delete-all (not create-seed hiding).
   SessionOrder forDisplay(SessionOrder raw) {
     if (raw.id > 0 &&
         Get.isRegistered<OrderRepository>() &&

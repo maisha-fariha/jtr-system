@@ -180,11 +180,8 @@ class CatalogRepository {
       ..sort((a, b) => a.name.compareTo(b.name));
   }
 
-  /// POS placeholder product for POST /api/orders on empty table open.
-  ///
-  /// Prefers [OrderCreateConstants.emptyOrderSeedProductId] (client spec: 13).
-  /// Falls back to the cheapest active simple product when that id is missing.
-  /// The seed line is stripped/hidden so the waiter sees an empty order.
+  /// POS placeholder for POST /api/orders on empty table open.
+  /// UI always shows GET detail as returned by the API.
   Future<CatalogProductModel?> resolveSeedProductForEmptyOrder() async {
     if (_cachedSeedProduct != null) return _cachedSeedProduct;
     try {

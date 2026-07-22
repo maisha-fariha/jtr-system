@@ -3229,6 +3229,106 @@ class OrderMapper {
     return '${product.name.trim().toUpperCase()}|${product.quantity}';
   }
 
+  /// True when any visible line message differs (comment / pencil edits).
+  static bool orderLineMessagesDiffer(SessionOrder a, SessionOrder b) {
+    final left = _lineMessagesInDisplayOrder(a);
+    final right = _lineMessagesInDisplayOrder(b);
+    if (left.length != right.length) return true;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] != right[i]) return true;
+    }
+    return false;
+  }
+
+  static List<String> _lineMessagesInDisplayOrder(SessionOrder order) {
+    return [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product)
+          entry.product?.message?.trim() ?? '',
+    ];
+  }
+
+  /// Copies `comment` from [sourceDetail] onto [order] lines (by item id, then index).
+  static SessionOrder overlayCommentsFromDetail({
+    required SessionOrder order,
+    required Map<String, dynamic> sourceDetail,
+  }) {
+    final byItemId = <int, String>{};
+    final byLineIndex = <int, String>{};
+    var lineIndex = 0;
+    final seatOrders = sourceDetail['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        for (final course in _sortedCoursesList(seat['courses'])) {
+          for (final item in _visibleItemsInStableAddOrder(course['items'])) {
+            final raw = item['comment'];
+            final text = raw is String ? raw.trim() : '';
+            final id = (item['id'] as num?)?.toInt() ?? 0;
+            if (id > 0) {
+              byItemId[id] = text;
+            } else {
+              byLineIndex[lineIndex] = text;
+            }
+            lineIndex++;
+          }
+        }
+      }
+    }
+
+    if (byItemId.isEmpty && byLineIndex.isEmpty) return order;
+
+    OrderProduct patchProduct(
+      OrderProduct product, {
+      required int index,
+      int? itemId,
+    }) {
+      String? text;
+      if (itemId != null && itemId > 0 && byItemId.containsKey(itemId)) {
+        text = byItemId[itemId];
+      } else if (byLineIndex.containsKey(index)) {
+        text = byLineIndex[index];
+      } else {
+        return product;
+      }
+      if (text == null || text.isEmpty) {
+        return product.copyWith(clearMessage: true);
+      }
+      return product.copyWith(message: text);
+    }
+
+    final patchedEntries = [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: patchProduct(
+              entry.product!,
+              index: entry.lineIndex ?? 0,
+              itemId: entry.itemId,
+            ),
+            lineIndex: entry.lineIndex ?? 0,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+
+    final patchedProducts = [
+      for (final entry in patchedEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          entry.product!,
+    ];
+
+    return order.copyWith(
+      products: patchedProducts.isNotEmpty ? patchedProducts : order.products,
+      displayEntries: patchedEntries,
+    );
+  }
+
   static List<OrderDisplayEntry> _rebuildEntriesKeepingDividers({
     required List<OrderDisplayEntry> next,
     required Map<int?, List<OrderDisplayEntry>> productsByCourse,

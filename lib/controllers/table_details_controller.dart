@@ -484,10 +484,12 @@ class TableDetailsController extends GetxController {
     required int lineIndex,
     required String comment,
   }) async {
-    final id = resolvedOrderId;
     final current = order;
-    if (id == null || id <= 0 || current == null) return;
-    if (lineIndex < 0 || lineIndex >= current.products.length) return;
+    if (current == null ||
+        lineIndex < 0 ||
+        lineIndex >= current.products.length) {
+      return;
+    }
 
     final trimmed = comment.trim();
     final snapshot = OrderOptimisticSync.deepSnapshot(current);
@@ -514,14 +516,21 @@ class TableDetailsController extends GetxController {
         else
           entry,
     ];
+    final optimistic = current.copyWith(
+      products: updatedProducts,
+      displayEntries: updatedEntries,
+    );
+
     _syncOrderInSession(
-      current.copyWith(
-        products: updatedProducts,
-        displayEntries: updatedEntries,
-      ),
+      optimistic,
       orderNumber,
       displayEntriesOverride: updatedEntries,
     );
+
+    if (_isLocalDraft) return;
+
+    final id = resolvedOrderId ?? await _ensureResolvedOrderId();
+    if (id == null || id <= 0) return;
 
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
@@ -2487,7 +2496,8 @@ class TableDetailsController extends GetxController {
               existing.displayEntries) ==
             OrderMapper.layoutHasProductsUnderPendingSuivre(
               synced.displayEntries) &&
-        !_liveItemIdsDiffer(existing, synced)) {
+        !_liveItemIdsDiffer(existing, synced) &&
+        !OrderMapper.orderLineMessagesDiffer(existing, synced)) {
       _reconcileCatalogSelection(source: synced);
       return;
     }

@@ -4098,6 +4098,7 @@ class OrderRepository {
     required Map<String, dynamic> localMutated,
     required int beforeVisibleCount,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    bool overlayCommentsFromMutated = false,
   }) async {
     var working = putResponse;
     try {
@@ -4125,13 +4126,20 @@ class OrderRepository {
       layoutHints: previousDisplayEntries,
     );
 
-    final order = OrderMapper.fromOrderDetail(
+    var order = OrderMapper.fromOrderDetail(
       working,
       previousDisplayEntries: previousDisplayEntries,
       suivreSplitHints: suivreHints.splits,
       suivreCountHint: suivreHints.count,
       demandedSectionIndices: suivreHints.demandedSections,
     );
+
+    if (overlayCommentsFromMutated) {
+      order = OrderMapper.overlayCommentsFromDetail(
+        order: order,
+        sourceDetail: localMutated,
+      );
+    }
 
     // Last resort: never return an empty SessionOrder when we still have lines.
     if (order.products.isEmpty && localCount > 0) {
@@ -4143,7 +4151,12 @@ class OrderRepository {
         demandedSectionIndices: suivreHints.demandedSections,
       );
       await _persistSuivreLayoutHints(orderId, fallback.displayEntries);
-      return fallback;
+      return overlayCommentsFromMutated
+          ? OrderMapper.overlayCommentsFromDetail(
+              order: fallback,
+              sourceDetail: localMutated,
+            )
+          : fallback;
     }
 
     await _persistSuivreLayoutHints(orderId, order.displayEntries);
@@ -4226,6 +4239,7 @@ class OrderRepository {
     return _mutateOrderLine(
       orderId: orderId,
       logTitle: 'Message article',
+      overlayCommentsFromMutated: true,
       mutate: (detail) => OrderMapper.updateLineCommentAtIndex(
         orderDetail: detail,
         lineIndex: lineIndex,
@@ -4685,6 +4699,7 @@ class OrderRepository {
     required int orderId,
     required String logTitle,
     required Map<String, dynamic> Function(Map<String, dynamic> detail) mutate,
+    bool overlayCommentsFromMutated = false,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -4719,6 +4734,7 @@ class OrderRepository {
         putResponse: updated,
         localMutated: localMutated,
         beforeVisibleCount: beforeCount,
+        overlayCommentsFromMutated: overlayCommentsFromMutated,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');

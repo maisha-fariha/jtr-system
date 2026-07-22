@@ -11,6 +11,7 @@ import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../data/mappers/order_mapper.dart';
+import '../data/order_optimistic_sync.dart';
 import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
@@ -76,6 +77,9 @@ class SessionController extends GetxController {
   final OrderRepository _orderRepository;
   final SessionRepository _sessionRepository;
   final AuthRepository _authRepository;
+
+  OrderOptimisticSync _optimisticSyncFor(String orderNumber) =>
+      _orderRepository.optimisticSyncFor(orderNumber.hashCode);
 
   final selectedAction = SessionAction.nouvelleCommande.obs;
   final tableUiState = const SessionTableUiState().obs;
@@ -1290,51 +1294,113 @@ class SessionController extends GetxController {
       title: 'Demander la suite',
       message:
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
-      onConfirm: () async {
-        try {
-          var layoutSource = order;
-          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
-                  0 &&
-              layoutSource.id > 0) {
-            try {
-              layoutSource = await _orderRepository.getOrderDetail(
-                layoutSource.id,
-                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-                  layoutSource.displayEntries,
-                ),
-              );
-            } catch (_) {}
-          }
+      onConfirm: () {
+        final orderId = order.id;
+        final tableNumber = selected.orderNumber;
+        final layoutSource = _layoutSourceForSessionDemande(order);
+        final layoutHints = OrderMapper.coalesceLayoutHints(
+          layoutSource.displayEntries,
+        );
+        final sectionIndex = layoutHints == null
+            ? null
+            : OrderMapper.firstPendingSuivreSectionIndex(layoutHints);
+        final snapshot = OrderOptimisticSync.deepSnapshot(layoutSource);
+        final demandeTimeLabel = _freshDemandeTimeLabel();
+        SessionOrder? predicted;
 
-          final updated = await _orderRepository.requestNextCourses(
-            layoutSource.id,
-            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-              layoutSource.displayEntries,
-            ),
+        if (sectionIndex != null && sectionIndex > 0 && layoutHints != null) {
+          predicted = OrderMapper.rebuildOrderAfterSuivreDemande(
+            serverOrder: layoutSource,
+            liveLayout: layoutHints,
+            suivreSectionIndex: sectionIndex,
+            demandeTimeLabel: demandeTimeLabel,
           );
-          updateOrderRow(updated, replaceDetail: true);
-          if (context.mounted) {
+          updateOrderRow(predicted, replaceDetail: true);
+          _showSnack(
+            'Suite demandée',
+            'La suite a été envoyée pour la table $tableNumber.',
+            context: context,
+          );
+        }
+
+        final predictedLayout = predicted?.displayEntries;
+        final syncKey = tableNumber.hashCode;
+        final optimisticSync = _optimisticSyncFor(tableNumber);
+        optimisticSync.enqueue(
+          syncKey: syncKey,
+          snapshot: snapshot,
+          apply: (updated) {
+            if (sectionIndex != null &&
+                sectionIndex > 0 &&
+                predictedLayout != null) {
+              final merged = OrderMapper.rebuildOrderAfterSuivreDemande(
+                serverOrder: updated,
+                liveLayout: predictedLayout,
+                suivreSectionIndex: sectionIndex,
+                demandeTimeLabel: demandeTimeLabel,
+              );
+              updateOrderRow(merged, replaceDetail: true);
+              return;
+            }
+            updateOrderRow(updated, replaceDetail: true);
             _showSnack(
               'Suite demandée',
-              'La suite a été envoyée pour la table ${selected.orderNumber}.',
+              'La suite a été envoyée pour la table $tableNumber.',
               context: context,
             );
-          }
-        } on ApiException catch (e) {
-          if (context.mounted) {
-            _showSnack('Erreur', e.message, context: context);
-          }
-        } catch (_) {
-          if (context.mounted) {
+          },
+          sync: () async {
+            final live = findOrder(orderNumber: tableNumber) ?? layoutSource;
+            var layoutForDemande = OrderMapper.coalesceLayoutHints(
+                  live.displayEntries,
+                ) ??
+                OrderMapper.coalesceLayoutHints(layoutSource.displayEntries);
+
+            return _orderRepository.requestNextCourses(
+              orderId,
+              previousDisplayEntries: layoutForDemande,
+            );
+          },
+          recover: (snap) async {
+            try {
+              return await _orderRepository.getOrderDetail(
+                orderId,
+                previousDisplayEntries: snap.displayEntries,
+              );
+            } catch (_) {
+              return snap;
+            }
+          },
+          onError: (error) {
+            updateOrderRow(snapshot, replaceDetail: true);
+            if (error is ApiException) {
+              _showSnack('Erreur', error.message, context: context);
+              return;
+            }
             _showSnack(
               'Erreur',
               'Impossible d\'envoyer la demande de suite.',
               context: context,
             );
-          }
-        }
+          },
+        );
       },
     );
+  }
+
+  SessionOrder _layoutSourceForSessionDemande(SessionOrder order) {
+    if (OrderMapper.coalesceLayoutHints(order.displayEntries) != null) {
+      return order;
+    }
+    if (order.id <= 0) return order;
+    return _orderRepository.cachedSessionOrder(order.id) ?? order;
+  }
+
+  String _freshDemandeTimeLabel() {
+    return OrderMapper.formatDemandeTime(
+          DateTime.now().toUtc().toIso8601String(),
+        ) ??
+        '--:--:--';
   }
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {

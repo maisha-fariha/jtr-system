@@ -16,6 +16,7 @@ import '../mappers/order_mapper.dart';
 import '../models/catalog/catalog_product_model.dart';
 import 'catalog_repository.dart';
 import '../mappers/menu_mapper.dart';
+import '../order_optimistic_sync.dart';
 
 /// One simple product line for a batched seat-order items POST.
 class SimpleProductBatchLine {
@@ -89,10 +90,40 @@ class OrderRepository {
 
   List<Map<String, dynamic>> _cachedPaymentModes = [];
 
+  /// One background-sync queue per order (shared by session + table details).
+  final Map<int, OrderOptimisticSync> _optimisticSyncByKey = {};
+
+  OrderOptimisticSync optimisticSyncFor(int syncKey) {
+    return _optimisticSyncByKey.putIfAbsent(syncKey, OrderOptimisticSync.new);
+  }
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
   Map<String, dynamic>? cachedOrderDetail(int orderId) {
     if (orderId <= 0) return null;
     return _local.readOrderDetail(orderId);
+  }
+
+  /// Builds a session order from local detail + Hive suivre hints (no network).
+  SessionOrder? cachedSessionOrder(
+    int orderId, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    bool applyKitchenDemande = false,
+  }) {
+    if (orderId <= 0) return null;
+    final cached = _local.readOrderDetail(orderId);
+    if (cached == null) return null;
+
+    final layoutHints =
+        OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+    final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
+    return OrderMapper.fromOrderDetail(
+      cached,
+      previousDisplayEntries: layoutHints,
+      suivreSplitHints: suivreHints.splits,
+      suivreCountHint: suivreHints.count,
+      demandedSectionIndices: suivreHints.demandedSections,
+      applyKitchenDemande: applyKitchenDemande,
+    );
   }
 
   /// Recovery fetch — shows API detail without stripping lines.
@@ -1015,6 +1046,57 @@ class OrderRepository {
     return null;
   }
 
+  /// Reparent suite lines onto their API courses from waiter layout hints.
+  Future<Map<String, dynamic>> _alignDetailToLayoutBeforeDemande({
+    required int orderId,
+    required Map<String, dynamic> detail,
+    required List<OrderDisplayEntry> layout,
+    StringBuffer? apiLog,
+  }) async {
+    if (layout.isEmpty) return detail;
+
+    final aligned = OrderMapper.alignPendingSuivreLayoutOntoCourses(
+      detail,
+      layout: layout,
+    );
+    if (!aligned.changed) return detail;
+
+    apiLog?.writeln('── Align suite layout onto courses (pre-Demande) ──');
+    var working = await _putOrderUpdate(
+      orderId: orderId,
+      payload: OrderMapper.buildOrderUpdatePayload(aligned.detail),
+      apiLog: apiLog ?? StringBuffer(),
+    );
+    await _local.saveOrderDetail(orderId, working);
+    working = await _remote.fetchOrderDetail(orderId);
+    await _local.saveOrderDetail(orderId, working);
+    apiLog?.writeln(OrderMapper.describeCourseContents(working));
+    return working;
+  }
+
+  void _assertSuivreSectionSyncedBeforeDemande({
+    required Map<String, dynamic> detail,
+    required List<OrderDisplayEntry> layout,
+    required int sectionIndex,
+    required int courseNumber,
+  }) {
+    final under = OrderMapper.productEntriesUnderSection(layout, sectionIndex);
+    if (under.isEmpty) return;
+
+    if (!OrderMapper.suiteItemsFullyOnCourse(
+      detail,
+      layout: layout,
+      sectionIndex: sectionIndex,
+      courseNumber: courseNumber,
+    )) {
+      throw ApiException(
+        message:
+            'Les articles de ce service ne sont pas encore enregistrés. '
+            'Patientez une seconde puis réessayez.',
+      );
+    }
+  }
+
   /// Align the next pending À SUIVRE onto a writable course before session Demande.
   Future<Map<String, dynamic>> _prepareDetailForSessionDemande({
     required int orderId,
@@ -1022,7 +1104,11 @@ class OrderRepository {
     required List<OrderDisplayEntry> layout,
     required int sectionIndex,
   }) async {
-    var working = detail;
+    var working = await _alignDetailToLayoutBeforeDemande(
+      orderId: orderId,
+      detail: detail,
+      layout: layout,
+    );
     var preferred = sectionIndex + 1;
     for (final entry in layout) {
       if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
@@ -1112,6 +1198,29 @@ class OrderRepository {
       throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 
+    if (layoutHints != null &&
+        demandSectionIndex != null &&
+        demandSectionIndex > 0) {
+      var preferred = demandSectionIndex + 1;
+      for (final entry in layoutHints) {
+        if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+        if (entry.sectionIndex != demandSectionIndex) continue;
+        final above = entry.courseNumber ?? demandSectionIndex;
+        preferred = above > 0 ? above + 1 : demandSectionIndex + 1;
+        break;
+      }
+      final targetCourse = OrderMapper.resolveWritableSuivreCourseNumber(
+        detail,
+        preferredCourseNumber: preferred,
+      );
+      _assertSuivreSectionSyncedBeforeDemande(
+        detail: detail,
+        layout: layoutHints,
+        sectionIndex: demandSectionIndex,
+        courseNumber: targetCourse,
+      );
+    }
+
     await _remote.requestCourses(orderId, courseIds);
 
     var order = await getOrderDetail(
@@ -1154,6 +1263,15 @@ class OrderRepository {
 
     final apiLog = StringBuffer('── Demande À SUIVRE course=$courseNumber ──\n');
     var detail = await _remote.fetchOrderDetail(orderId);
+    if (previousDisplayEntries != null &&
+        previousDisplayEntries.isNotEmpty) {
+      detail = await _alignDetailToLayoutBeforeDemande(
+        orderId: orderId,
+        detail: detail,
+        layout: previousDisplayEntries,
+        apiLog: apiLog,
+      );
+    }
     apiLog.writeln('API courses before:');
     apiLog.writeln(OrderMapper.describeCourseContents(detail));
     var courseIds = <int>[];
@@ -1335,6 +1453,17 @@ class OrderRepository {
           detail,
           courseNumber: targetCourseNumber,
         ),
+      );
+    }
+
+    if (layoutHasSuiteItems &&
+        previousDisplayEntries != null &&
+        suivreSectionIndex != null) {
+      _assertSuivreSectionSyncedBeforeDemande(
+        detail: detail,
+        layout: previousDisplayEntries,
+        sectionIndex: suivreSectionIndex,
+        courseNumber: targetCourseNumber,
       );
     }
 

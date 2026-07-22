@@ -20,6 +20,7 @@ class OrderOptimisticSync {
   final Map<int, Future<void>> _queues = {};
   final Map<int, int> _pending = {};
   final Map<int, int> _generation = {};
+  final Map<int, int> _activeJobDepth = {};
 
   void enqueue({
     required int syncKey,
@@ -68,12 +69,20 @@ class OrderOptimisticSync {
   }) async {
     await Future<void>.delayed(Duration.zero);
 
+    _activeJobDepth[syncKey] = (_activeJobDepth[syncKey] ?? 0) + 1;
     SessionOrder? reconciled;
     Object? error;
     try {
       reconciled = await sync();
     } catch (e) {
       error = e;
+    } finally {
+      final depth = (_activeJobDepth[syncKey] ?? 1) - 1;
+      if (depth <= 0) {
+        _activeJobDepth.remove(syncKey);
+      } else {
+        _activeJobDepth[syncKey] = depth;
+      }
     }
 
     await Future<void>.delayed(Duration.zero);
@@ -131,6 +140,9 @@ class OrderOptimisticSync {
   bool hasPending(int syncKey) => (_pending[syncKey] ?? 0) > 0;
 
   Future<void> waitUntilIdle(int syncKey) async {
+    // Never await the queue from inside a running job on the same key — deadlock.
+    if ((_activeJobDepth[syncKey] ?? 0) > 0) return;
+
     final pending = _queues[syncKey];
     if (pending != null) {
       try {

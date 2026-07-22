@@ -7114,6 +7114,14 @@ class OrderMapper {
       );
     }
 
+    if (layoutHints != null && layoutHints.isNotEmpty) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      working = aligned.detail;
+    }
+
     return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
@@ -7163,6 +7171,16 @@ class OrderMapper {
       courseNumber: course.number,
       newItem: newItem,
     );
+
+    if (layoutHints != null && layoutHints.isNotEmpty) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      if (aligned.changed) {
+        return buildOrderUpdatePayload(aligned.detail);
+      }
+    }
 
     return buildOrderUpdatePayload(working);
   }

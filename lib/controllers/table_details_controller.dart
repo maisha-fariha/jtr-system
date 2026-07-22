@@ -37,7 +37,9 @@ class TableDetailsController extends GetxController {
 
   final CatalogRepository _catalogRepository;
   final OrderRepository _orderRepository;
-  final OrderOptimisticSync _optimisticSync = OrderOptimisticSync();
+
+  OrderOptimisticSync get _optimisticSync =>
+      _orderRepository.optimisticSyncFor(_optimisticSyncKey);
 
   final selectedCategoryIndex = 0.obs;
   final isBottomPanelExpanded = true.obs;
@@ -1351,84 +1353,81 @@ class TableDetailsController extends GetxController {
       title: 'Envoyer en cuisine',
       message:
           'Envoyer toutes les commandes en attente pour la table $orderNumber ?',
-      onConfirm: () async {
+      onConfirm: () {
         activeToolbarIcon.value = Icons.send_outlined;
         showPaymentOptions.value = false;
-        isAddingProduct.value = true;
-        try {
-          // Finish any coalesced add PUT first — sending mid-batch parks the
-          // remaining lines under a new course / below DEMANDÉE.
-          _flushQueuedSimpleAddsNow();
-          await _optimisticSync.waitUntilIdle(_optimisticSyncKey);
+        selectedSuivreSection.value = null;
 
-          final layoutBeforeSend = List<OrderDisplayEntry>.from(
-            order?.displayEntries ?? const [],
-          );
-          final updated = await _orderRepository.requestAllCourses(
-            id,
-            previousDisplayEntries: layoutBeforeSend,
-          );
-          selectedSuivreSection.value = null;
-          // Keep waiter layout (À SUIVRE stays until manual Demande).
-          _syncOrderInSession(
-            updated,
-            orderNumber,
-            displayEntriesOverride: updated.displayEntries,
-          );
-          // requestAllCourses aligns layout only — no request-courses POST.
-          if (_orderRepository.lastKitchenSendLog != null) {
-            debugPrint(_orderRepository.lastKitchenSendLog);
-          }
+        final layoutBeforeSend = List<OrderDisplayEntry>.from(
+          order?.displayEntries ?? const [],
+        );
+        final snapshot = order != null
+            ? OrderOptimisticSync.deepSnapshot(order!)
+            : OrderMapper.buildSessionPlaceholderOrder(
+                tableNumber: _parsedTableNumber,
+                numberOfGuests: 1,
+              );
 
-          try {
-            final printed = await _orderRepository.markOrderPrinted(
+        // Leave immediately — API sync runs in the background queue.
+        _returnToSessionPage();
+
+        _flushQueuedSimpleAddsNow();
+        _optimisticSync.enqueue(
+          syncKey: _optimisticSyncKey,
+          snapshot: snapshot,
+          apply: _applySyncedOrder,
+          sync: () async {
+            final updated = await _orderRepository.requestAllCourses(
               id,
-              previousDisplayEntries: updated.displayEntries,
+              previousDisplayEntries: layoutBeforeSend,
             );
-            _syncOrderInSession(
-              printed,
-              orderNumber,
-              displayEntriesOverride: printed.displayEntries,
-            );
-            if (_orderRepository.lastPrintLog != null) {
-              debugPrint(_orderRepository.lastPrintLog);
+            if (_orderRepository.lastKitchenSendLog != null) {
+              debugPrint(_orderRepository.lastKitchenSendLog);
             }
-          } on ApiException catch (e) {
-            if (context.mounted) {
+
+            try {
+              final printed = await _orderRepository.markOrderPrinted(
+                id,
+                previousDisplayEntries: updated.displayEntries,
+              );
+              if (_orderRepository.lastPrintLog != null) {
+                debugPrint(_orderRepository.lastPrintLog);
+              }
+              return printed;
+            } on ApiException catch (e) {
               AppSnackbar.show(
                 'Impression',
                 'Envoi OK — ticket non imprimé: ${e.message}',
                 snackPosition: SnackPosition.BOTTOM,
                 margin: const EdgeInsets.all(16),
               );
-            }
-          } catch (_) {
-            if (context.mounted) {
+              return updated;
+            } catch (_) {
               AppSnackbar.show(
                 'Impression',
                 'Envoi OK — impossible d\'imprimer le ticket.',
                 snackPosition: SnackPosition.BOTTOM,
                 margin: const EdgeInsets.all(16),
               );
+              return updated;
             }
-          }
-
-          _returnToSessionPage();
-        } on ApiException catch (e) {
-          if (_orderRepository.lastKitchenSendLog != null) {
-            debugPrint(_orderRepository.lastKitchenSendLog);
-          }
-          ApiDebugDialog.show(title: 'Erreur envoi', body: e.message);
-        } catch (_) {
-          AppSnackbar.show(
-            'Erreur',
-            'Impossible d\'envoyer la commande en cuisine.',
-            snackPosition: SnackPosition.BOTTOM,
-            margin: const EdgeInsets.all(16),
-          );
-        } finally {
-          isAddingProduct.value = false;
-        }
+          },
+          recover: (snap) async {
+            try {
+              return await _orderRepository.getOrderDetail(
+                id,
+                previousDisplayEntries: snap.displayEntries,
+              );
+            } catch (_) {
+              return snap;
+            }
+          },
+          onError: (error) => _showKitchenMutationError(
+            title: 'Erreur envoi',
+            action: 'envoyer en cuisine',
+            error: error,
+          ),
+        );
       },
     );
   }
@@ -1677,74 +1676,105 @@ class TableDetailsController extends GetxController {
       title: 'Demande',
       message:
           'Envoyer en cuisine le service sélectionné (course $demandeCourseNumber) ?',
-      onConfirm: () async {
-        isAddingProduct.value = true;
-        try {
-          // Ensure suite lines are on the server before Demande.
-          _flushQueuedSimpleAddsNow();
-          await _optimisticSync.waitUntilIdle(_optimisticSyncKey);
+      onConfirm: () {
+        final orderSnapshot = order;
+        if (orderSnapshot == null) return;
 
-          final orderSnapshot = order;
-          List<OrderDisplayEntry>? layoutForDemande =
-              orderSnapshot?.displayEntries;
-          if (orderSnapshot != null && layoutForDemande != null) {
+        activeToolbarIcon.value = Icons.restaurant_menu;
+        showPaymentOptions.value = false;
+
+        final snapshot = OrderOptimisticSync.deepSnapshot(orderSnapshot);
+        final layoutBefore = List<OrderDisplayEntry>.from(
+          orderSnapshot.displayEntries,
+        );
+        final demandeTimeLabel = _freshDemandeTimeLabel();
+        final predicted = _predictAfterSuivreDemande(
+          current: orderSnapshot,
+          sectionIndex: sectionIndex,
+          demandeTimeLabel: demandeTimeLabel,
+        );
+
+        if (selectedSuivreSection.value == sectionIndex) {
+          selectedSuivreSection.value = null;
+        }
+        collapsedSuivreSections.clear();
+        collapsedSuivreSections.refresh();
+
+        _syncOrderInSession(
+          predicted,
+          orderNumber,
+          displayEntriesOverride: predicted.displayEntries,
+        );
+        AppSnackbar.show(
+          'Demande envoyée',
+          'Le service a été envoyé en cuisine.',
+          snackPosition: SnackPosition.BOTTOM,
+          duration: const Duration(seconds: 2),
+          margin: const EdgeInsets.all(16),
+        );
+
+        _flushQueuedSimpleAddsNow();
+        _optimisticSync.enqueue(
+          syncKey: _optimisticSyncKey,
+          snapshot: snapshot,
+          apply: (updated) {
+            final merged = OrderMapper.rebuildOrderAfterSuivreDemande(
+              serverOrder: updated,
+              liveLayout: predicted.displayEntries,
+              suivreSectionIndex: sectionIndex,
+              demandeTimeLabel: demandeTimeLabel,
+            );
+            _syncOrderInSession(
+              merged,
+              orderNumber,
+              displayEntriesOverride: merged.displayEntries,
+            );
+          },
+          sync: () async {
+            final liveOrder = _rawSessionOrder ?? snapshot;
+            var layoutForDemande = OrderMapper.coalesceLayoutHints(
+                  liveOrder.displayEntries,
+                ) ??
+                layoutBefore;
+
             try {
               final serverOrder = await _orderRepository.getOrderDetail(
                 id,
                 previousDisplayEntries: layoutForDemande,
               );
               layoutForDemande = OrderMapper.patchServerItemIdsOntoLive(
-                live: orderSnapshot,
+                live: liveOrder,
                 server: serverOrder,
                 suppressItemIds: _suppressDeletedItemIds,
               ).displayEntries;
             } catch (_) {}
-          }
 
-          final updated = await _orderRepository.requestCourseForSuivreSection(
-            id,
-            courseNumber: demandeCourseNumber,
-            previousDisplayEntries: layoutForDemande,
-            suivreSectionIndex: sectionIndex,
-          );
-          if (selectedSuivreSection.value == sectionIndex) {
-            selectedSuivreSection.value = null;
-          }
-          // Show every DEMANDÉE section's items after send.
-          collapsedSuivreSections.clear();
-          collapsedSuivreSections.refresh();
-          // Kitchen response already has DEMANDÉE — do not refresh over it with
-          // stale À SUIVRE layout hints.
-          _syncOrderInSession(
-            updated,
-            orderNumber,
-            displayEntriesOverride: updated.displayEntries,
-          );
-          AppSnackbar.show(
-            'Demande envoyée',
-            'Le service a été envoyé en cuisine.',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 2),
-            margin: const EdgeInsets.all(16),
-          );
-        } on ApiException catch (e) {
-          final log = _orderRepository.lastKitchenSendLog;
-          ApiDebugDialog.show(
-            title: 'Erreur demande',
-            body: log == null || log.isEmpty
-                ? e.message
-                : '${e.message}\n\n$log',
-          );
-        } catch (_) {
-          AppSnackbar.show(
-            'Erreur',
-            'Impossible d\'envoyer la demande.',
-            snackPosition: SnackPosition.BOTTOM,
-            margin: const EdgeInsets.all(16),
-          );
-        } finally {
-          isAddingProduct.value = false;
-        }
+            return _orderRepository.requestCourseForSuivreSection(
+              id,
+              courseNumber: demandeCourseNumber,
+              previousDisplayEntries: layoutForDemande,
+              suivreSectionIndex: sectionIndex,
+            );
+          },
+          recover: (snap) async {
+            try {
+              return await _orderRepository.getOrderDetail(
+                id,
+                previousDisplayEntries: snap.displayEntries,
+              );
+            } catch (_) {
+              return snap;
+            }
+          },
+          onError: (error) {
+            _syncOrderInSession(snapshot, orderNumber);
+            _showKitchenMutationError(
+              title: 'Erreur demande',
+              action: 'envoyer la demande',
+              error: error,
+            );
+          },
+        );
       },
     );
   }
@@ -2924,5 +2954,51 @@ class TableDetailsController extends GetxController {
       return;
     }
     AppSnackbar.show('Erreur', 'Impossible de $action.');
+  }
+
+  String _freshDemandeTimeLabel() {
+    return OrderMapper.formatDemandeTime(
+          DateTime.now().toUtc().toIso8601String(),
+        ) ??
+        '--:--:--';
+  }
+
+  SessionOrder _predictAfterSuivreDemande({
+    required SessionOrder current,
+    required int sectionIndex,
+    String? demandeTimeLabel,
+  }) {
+    return OrderMapper.rebuildOrderAfterSuivreDemande(
+      serverOrder: current,
+      liveLayout: current.displayEntries,
+      suivreSectionIndex: sectionIndex,
+      demandeTimeLabel: demandeTimeLabel ?? _freshDemandeTimeLabel(),
+    );
+  }
+
+  void _showKitchenMutationError({
+    required String title,
+    required String action,
+    required Object error,
+  }) {
+    if (error is ApiException) {
+      if (_orderRepository.lastKitchenSendLog != null) {
+        debugPrint(_orderRepository.lastKitchenSendLog);
+      }
+      final log = _orderRepository.lastKitchenSendLog;
+      ApiDebugDialog.show(
+        title: title,
+        body: log == null || log.isEmpty
+            ? error.message
+            : '${error.message}\n\n$log',
+      );
+      return;
+    }
+    AppSnackbar.show(
+      'Erreur',
+      'Impossible de $action.',
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+    );
   }
 }

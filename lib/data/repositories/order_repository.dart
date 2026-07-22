@@ -649,6 +649,10 @@ class OrderRepository {
   }
 
   /// Opens the table, POSTs /api/orders with draft lines (no seed), then sends.
+  ///
+  /// If the table already has an active order (409 / prior partial create), we
+  /// resume that id and PUT the draft lines instead of failing with a false
+  /// "Impossible de créer" after the backend already has the order.
   Future<SessionOrder> createAndSendLocalDraft({
     required String tableNumber,
     required int numberOfGuests,
@@ -673,6 +677,7 @@ class OrderRepository {
       ..writeln('── Create + send local draft ──')
       ..writeln('table=$tableNumber lines=${lines.length}');
     lastCreateOrderLog = apiLog.toString();
+    lastKitchenSendLog = null;
 
     final table = await _openTableByNumberForCreate(
       tableNumber: tableNumber,
@@ -683,11 +688,41 @@ class OrderRepository {
       apiLog: apiLog,
     );
 
+    final resolvedSalesZoneId = salesZoneId != null && salesZoneId > 0
+        ? salesZoneId
+        : table.salesZoneId;
+
+    // Table already has an open order — never POST /api/orders again.
+    if (table.hasActiveOrder) {
+      apiLog.writeln(
+        '── Resume active_order=${table.existingOrderId} for local draft ──',
+      );
+      lastCreateOrderLog = apiLog.toString();
+      return _sendLocalDraftOntoExistingOrder(
+        orderId: table.existingOrderId!,
+        table: table,
+        tableNumber: tableNumber,
+        numberOfGuests: numberOfGuests,
+        waiterId: waiterId,
+        salesZoneId: resolvedSalesZoneId,
+        lines: lines,
+        previousDisplayEntries: previousDisplayEntries,
+        apiLog: apiLog,
+      );
+    }
+
+    if (table.id <= 0) {
+      lastCreateOrderLog = apiLog.toString();
+      throw ApiException(
+        message: 'Impossible d\'ouvrir la table $tableNumber.',
+      );
+    }
+
     final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
       tableId: table.id,
-      salesZoneId: salesZoneId ?? table.salesZoneId,
+      salesZoneId: resolvedSalesZoneId,
       lines: lines,
     );
 
@@ -703,22 +738,42 @@ class OrderRepository {
       label: 'local-draft',
       apiLog: apiLog,
     );
-    if (createdPayload == null) {
-      lastCreateOrderLog = apiLog.toString();
-      throw ApiException(
-        message: 'Impossible de créer la commande sur la table $tableNumber.',
-      );
-    }
 
-    final orderId = OrderMapper.extractOrderIdFromPayload(createdPayload);
+    var orderId = createdPayload == null
+        ? null
+        : OrderMapper.extractOrderIdFromPayload(createdPayload);
+
+    // Backend often creates the order even when the client sees a failed /
+    // unparseable POST (timeout, 409, odd envelope). Recover instead of
+    // showing a false error while the table is already open with items.
     if (orderId == null || orderId <= 0) {
+      apiLog.writeln('── POST create failed/empty — try recover ──');
+      final recovered = await tryRecoverCreatedOrder(tableNumber: tableNumber);
+      if (recovered != null && recovered.order.id > 0) {
+        apiLog.writeln(
+          '── Recovered orderId=${recovered.order.id} after create miss ──',
+        );
+        lastCreateOrderLog = apiLog.toString();
+        return _sendLocalDraftOntoExistingOrder(
+          orderId: recovered.order.id,
+          table: table,
+          tableNumber: tableNumber,
+          numberOfGuests: numberOfGuests,
+          waiterId: waiterId,
+          salesZoneId: resolvedSalesZoneId,
+          lines: lines,
+          previousDisplayEntries: previousDisplayEntries,
+          apiLog: apiLog,
+        );
+      }
       lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
       throw ApiException(
         message: 'Impossible de créer la commande sur la table $tableNumber.',
       );
     }
 
-    var detail = OrderMapper.unwrapOrderDetail(createdPayload);
+    var detail = OrderMapper.unwrapOrderDetail(createdPayload!);
     detail = <String, dynamic>{
       ...detail,
       'id': orderId,
@@ -737,18 +792,155 @@ class OrderRepository {
     await _sessionLocal.upsertOpenOrderInList(detail);
     lastCreateOrderLog = apiLog.toString();
 
-    final sent = await requestAllCourses(
-      orderId,
+    return _finishLocalDraftSend(
+      orderId: orderId,
+      tableNumber: table.tableNumber > 0 ? table.tableNumber : null,
+      detail: detail,
       previousDisplayEntries: previousDisplayEntries,
+      apiLog: apiLog,
+    );
+  }
+
+  /// PUT draft lines onto an existing open order when create/resume needs them.
+  Future<SessionOrder> _sendLocalDraftOntoExistingOrder({
+    required int orderId,
+    required ResolvedTable table,
+    required String tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    int? salesZoneId,
+    required List<LocalDraftLine> lines,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    required StringBuffer apiLog,
+  }) async {
+    Map<String, dynamic> detail;
+    try {
+      detail = await _remote.fetchOrderDetail(orderId);
+    } on ApiException {
+      lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      rethrow;
+    }
+
+    if (OrderMapper.isOrderClosedOrCancelled(detail)) {
+      lastCreateOrderLog = apiLog.toString();
+      throw ApiException(
+        message: 'La commande active sur la table $tableNumber est fermée.',
+      );
+    }
+
+    final visible = OrderMapper.countVisibleLineItems(detail);
+    // Empty / shell order: write the waiter's draft lines. If items already
+    // match or exceed the draft, treat create as done (prior successful POST).
+    if (visible < lines.length) {
+      final tableId = table.id > 0
+          ? table.id
+          : ((detail['table_id'] as num?)?.toInt() ?? 0);
+      if (tableId <= 0) {
+        lastCreateOrderLog = apiLog.toString();
+        throw ApiException(
+          message: 'Impossible de créer la commande sur la table $tableNumber.',
+        );
+      }
+
+      final draftPayload = OrderMapper.buildCreateOrderFromDraftLines(
+        waiterId: waiterId,
+        numberOfGuests: numberOfGuests,
+        tableId: tableId,
+        salesZoneId: salesZoneId,
+        lines: lines,
+      );
+      final working = OrderMapper.copyOrderDetail(detail);
+      working['waiter_id'] = waiterId;
+      working['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
+      if (salesZoneId != null && salesZoneId > 0) {
+        working['sales_zone_id'] = salesZoneId;
+      }
+      working['seat_orders'] = draftPayload['seat_orders'];
+
+      apiLog.writeln(
+        '── PUT draft lines onto existing order=$orderId '
+        '(had $visible, need ${lines.length}) ──',
+      );
+      try {
+        detail = await _putOrderUpdate(
+          orderId: orderId,
+          payload: OrderMapper.buildOrderUpdatePayload(working),
+          apiLog: apiLog,
+        );
+        try {
+          detail = await _remote.fetchOrderDetail(orderId);
+        } catch (_) {}
+      } on ApiException catch (e) {
+        apiLog.writeln('── PUT draft onto existing failed: ${e.message} ──');
+        // If items appeared anyway (race), keep going.
+        try {
+          detail = await _remote.fetchOrderDetail(orderId);
+        } catch (_) {
+          lastCreateOrderLog = apiLog.toString();
+          lastKitchenSendLog = apiLog.toString();
+          rethrow;
+        }
+        if (OrderMapper.countVisibleLineItems(detail) <= 0) {
+          lastCreateOrderLog = apiLog.toString();
+          lastKitchenSendLog = apiLog.toString();
+          rethrow;
+        }
+      }
+    } else {
+      apiLog.writeln(
+        '── Existing order=$orderId already has $visible items — skip PUT ──',
+      );
+    }
+
+    await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
+    lastCreateOrderLog = apiLog.toString();
+
+    final tableNumberForDisplay = table.tableNumber > 0
+        ? table.tableNumber
+        : OrderMapper.parseTableNumberForOpenByNumber(tableNumber);
+
+    return _finishLocalDraftSend(
+      orderId: orderId,
+      tableNumber: tableNumberForDisplay,
+      detail: detail,
+      previousDisplayEntries: previousDisplayEntries,
+      apiLog: apiLog,
+    );
+  }
+
+  Future<SessionOrder> _finishLocalDraftSend({
+    required int orderId,
+    required int? tableNumber,
+    required Map<String, dynamic> detail,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    required StringBuffer apiLog,
+  }) async {
+    final displayNumber = OrderMapper.displayKey(
+      orderId: orderId,
+      tableNumber: tableNumber,
     );
 
-    return sent.copyWith(
-      id: orderId,
-      number: OrderMapper.displayKey(
-        orderId: orderId,
-        tableNumber: table.tableNumber,
-      ),
-    );
+    try {
+      final sent = await requestAllCourses(
+        orderId,
+        previousDisplayEntries: previousDisplayEntries,
+      );
+      lastKitchenSendLog = apiLog.toString();
+      return sent.copyWith(id: orderId, number: displayNumber);
+    } catch (e) {
+      apiLog.writeln(
+        '── requestAllCourses after create (non-fatal): $e ──',
+      );
+      lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      final mapped = OrderMapper.fromOrderDetail(
+        detail,
+        previousDisplayEntries: previousDisplayEntries,
+      );
+      return mapped.copyWith(id: orderId, number: displayNumber);
+    }
   }
 
   Future<ResolvedTable> _openTableByNumberForCreate({
@@ -802,7 +994,21 @@ class OrderRepository {
               ResolvedTable(
                 id: 0,
                 tableNumber: parsedTableNumber,
+                existingOrderId: activeOrderId,
               );
+          // Always keep the conflict active_order id even when the table map
+          // omits it — otherwise local-draft send POSTs create again and
+          // falsely reports "Impossible de créer".
+          if (conflictTable.existingOrderId == null ||
+              conflictTable.existingOrderId! <= 0) {
+            return ResolvedTable(
+              id: conflictTable.id,
+              tableNumber: conflictTable.tableNumber,
+              salesZoneId: conflictTable.salesZoneId,
+              status: conflictTable.status,
+              existingOrderId: activeOrderId,
+            );
+          }
           return conflictTable;
         }
       }
@@ -4284,14 +4490,26 @@ class OrderRepository {
         );
         if (aligned.changed) {
           apiLog.writeln('── Align local suite layout onto courses (PUT) ──');
-          detail = await _putOrderUpdate(
-            orderId: orderId,
-            payload: OrderMapper.buildOrderUpdatePayload(aligned.detail),
-            apiLog: apiLog,
-          );
-          await _local.saveOrderDetail(orderId, detail);
-          detail = await _remote.fetchOrderDetail(orderId);
-          await _local.saveOrderDetail(orderId, detail);
+          try {
+            detail = await _putOrderUpdate(
+              orderId: orderId,
+              payload: OrderMapper.buildOrderUpdatePayload(aligned.detail),
+              apiLog: apiLog,
+            );
+            await _local.saveOrderDetail(orderId, detail);
+            detail = await _remote.fetchOrderDetail(orderId);
+            await _local.saveOrderDetail(orderId, detail);
+          } on ApiException catch (e) {
+            // Envoyer must not fail when suite course reshuffle is rejected —
+            // items are already on the order (create / prior adds succeeded).
+            apiLog.writeln(
+              '── Align suite PUT non-fatal: ${e.message} ──',
+            );
+            try {
+              detail = await _remote.fetchOrderDetail(orderId);
+              await _local.saveOrderDetail(orderId, detail);
+            } catch (_) {}
+          }
         }
       }
 

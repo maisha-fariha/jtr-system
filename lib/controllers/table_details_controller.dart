@@ -1425,9 +1425,7 @@ class TableDetailsController extends GetxController {
                 numberOfGuests: 1,
               );
 
-        // Leave immediately — API sync runs in the background queue.
-        _returnToSessionPage(skipOrderSnapshot: true);
-
+        // Queue sync first so Get.back() dispose cannot drop the send job.
         _flushQueuedSimpleAddsNow();
         _optimisticSync.enqueue(
           syncKey: _optimisticSyncKey,
@@ -1459,6 +1457,8 @@ class TableDetailsController extends GetxController {
             error: error,
           ),
         );
+
+        _returnToSessionPage(skipOrderSnapshot: true);
       },
     );
   }
@@ -1505,12 +1505,30 @@ class TableDetailsController extends GetxController {
           waiterName = user?.name;
         }
 
-        _returnToSessionPage(skipOrderSnapshot: true);
-
         _optimisticSync.enqueue(
           syncKey: _optimisticSyncKey,
           snapshot: snapshot,
-          apply: _applySyncedOrder,
+          apply: (updated) {
+            if (updated.id > 0) {
+              orderId = updated.id;
+              seedOrder = updated;
+              _localDraftLines.clear();
+              _deferDetailFetch = false;
+            }
+            // Session list must update even if this details controller is
+            // already disposed after Get.back().
+            if (Get.isRegistered<SessionController>()) {
+              final session = Get.find<SessionController>();
+              session.clearSuppressedTable(updated.number);
+              session.updateOrderRow(
+                updated,
+                replaceDetail: true,
+              );
+            }
+            try {
+              _applySyncedOrder(updated);
+            } catch (_) {}
+          },
           sync: () async {
             final sent = await _orderRepository.createAndSendLocalDraft(
               tableNumber: orderNumber,
@@ -1530,13 +1548,49 @@ class TableDetailsController extends GetxController {
             }
             return sent;
           },
-          recover: (snap) async => snap,
-          onError: (error) => _showKitchenMutationError(
-            title: 'Erreur envoi',
-            action: 'envoyer en cuisine',
-            error: error,
-          ),
+          recover: (snap) async {
+            final recovered = await _orderRepository.tryRecoverCreatedOrder(
+              tableNumber: orderNumber,
+            );
+            if (recovered != null && recovered.order.id > 0) {
+              if (Get.isRegistered<SessionController>()) {
+                final session = Get.find<SessionController>();
+                session.clearSuppressedTable(recovered.order.number);
+                session.updateOrderRow(
+                  recovered.order,
+                  replaceDetail: true,
+                );
+              }
+              return recovered.order;
+            }
+            return snap;
+          },
+          onError: (error) async {
+            // Final safety: if the order exists on the server, drop the false
+            // error snack after adopting it into the session list.
+            final recovered = await _orderRepository.tryRecoverCreatedOrder(
+              tableNumber: orderNumber,
+            );
+            if (recovered != null && recovered.order.id > 0) {
+              if (Get.isRegistered<SessionController>()) {
+                final session = Get.find<SessionController>();
+                session.clearSuppressedTable(recovered.order.number);
+                session.updateOrderRow(
+                  recovered.order,
+                  replaceDetail: true,
+                );
+              }
+              return;
+            }
+            _showKitchenMutationError(
+              title: 'Erreur envoi',
+              action: 'envoyer en cuisine',
+              error: error,
+            );
+          },
         );
+
+        _returnToSessionPage(skipOrderSnapshot: true);
       },
     );
   }
@@ -3226,12 +3280,15 @@ class TableDetailsController extends GetxController {
       if (_orderRepository.lastKitchenSendLog != null) {
         debugPrint(_orderRepository.lastKitchenSendLog);
       }
-      final log = _orderRepository.lastKitchenSendLog;
+      // Prefer the short API message — kitchen logs contain ── markers that
+      // would otherwise collapse to a generic "Une erreur est survenue".
+      final message = error.message.trim();
       ApiDebugDialog.show(
         title: title,
-        body: log == null || log.isEmpty
-            ? error.message
-            : '${error.message}\n\n$log',
+        body: message.isNotEmpty
+            ? message
+            : (_orderRepository.lastKitchenSendLog ??
+                'Impossible de $action.'),
       );
       return;
     }
@@ -3304,8 +3361,24 @@ class TableDetailsController extends GetxController {
     final current = order;
     if (current == null) return const [];
 
+    int courseForLineIndex(int index) {
+      for (final entry in current.displayEntries) {
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == index) {
+          final fromEntry = entry.courseNumber;
+          if (fromEntry != null && fromEntry > 0) return fromEntry;
+          final section = entry.sectionIndex ?? 0;
+          return section > 0 ? section + 1 : 1;
+        }
+      }
+      return 1;
+    }
+
     if (_localDraftLines.length == current.products.length) {
-      return List<LocalDraftLine>.from(_localDraftLines);
+      return [
+        for (var i = 0; i < _localDraftLines.length; i++)
+          _localDraftLines[i].copyWith(courseNumber: courseForLineIndex(i)),
+      ];
     }
 
     final rebuilt = <LocalDraftLine>[];
@@ -3315,23 +3388,13 @@ class TableDetailsController extends GetxController {
       if (catalog == null) continue;
 
       final qty = int.tryParse(line.quantity) ?? 1;
-      var courseNumber = 1;
-      for (final entry in current.displayEntries) {
-        if (entry.type == OrderDisplayEntryType.product &&
-            entry.lineIndex == i &&
-            entry.courseNumber != null) {
-          courseNumber = entry.courseNumber!;
-          break;
-        }
-      }
-
       final lineTotal = _parseFormattedLineTotal(line.price);
       rebuilt.add(
         LocalDraftLine(
           productId: catalog.id,
           unitPrice: qty > 0 ? lineTotal / qty : catalog.unitPrice,
           qty: qty,
-          courseNumber: courseNumber,
+          courseNumber: courseForLineIndex(i),
         ),
       );
     }

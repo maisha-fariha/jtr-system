@@ -658,6 +658,9 @@ class SessionController extends GetxController {
 
   /// After delete we suppress that table briefly; recreating must clear it
   /// or the new order never appears in the list (and row sync is dropped).
+  void clearSuppressedTable(String tableNumber) =>
+      _clearSuppressedTable(tableNumber);
+
   void _clearSuppressedTable(String tableNumber) {
     _suppressedTableNumbers.removeWhere(
       (suppressed) => _tableKeysMatch(suppressed, tableNumber),

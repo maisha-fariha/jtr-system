@@ -93,6 +93,9 @@ class SessionController extends GetxController {
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
 
+  /// Bumped when the session list should jump to the top (e.g. after Send).
+  final listScrollSignal = 0.obs;
+
   /// When deleting an order we optimistically remove it from [orders],
   /// but a subsequent forced refresh may temporarily still return the
   /// deleted row (backend eventual consistency).
@@ -740,6 +743,29 @@ class SessionController extends GetxController {
   /// which broke deleting the last article).
   void updateOrderRow(SessionOrder order, {bool replaceDetail = false}) =>
       _upsertOrderInList(order, replaceDetail: replaceDetail);
+
+  /// Moves [order] to the top of the session list and asks the UI to scroll up.
+  ///
+  /// Used after Send All so the waiter sees the newly created/updated table
+  /// without manually scrolling.
+  void promoteOrderToTop(
+    SessionOrder order, {
+    bool replaceDetail = true,
+  }) {
+    clearSuppressedTable(order.number);
+    _upsertOrderInList(order, replaceDetail: replaceDetail);
+
+    final idx = orders.indexWhere((item) {
+      if (order.id > 0 && item.id == order.id) return true;
+      return _tableKeysMatch(item.number, order.number);
+    });
+    if (idx > 0) {
+      final row = orders.removeAt(idx);
+      orders.insert(0, row);
+      orders.refresh();
+    }
+    listScrollSignal.value++;
+  }
 
   static String normalizeTableKey(String value) =>
       OrderMapper.normalizeTableKey(value);
@@ -1493,7 +1519,7 @@ class SessionController extends GetxController {
 
     try {
       final updated = await _orderRepository.markOrderPrinted(order.id);
-      _upsertOrderInList(updated);
+      _upsertOrderInList(updated, replaceDetail: true);
 
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();

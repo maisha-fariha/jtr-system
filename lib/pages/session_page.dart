@@ -102,27 +102,7 @@ class SessionPage extends GetView<SessionController> {
                       forceRefresh: true,
                       replaceExistingList: false,
                     ),
-                    child: Obx(() {
-                      // toList() so in-place total/product updates rebuild rows
-                      // (length alone does not always notify Obx).
-                      final visibleOrders = controller.orders.toList();
-                      return ListView.separated(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: JtrResponsive.getResponsivePadding(
-                          context,
-                          top: 8,
-                          bottom: 8,
-                        ),
-                        itemCount: visibleOrders.length,
-                        separatorBuilder: (context, index) =>
-                            JtrResponsive.getResponsiveSpacing(context, 8),
-                        itemBuilder: (context, index) {
-                          return _OrderRow(
-                            order: visibleOrders[index],
-                          );
-                        },
-                      );
-                    }),
+                    child: const _SessionOrdersList(),
                   );
                 }),
               ),
@@ -149,6 +129,69 @@ class SessionPage extends GetView<SessionController> {
         ),
       ),
     );
+  }
+}
+
+class _SessionOrdersList extends StatefulWidget {
+  const _SessionOrdersList();
+
+  @override
+  State<_SessionOrdersList> createState() => _SessionOrdersListState();
+}
+
+class _SessionOrdersListState extends State<_SessionOrdersList> {
+  final _scrollController = ScrollController();
+  Worker? _scrollWorker;
+
+  SessionController get controller => Get.find<SessionController>();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollWorker = ever<int>(controller.listScrollSignal, (_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) return;
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 280),
+          curve: Curves.easeOut,
+        );
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollWorker?.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      // toList() so in-place total/product updates rebuild rows
+      // (length alone does not always notify Obx).
+      controller.listScrollSignal.value;
+      final visibleOrders = controller.orders.toList();
+      return ListView.separated(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          top: 8,
+          bottom: 8,
+        ),
+        itemCount: visibleOrders.length,
+        separatorBuilder: (context, index) =>
+            JtrResponsive.getResponsiveSpacing(context, 8),
+        itemBuilder: (context, index) {
+          return _OrderRow(
+            order: visibleOrders[index],
+          );
+        },
+      );
+    });
   }
 }
 
@@ -358,6 +401,11 @@ class _OrderRow extends GetView<SessionController> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
+      // Re-read from the live session list so ticket / total / couverts updates
+      // show immediately (constructor [order] can be a stale snapshot).
+      controller.orders.length;
+      final order =
+          controller.findOrder(orderNumber: this.order.number) ?? this.order;
       final state = controller.tableUiState.value;
       final isExpanded = state.expandedOrderNumber == order.number;
       final isRowSelected = state.selectedRow?.orderNumber == order.number &&

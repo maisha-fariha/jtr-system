@@ -1064,18 +1064,30 @@ class TableDetailsController extends GetxController {
     if (Get.isRegistered<SessionController>() && currentOrder != null) {
       // Sync this table's row only — do not force-refresh the whole session
       // list (that re-sorts and moves rows when returning from details).
-      Get.find<SessionController>().updateOrderRow(currentOrder);
+      Get.find<SessionController>().updateOrderRow(
+        currentOrder,
+        replaceDetail: true,
+      );
     }
     Get.back();
   }
 
   /// After a successful kitchen send, return to the session list.
-  void _returnToSessionPage({bool skipOrderSnapshot = false}) {
+  void _returnToSessionPage({
+    bool skipOrderSnapshot = false,
+    bool scrollListToTop = false,
+  }) {
     if (!skipOrderSnapshot) {
       final currentOrder = order;
       if (Get.isRegistered<SessionController>() && currentOrder != null) {
-        Get.find<SessionController>().updateOrderRow(currentOrder);
+        Get.find<SessionController>().updateOrderRow(
+          currentOrder,
+          replaceDetail: true,
+        );
       }
+    }
+    if (scrollListToTop && Get.isRegistered<SessionController>()) {
+      Get.find<SessionController>().listScrollSignal.value++;
     }
     if (Get.currentRoute == AppRoutes.tableDetails) {
       Get.back();
@@ -1430,7 +1442,15 @@ class TableDetailsController extends GetxController {
         _optimisticSync.enqueue(
           syncKey: _optimisticSyncKey,
           snapshot: snapshot,
-          apply: _applySyncedOrder,
+          apply: (updated) {
+            _applySyncedOrder(updated);
+            if (Get.isRegistered<SessionController>()) {
+              Get.find<SessionController>().promoteOrderToTop(
+                updated,
+                replaceDetail: true,
+              );
+            }
+          },
           sync: () async {
             final updated = await _orderRepository.requestAllCourses(
               id,
@@ -1458,7 +1478,7 @@ class TableDetailsController extends GetxController {
           ),
         );
 
-        _returnToSessionPage(skipOrderSnapshot: true);
+        _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
       },
     );
   }
@@ -1519,11 +1539,7 @@ class TableDetailsController extends GetxController {
             // already disposed after Get.back().
             if (Get.isRegistered<SessionController>()) {
               final session = Get.find<SessionController>();
-              session.clearSuppressedTable(updated.number);
-              session.updateOrderRow(
-                updated,
-                replaceDetail: true,
-              );
+              session.promoteOrderToTop(updated, replaceDetail: true);
             }
             try {
               _applySyncedOrder(updated);
@@ -1554,9 +1570,7 @@ class TableDetailsController extends GetxController {
             );
             if (recovered != null && recovered.order.id > 0) {
               if (Get.isRegistered<SessionController>()) {
-                final session = Get.find<SessionController>();
-                session.clearSuppressedTable(recovered.order.number);
-                session.updateOrderRow(
+                Get.find<SessionController>().promoteOrderToTop(
                   recovered.order,
                   replaceDetail: true,
                 );
@@ -1573,9 +1587,7 @@ class TableDetailsController extends GetxController {
             );
             if (recovered != null && recovered.order.id > 0) {
               if (Get.isRegistered<SessionController>()) {
-                final session = Get.find<SessionController>();
-                session.clearSuppressedTable(recovered.order.number);
-                session.updateOrderRow(
+                Get.find<SessionController>().promoteOrderToTop(
                   recovered.order,
                   replaceDetail: true,
                 );
@@ -1590,7 +1602,7 @@ class TableDetailsController extends GetxController {
           },
         );
 
-        _returnToSessionPage(skipOrderSnapshot: true);
+        _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
       },
     );
   }
@@ -2535,10 +2547,15 @@ class TableDetailsController extends GetxController {
     // Skip identical writes — rapid bg sync must not thrash Obx rebuilds.
     // Also require the same under-suivre product count so a flattened sync
     // cannot be ignored while the visible suite layout is wrong.
+    // Session list shows impression / couverts / poste — those must sync too.
     final existing = _rawSessionOrder;
     if (existing != null &&
         existing.id == synced.id &&
         existing.total == synced.total &&
+        existing.impressionCount == synced.impressionCount &&
+        existing.couverts == synced.couverts &&
+        existing.poste == synced.poste &&
+        existing.profitCenter == synced.profitCenter &&
         existing.products.length == synced.products.length &&
         OrderMapper.productEntryCount(existing.displayEntries) ==
             OrderMapper.productEntryCount(synced.displayEntries) &&

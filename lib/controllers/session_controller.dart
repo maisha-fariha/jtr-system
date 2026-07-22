@@ -1102,6 +1102,7 @@ class SessionController extends GetxController {
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );
   }

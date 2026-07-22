@@ -403,6 +403,7 @@ class _OrderRow extends GetView<SessionController> {
             onDoubleTap: () => controller.openTableDetails(
               order.number,
               orderId: order.id > 0 ? order.id : null,
+              deferDetailFetch: order.isLocalOnly,
               seedOrder: order,
             ),
             child: Container(

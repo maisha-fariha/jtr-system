@@ -900,6 +900,9 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Widget buildIconRow(BuildContext toolbarContext) {
       return Obx(() {
         final expanded = controller.isBottomPanelExpanded.value;
+        // Rebuild when order lines / send eligibility change.
+        controller.orderUiRevision.value;
+        controller.isAddingProduct.value;
         // Subscribe so the category-back icon enables/disables with navigation.
         controller.categoryPath.length;
         controller.selectedCategoryIndex.value;

@@ -74,8 +74,10 @@ class TableDetailsController extends GetxController {
     if (orderId != null && orderId! > 0) return false;
     final current = _rawSessionOrder ?? seedOrder;
     if (current != null && current.id > 0) return false;
-    // Unsent ticket: first open or lines still queued for Send All.
-    return _deferDetailFetch || _localDraftLines.isNotEmpty;
+    if (_deferDetailFetch || _localDraftLines.isNotEmpty) return true;
+    // Placeholder row (id <= 0) reopened from session after refresh.
+    if (current != null && current.isLocalOnly) return true;
+    return false;
   }
 
   /// Snapshot from navigation — avoids empty flashes and keeps latest total.
@@ -607,6 +609,9 @@ class TableDetailsController extends GetxController {
       if (orderNumber.isEmpty) {
         orderNumber = rawSeed.number;
       }
+      if ((orderId == null || orderId! <= 0) && rawSeed.isLocalOnly) {
+        _deferDetailFetch = true;
+      }
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
@@ -619,8 +624,14 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
-    if (_deferDetailFetch && _localDraftLines.isEmpty) return;
     await _ensureResolvedOrderId();
+    final resolved = resolvedOrderId;
+    if (resolved != null && resolved > 0) {
+      _deferDetailFetch = false;
+      await _refreshOrder();
+      return;
+    }
+    if (_deferDetailFetch && _localDraftLines.isEmpty) return;
     if (_isLocalDraft) return;
     await _refreshOrder();
   }
@@ -2622,17 +2633,80 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  void _cancelSuivreSectionLocally(
+    int sectionIndex,
+    SessionOrder currentOrder,
+  ) {
+    final lineIndices = OrderMapper.productLineIndicesForSection(
+      currentOrder.displayEntries,
+      sectionIndex,
+    );
+    final trimmedDisplay = OrderMapper.removeSuivreSectionFromDisplay(
+      currentOrder.displayEntries,
+      sectionIndex,
+    );
+
+    final sortedIndices = lineIndices.toList()
+      ..sort((a, b) => b.compareTo(a));
+    for (final i in sortedIndices) {
+      _removeLocalDraftLineAt(i);
+    }
+
+    collapsedSuivreSections.remove(sectionIndex);
+    collapsedSuivreSections.refresh();
+    if (selectedSuivreSection.value == sectionIndex) {
+      selectedSuivreSection.value = null;
+    }
+    suivreUiRevision.value++;
+    if (selectedOrderLineIndex.value != null &&
+        lineIndices.contains(selectedOrderLineIndex.value)) {
+      selectedOrderLineIndex.value = null;
+    }
+
+    final optimisticProducts = [
+      for (final entry in trimmedDisplay)
+        if (entry.type == OrderDisplayEntryType.product && entry.product != null)
+          entry.product!,
+    ];
+    final total = optimisticProducts.isEmpty
+        ? OrderMapper.formatPrice('0')
+        : OrderMapper.formatPrice(
+            optimisticProducts
+                .fold<double>(
+                  0,
+                  (sum, line) => sum + _parseFormattedLineTotal(line.price),
+                )
+                .toStringAsFixed(2),
+          );
+
+    _syncOrderInSession(
+      currentOrder.copyWith(
+        products: optimisticProducts,
+        displayEntries: trimmedDisplay,
+        itemCount: optimisticProducts.length,
+        total: total,
+      ),
+      orderNumber,
+      displayEntriesOverride: trimmedDisplay,
+    );
+  }
+
   Future<void> cancelSuivreSection(int sectionIndex) async {
     if (_blockIfOrderOffered()) return;
 
-    final id = resolvedOrderId;
+    final currentOrder = order;
+    if (currentOrder == null) return;
+
+    if (_isLocalDraft) {
+      _cancelSuivreSectionLocally(sectionIndex, currentOrder);
+      return;
+    }
+
+    final id = resolvedOrderId ?? await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
     }
-
-    final currentOrder = order;
-    if (currentOrder == null) return;
 
     final lineIndices = OrderMapper.productLineIndicesForSection(
       currentOrder.displayEntries,

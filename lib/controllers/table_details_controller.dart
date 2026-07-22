@@ -1072,7 +1072,7 @@ class TableDetailsController extends GetxController {
     Get.back();
   }
 
-  /// After a successful kitchen send, return to the session list.
+  /// After a successful kitchen send / payment, return to the session list.
   void _returnToSessionPage({
     bool skipOrderSnapshot = false,
     bool scrollListToTop = false,
@@ -1089,11 +1089,18 @@ class TableDetailsController extends GetxController {
     if (scrollListToTop && Get.isRegistered<SessionController>()) {
       Get.find<SessionController>().listScrollSignal.value++;
     }
-    if (Get.currentRoute == AppRoutes.tableDetails) {
-      Get.back();
-      return;
+
+    // Prefer popping back to the existing session route. Avoid lone Get.back()
+    // after a snackbar — that only dismisses the snackbar.
+    if (Get.currentRoute == AppRoutes.session) return;
+
+    Get.until(
+      (route) =>
+          route.settings.name == AppRoutes.session || route.isFirst,
+    );
+    if (Get.currentRoute != AppRoutes.session) {
+      Get.offNamed(AppRoutes.session);
     }
-    Get.offNamed(AppRoutes.session);
   }
 
   void toggleBottomPanel() {
@@ -1679,13 +1686,23 @@ class TableDetailsController extends GetxController {
           showPaymentOptions.value = false;
           isBottomPanelExpanded.value = true;
           activeToolbarIcon.value = Icons.grid_view;
-          AppSnackbar.show(
-            'Paiement enregistré',
-            'Le paiement en $label a été enregistré.',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 2),
-            margin: const EdgeInsets.all(16),
-          );
+
+          // Navigate first — showing Get.snackbar before Get.back() only
+          // dismisses the snackbar and leaves the waiter on this page.
+          if (Get.isSnackbarOpen) {
+            Get.closeCurrentSnackbar();
+          }
+          _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
+
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            AppSnackbar.show(
+              'Paiement enregistré',
+              'Le paiement en $label a été enregistré.',
+              snackPosition: SnackPosition.BOTTOM,
+              duration: const Duration(seconds: 2),
+              margin: const EdgeInsets.all(16),
+            );
+          });
         } on ApiException catch (e) {
           AppSnackbar.show(
             'Erreur paiement',

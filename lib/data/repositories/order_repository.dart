@@ -208,19 +208,15 @@ class OrderRepository {
       // Empty [] from lightweight session rows must not wipe Hive suivre hints.
       final layoutHints =
           OrderMapper.coalesceLayoutHints(previousDisplayEntries);
-      final splitHint = layoutHints == null
-          ? _local.readSuivreSplitHint(orderId)
-          : OrderMapper.suivreSplitPositions(layoutHints);
-      final countHint = layoutHints == null
-          ? _local.readSuivreCountHint(orderId)
-          : OrderMapper.suivreSeparatorCount(layoutHints);
+      final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
 
       final order = OrderMapper.sessionOrderHidingCreateSeed(
         detail,
         seedProductId: seedId,
         previousDisplayEntries: layoutHints,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
+        suivreSplitHints: suivreHints.splits,
+        suivreCountHint: suivreHints.count,
+        demandedSectionIndices: suivreHints.demandedSections,
         applyKitchenDemande: applyKitchenDemande,
       );
 
@@ -232,18 +228,14 @@ class OrderRepository {
     if (cached != null) {
       final layoutHints =
           OrderMapper.coalesceLayoutHints(previousDisplayEntries);
-      final splitHint = layoutHints == null
-          ? _local.readSuivreSplitHint(orderId)
-          : OrderMapper.suivreSplitPositions(layoutHints);
-      final countHint = layoutHints == null
-          ? _local.readSuivreCountHint(orderId)
-          : OrderMapper.suivreSeparatorCount(layoutHints);
+      final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
       return OrderMapper.sessionOrderHidingCreateSeed(
         cached,
         seedProductId: seedId,
         previousDisplayEntries: layoutHints,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
+        suivreSplitHints: suivreHints.splits,
+        suivreCountHint: suivreHints.count,
+        demandedSectionIndices: suivreHints.demandedSections,
         applyKitchenDemande: applyKitchenDemande,
       );
     }
@@ -367,9 +359,11 @@ class OrderRepository {
     List<OrderDisplayEntry> displayEntries,
   ) async {
     final splits = OrderMapper.suivreSplitPositions(displayEntries);
-    final count = OrderMapper.suivreSeparatorCount(displayEntries);
+    final count = OrderMapper.sectionDividerCount(displayEntries);
+    final demanded = OrderMapper.demandedSectionIndicesFromEntries(displayEntries);
     await _local.saveSuivreSplitHint(orderId, splits);
     await _local.saveSuivreCountHint(orderId, count);
+    await _local.saveDemandedSectionHint(orderId, demanded);
   }
 
   Future<void> closeOrder(
@@ -1978,6 +1972,7 @@ class OrderRepository {
     required int orderId,
     required List<SimpleProductBatchLine> items,
     List<OrderDisplayEntry>? layoutHints,
+    int? selectedSuivreSectionIndex,
     String? tableNumber,
     int? waiterId,
     bool expectEmptyShell = false,
@@ -2106,6 +2101,7 @@ class OrderRepository {
           suivreSectionCount: suivreHints.count,
           suivreSplitHints: suivreHints.splits,
           layoutHints: layoutHints,
+          selectedSuivreSectionIndex: selectedSuivreSectionIndex,
         ),
       );
 
@@ -2417,6 +2413,7 @@ class OrderRepository {
     required List<Map<String, dynamic>> menuSelections,
     String comment = '',
     List<OrderDisplayEntry>? layoutHints,
+    int? selectedSuivreSectionIndex,
     String? tableNumber,
     int? waiterId,
     bool expectEmptyShell = false,
@@ -2562,6 +2559,7 @@ class OrderRepository {
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
         layoutHints: layoutHints,
+        selectedSuivreSectionIndex: selectedSuivreSectionIndex,
       );
 
       final updated = await _putOrderUpdate(
@@ -3487,24 +3485,53 @@ class OrderRepository {
     return count;
   }
 
-  ({List<int> splits, int count}) _resolveSuivreHints(
+  ({List<int> splits, int count, Set<int> demandedSections})
+      _resolveSuivreHints(
     int orderId, {
     List<OrderDisplayEntry>? layoutHints,
   }) {
-    // When the UI passes layout hints, trust them even if count is 0 — otherwise
-    // a stale local suivre_count hint resurrects a fake À SUIVRE after menu add.
+    final fromHive = (
+      splits: _local.readSuivreSplitHint(orderId),
+      count: _local.readSuivreCountHint(orderId),
+      demandedSections: _local.readDemandedSectionHint(orderId),
+    );
+
+    // When the UI passes layout hints, trust them when they still carry suites.
     if (layoutHints != null) {
-      return (
+      final fromLayout = (
         splits: OrderMapper.suivreSplitPositions(layoutHints),
-        count: OrderMapper.suivreSeparatorCount(layoutHints),
+        count: OrderMapper.sectionDividerCount(layoutHints),
+        demandedSections:
+            OrderMapper.demandedSectionIndicesFromEntries(layoutHints),
+      );
+
+      final layoutHasSuites = fromLayout.count > 0 || fromLayout.splits.isNotEmpty;
+      final hiveHasSuites = fromHive.count > 0 || fromHive.splits.isNotEmpty;
+
+      // Session list rows are often flat — keep Hive waiter layout when richer.
+      if (hiveHasSuites &&
+          (!layoutHasSuites || fromLayout.count < fromHive.count)) {
+        return (
+          splits: fromHive.splits,
+          count: fromHive.count,
+          demandedSections: {
+            ...fromHive.demandedSections,
+            ...fromLayout.demandedSections,
+          },
+        );
+      }
+
+      return (
+        splits: fromLayout.splits,
+        count: fromLayout.count,
+        demandedSections: {
+          ...fromLayout.demandedSections,
+          ...fromHive.demandedSections,
+        },
       );
     }
 
-    final count = _local.readSuivreCountHint(orderId);
-    return (
-      splits: _local.readSuivreSplitHint(orderId),
-      count: count,
-    );
+    return fromHive;
   }
 
   void _ensureAddItemCourse(
@@ -3518,7 +3545,7 @@ class OrderRepository {
     final effectiveLayout =
         emptyTicket ? null : OrderMapper.coalesceLayoutHints(layoutHints);
     final suivreHints = emptyTicket
-        ? (splits: const <int>[], count: 0)
+        ? (splits: const <int>[], count: 0, demandedSections: const <int>{})
         : _resolveSuivreHints(orderId, layoutHints: effectiveLayout);
 
     OrderMapper.ensureMinimalSeatCourseStructure(detail);
@@ -3561,17 +3588,16 @@ class OrderRepository {
     Map<String, dynamic> detail, {
     List<OrderDisplayEntry>? previousDisplayEntries,
   }) {
-    final splitHint = previousDisplayEntries == null
-        ? _local.readSuivreSplitHint(orderId)
-        : OrderMapper.suivreSplitPositions(previousDisplayEntries);
-    final countHint = previousDisplayEntries == null
-        ? _local.readSuivreCountHint(orderId)
-        : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+    final suivreHints = _resolveSuivreHints(
+      orderId,
+      layoutHints: previousDisplayEntries,
+    );
     final order = OrderMapper.fromOrderDetail(
       detail,
       previousDisplayEntries: previousDisplayEntries,
-      suivreSplitHints: splitHint,
-      suivreCountHint: countHint,
+      suivreSplitHints: suivreHints.splits,
+      suivreCountHint: suivreHints.count,
+      demandedSectionIndices: suivreHints.demandedSections,
     );
     unawaited(_persistSuivreLayoutHints(orderId, order.displayEntries));
     return order.copyWith(id: orderId);
@@ -3645,18 +3671,14 @@ class OrderRepository {
 
     final layoutHints =
         OrderMapper.coalesceLayoutHints(previousDisplayEntries);
-    final splitHint = layoutHints == null
-        ? _local.readSuivreSplitHint(orderId)
-        : OrderMapper.suivreSplitPositions(layoutHints);
-    final countHint = layoutHints == null
-        ? _local.readSuivreCountHint(orderId)
-        : OrderMapper.suivreSeparatorCount(layoutHints);
+    final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
 
     final order = OrderMapper.fromOrderDetail(
       working,
       previousDisplayEntries: layoutHints,
-      suivreSplitHints: splitHint,
-      suivreCountHint: countHint,
+      suivreSplitHints: suivreHints.splits,
+      suivreCountHint: suivreHints.count,
+      demandedSectionIndices: suivreHints.demandedSections,
     );
 
     // Empty shell: clear À SUIVRE hints so the next add targets course 1 / seat
@@ -4035,18 +4057,17 @@ class OrderRepository {
     await _local.saveOrderDetail(orderId, working);
     await _sessionLocal.upsertOpenOrderInList(working);
 
-    final splitHint = previousDisplayEntries == null
-        ? _local.readSuivreSplitHint(orderId)
-        : OrderMapper.suivreSplitPositions(previousDisplayEntries);
-    final countHint = previousDisplayEntries == null
-        ? _local.readSuivreCountHint(orderId)
-        : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+    final suivreHints = _resolveSuivreHints(
+      orderId,
+      layoutHints: previousDisplayEntries,
+    );
 
     final order = OrderMapper.fromOrderDetail(
       working,
       previousDisplayEntries: previousDisplayEntries,
-      suivreSplitHints: splitHint,
-      suivreCountHint: countHint,
+      suivreSplitHints: suivreHints.splits,
+      suivreCountHint: suivreHints.count,
+      demandedSectionIndices: suivreHints.demandedSections,
     );
 
     // Last resort: never return an empty SessionOrder when we still have lines.
@@ -4054,8 +4075,9 @@ class OrderRepository {
       final fallback = OrderMapper.fromOrderDetail(
         localMutated,
         previousDisplayEntries: previousDisplayEntries,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
+        suivreSplitHints: suivreHints.splits,
+        suivreCountHint: suivreHints.count,
+        demandedSectionIndices: suivreHints.demandedSections,
       );
       await _persistSuivreLayoutHints(orderId, fallback.displayEntries);
       return fallback;
@@ -4196,52 +4218,40 @@ class OrderRepository {
         }
       }
 
-      final courseIds = OrderMapper.extractKitchenSendCourseIds(
-        detail,
-        layoutHints: previousDisplayEntries,
-      );
-      apiLog.writeln('course_ids=${courseIds.join(',')}');
-      if (courseIds.isEmpty) {
+      if (OrderMapper.orderDetailHasNoVisibleItems(detail)) {
         throw ApiException(
           message: 'Aucun article à envoyer en cuisine pour cette table.',
         );
       }
 
-      apiLog.writeln('── POST /api/orders/$orderId/request-courses ──');
-      await _remote.requestCourses(orderId, courseIds);
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
-
-      apiLog.writeln('── GET /api/orders/$orderId (updated) ──');
-      final updated = await _remote.fetchOrderDetail(orderId);
-      if (_remote.lastApiLog != null) {
-        apiLog.writeln(_remote.lastApiLog);
-      }
-
-      await _local.saveOrderDetail(orderId, updated);
+      apiLog.writeln(
+        '── Envoyer: alignement local uniquement (pas de request-courses) ──',
+      );
       lastKitchenSendLog = apiLog.toString();
       print(lastKitchenSendLog);
       debugPrint(lastKitchenSendLog!);
 
-      var order = OrderMapper.fromOrderDetail(
-        updated,
-        previousDisplayEntries: previousDisplayEntries,
-        applyKitchenDemande: true,
+      // Envoyer does not fire request-courses — only manual Demande does.
+      final demandedHint = OrderMapper.demandedSectionIndicesFromEntries(
+        previousDisplayEntries ?? const [],
       );
-      if (previousDisplayEntries != null &&
-          previousDisplayEntries.isNotEmpty &&
-          OrderMapper.suivreSeparatorCount(order.displayEntries) > 0) {
-        final converted = OrderMapper.convertAllPendingSuivreWithItemsToDemande(
-          order.displayEntries,
-          detail: updated,
-        );
-        if (!identical(converted, order.displayEntries)) {
-          order = order.copyWith(displayEntries: converted);
-        }
-      }
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: previousDisplayEntries,
+      );
+      final order = OrderMapper.fromOrderDetail(
+        detail,
+        previousDisplayEntries: previousDisplayEntries,
+        suivreSplitHints: suivreHints.splits,
+        suivreCountHint: suivreHints.count,
+        demandedSectionIndices: {
+          ...suivreHints.demandedSections,
+          ...demandedHint,
+        },
+        applyKitchenDemande: false,
+      );
       await _persistSuivreLayoutHints(orderId, order.displayEntries);
-      await _sessionLocal.upsertOpenOrderInList(updated);
+      await _sessionLocal.upsertOpenOrderInList(detail);
       return order;
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
@@ -4317,10 +4327,9 @@ class OrderRepository {
     try {
       var detail = await _fetchOrderDetailForPayment(orderId, apiLog);
 
-      // Same path as the red paper-plane "Envoyer" action, then a forced
-      // pass over every visible course id (covers items added after DEMANDÉE).
+      // Align local suite layout before payment (no request-courses here).
       try {
-        apiLog.writeln('── Envoi cuisine (requestAllCourses) avant paiement ──');
+        apiLog.writeln('── Alignement layout (requestAllCourses) avant paiement ──');
         await requestAllCourses(orderId);
         if (lastKitchenSendLog != null) {
           apiLog.writeln(lastKitchenSendLog);
@@ -4388,18 +4397,17 @@ class OrderRepository {
       print(lastPaymentLog);
       debugPrint(lastPaymentLog!);
 
-      final splitHint = previousDisplayEntries == null
-          ? _local.readSuivreSplitHint(orderId)
-          : OrderMapper.suivreSplitPositions(previousDisplayEntries);
-      final countHint = previousDisplayEntries == null
-          ? _local.readSuivreCountHint(orderId)
-          : OrderMapper.suivreSeparatorCount(previousDisplayEntries);
+      final suivreHints = _resolveSuivreHints(
+        orderId,
+        layoutHints: previousDisplayEntries,
+      );
 
       return OrderMapper.fromOrderDetail(
         updated,
         previousDisplayEntries: previousDisplayEntries,
-        suivreSplitHints: splitHint,
-        suivreCountHint: countHint,
+        suivreSplitHints: suivreHints.splits,
+        suivreCountHint: suivreHints.count,
+        demandedSectionIndices: suivreHints.demandedSections,
       );
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');

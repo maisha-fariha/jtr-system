@@ -29,6 +29,7 @@ class OrderLocalDataSource {
     await _storage.delete(_detailKey(orderId));
     await _storage.delete(_suivreSplitKey(orderId));
     await _storage.delete(_suivreCountKey(orderId));
+    await _storage.delete(_demandedSectionKey(orderId));
   }
 
   String _suivreSplitKey(int orderId) =>
@@ -36,6 +37,9 @@ class OrderLocalDataSource {
 
   String _suivreCountKey(int orderId) =>
       '${StorageConstants.orderDetailsPrefix}suivre_count_$orderId';
+
+  String _demandedSectionKey(int orderId) =>
+      '${StorageConstants.orderDetailsPrefix}demanded_sections_$orderId';
 
   Future<void> saveSuivreSplitHint(int orderId, List<int> splitPositions) async {
     final key = _suivreSplitKey(orderId);
@@ -72,5 +76,30 @@ class OrderLocalDataSource {
     final raw = _storage.readString(_suivreCountKey(orderId));
     if (raw == null || raw.isEmpty) return 0;
     return int.tryParse(raw) ?? 0;
+  }
+
+  Future<void> saveDemandedSectionHint(
+    int orderId,
+    Set<int> sectionIndices,
+  ) async {
+    final key = _demandedSectionKey(orderId);
+    final valid = sectionIndices.where((index) => index > 0).toList()..sort();
+    if (valid.isEmpty) {
+      await _storage.delete(key);
+      return;
+    }
+    await _storage.writeString(key, valid.join(','));
+  }
+
+  Set<int> readDemandedSectionHint(int orderId) {
+    final raw = _storage.readString(_demandedSectionKey(orderId));
+    if (raw == null || raw.isEmpty) return const {};
+
+    return raw
+        .split(',')
+        .map((value) => int.tryParse(value.trim()))
+        .whereType<int>()
+        .where((index) => index > 0)
+        .toSet();
   }
 }

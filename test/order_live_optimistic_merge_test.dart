@@ -75,6 +75,44 @@ void main() {
     expect(OrderMapper.productEntryCount(merged.displayEntries), 4);
   });
 
+  test('merge adopts new menu line under open À SUIVRE after bg sync', () {
+    final live = _order(
+      display: [
+        _product(0, 'OULMES', itemId: 1),
+        _product(1, 'OULMES', itemId: 2),
+        _product(2, 'OULMES', itemId: 3),
+        _product(3, 'OULMES', itemId: 4),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      ],
+      total: '60,00 €',
+    );
+    final server = _order(
+      display: [
+        _product(0, 'OULMES', itemId: 1),
+        _product(1, 'OULMES', itemId: 2),
+        _product(2, 'OULMES', itemId: 3),
+        _product(3, 'OULMES', itemId: 4),
+        _product(4, 'MENU DU JOUR', itemId: 99),
+      ],
+      total: '135,00 €',
+    );
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: server,
+      live: live,
+      preferAdoptingNewServerLines: true,
+      selectedSuivreSectionIndex: 1,
+    );
+
+    expect(OrderMapper.productEntryCount(merged.displayEntries), 5);
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 1);
+    expect(
+      merged.displayEntries.last.product?.name,
+      'MENU DU JOUR',
+    );
+    expect(merged.products.length, 5);
+  });
+
   test('merge does not restore a deleted line from stale server', () {
     final live = _order(
       display: [
@@ -278,6 +316,184 @@ void main() {
     );
     expect(OrderMapper.demandeSeparatorCount(onKitchen), 1);
     expect(OrderMapper.suivreSeparatorCount(onKitchen), 0);
+  });
+
+  test('send all keeps pending À SUIVRE after kitchen send', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+    ];
+    final detail = <String, dynamic>{
+      'id': 1,
+      'table': {'table_number': 1},
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 10, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 11, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: previous,
+      suivreCountHint: 1,
+      demandedSectionIndices: const {},
+      applyKitchenDemande: false,
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(entries), 1);
+    expect(OrderMapper.demandeSeparatorCount(entries), 0);
+  });
+
+  test('send all keeps À SUIVRE when API marks courses requested', () {
+    final previous = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+      _product(2, 'C', itemId: 3),
+    ];
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 10, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 11, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'course_number': 3,
+              'requested_at': '2026-07-19T12:00:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 12, 'name': 'C'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: previous,
+      suivreSplitHints: const [1, 2],
+      suivreCountHint: 2,
+      demandedSectionIndices: const {},
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(entries), 2);
+    expect(OrderMapper.demandeSeparatorCount(entries), 0);
+  });
+
+  test('manual demand section shows DEMANDÉE from persisted hint', () {
+    final detail = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 10, 'name': 'A'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-19T12:05:00Z',
+              'status': 'requested',
+              'items': [
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'sent',
+                  'product': {'id': 11, 'name': 'B'},
+                  'sub_total': 5,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      suivreSplitHints: const [1],
+      suivreCountHint: 1,
+      demandedSectionIndices: const {1},
+    );
+
+    expect(OrderMapper.demandeSeparatorCount(entries), 1);
+    expect(OrderMapper.suivreSeparatorCount(entries), 0);
   });
 
   test('finalize after kitchen send keeps DEMANDÉE (no revert to À SUIVRE)', () {
@@ -746,6 +962,31 @@ void main() {
     ];
 
     expect(OrderMapper.resolveAppendCourseNumberFromLayout(layout), 2);
+  });
+
+  test('append course uses selected À SUIVRE not only the last divider', () {
+    final layout = [
+      _product(0, 'A', itemId: 1),
+      const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+      _product(1, 'B', itemId: 2),
+      const OrderDisplayEntry.suivre(sectionIndex: 2, courseNumber: 2),
+    ];
+
+    expect(
+      OrderMapper.resolveAppendCourseNumberFromLayout(
+        layout,
+        selectedSectionIndex: 1,
+      ),
+      2,
+    );
+    expect(
+      OrderMapper.resolveAppendCourseNumberFromLayout(
+        layout,
+        selectedSectionIndex: 2,
+      ),
+      3,
+    );
+    expect(OrderMapper.resolveAppendCourseNumberFromLayout(layout), 3);
   });
 
   test('empty API follow-up course does not auto-insert À SUIVRE', () {
@@ -1839,7 +2080,8 @@ void main() {
     final entries = OrderMapper.finalizeDisplayEntries(
       detail,
       suivreSplitHints: const [3, 5],
-      suivreCountHint: 1,
+      suivreCountHint: 2,
+      demandedSectionIndices: const {1},
     );
 
     expect(OrderMapper.sectionDividerCount(entries), 2);
@@ -1931,7 +2173,8 @@ void main() {
     final entries = OrderMapper.finalizeDisplayEntries(
       detail,
       suivreSplitHints: const [3, 3],
-      suivreCountHint: 1,
+      suivreCountHint: 2,
+      demandedSectionIndices: const {1},
     );
 
     expect(OrderMapper.sectionDividerCount(entries), 2);
@@ -1950,6 +2193,481 @@ void main() {
       }
     }
     expect(namesUnderSuivre, ['HAWAII']);
+  });
+
+  test('API course groups show À SUIVRE between each course without Hive hints',
+      () {
+    final detail = <String, dynamic>{
+      'id': 408,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'requested_at': '2026-07-21T12:36:02.000000Z',
+              'items': [
+                {
+                  'id': 4444,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4445,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4446,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 74, 'name': 'test grammage'},
+                  'sub_total': 10,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                for (var id = 4447; id <= 4449; id++)
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 16, 'name': 'COUPE KIDS'},
+                    'sub_total': 45,
+                  },
+              ],
+            },
+            {
+              'course_number': 3,
+              'items': [
+                {
+                  'id': 4450,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 64, 'name': 'OULMES 1L'},
+                  'sub_total': 30,
+                },
+                {
+                  'id': 4451,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 63, 'name': 'OULMES 50CL'},
+                  'sub_total': 15,
+                },
+                {
+                  'id': 4452,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 62, 'name': 'SIDI ALI 1L'},
+                  'sub_total': 30,
+                },
+              ],
+            },
+            {
+              'course_number': 4,
+              'items': [
+                for (var id = 4453; id <= 4454; id++)
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 61, 'name': 'SIDI ALI 50CL'},
+                    'sub_total': 15,
+                  },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(detail);
+
+    expect(OrderMapper.countFollowUpCoursesWithItems(detail), 3);
+    expect(OrderMapper.suivreSeparatorCount(entries), 3);
+    expect(OrderMapper.productEntryCount(entries), 11);
+
+    final sections = <int>[];
+    for (final entry in entries) {
+      if (entry.type == OrderDisplayEntryType.product) {
+        sections.add(entry.sectionIndex ?? 0);
+      }
+    }
+    expect(sections.where((s) => s == 0).length, 3);
+    expect(sections.where((s) => s == 1).length, 3);
+    expect(sections.where((s) => s == 2).length, 3);
+    expect(sections.where((s) => s == 3).length, 2);
+  });
+
+  test(
+      'finalize keeps API course dividers when session row is flat but first course has items',
+      () {
+    final detail = <String, dynamic>{
+      'id': 408,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'requested_at': '2026-07-21T12:36:02.000000Z',
+              'items': [
+                {
+                  'id': 4444,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4445,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4446,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 74, 'name': 'test grammage'},
+                  'sub_total': 10,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                for (var id = 4447; id <= 4449; id++)
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 16, 'name': 'COUPE KIDS'},
+                    'sub_total': 45,
+                  },
+              ],
+            },
+            {
+              'course_number': 3,
+              'items': [
+                {
+                  'id': 4450,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 64, 'name': 'OULMES 1L'},
+                  'sub_total': 30,
+                },
+                {
+                  'id': 4451,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 63, 'name': 'OULMES 50CL'},
+                  'sub_total': 15,
+                },
+                {
+                  'id': 4452,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 62, 'name': 'SIDI ALI 1L'},
+                  'sub_total': 30,
+                },
+              ],
+            },
+            {
+              'course_number': 4,
+              'items': [
+                for (var id = 4453; id <= 4454; id++)
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 61, 'name': 'SIDI ALI 50CL'},
+                    'sub_total': 15,
+                  },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final flatPrevious = [
+      for (final id in [
+        4445,
+        4444,
+        4446,
+        4447,
+        4448,
+        4449,
+        4450,
+        4451,
+        4452,
+        4453,
+        4454,
+      ])
+        _product(id - 4444, 'item $id', itemId: id),
+    ];
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: flatPrevious,
+    );
+
+    expect(OrderMapper.apiHasFirstCourseWithItemsAndFollowUps(detail), isTrue);
+    expect(OrderMapper.suivreSeparatorCount(entries), 3);
+    expect(OrderMapper.productEntryCount(entries), 11);
+  });
+
+  test('merge keeps API course dividers when live session row is flat', () {
+    final detail = <String, dynamic>{
+      'id': 408,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 4444,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4445,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 16, 'name': 'COUPE KIDS'},
+                  'sub_total': 45,
+                },
+                {
+                  'id': 4446,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 74, 'name': 'test grammage'},
+                  'sub_total': 10,
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                for (var id = 4447; id <= 4449; id++)
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 16, 'name': 'COUPE KIDS'},
+                    'sub_total': 45,
+                  },
+              ],
+            },
+            {
+              'course_number': 3,
+              'items': [
+                {
+                  'id': 4450,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 64, 'name': 'OULMES 1L'},
+                  'sub_total': 30,
+                },
+              ],
+            },
+            {
+              'course_number': 4,
+              'items': [
+                {
+                  'id': 4453,
+                  'qty': 1,
+                  'status': 'to_be_continued',
+                  'product': {'id': 61, 'name': 'SIDI ALI 50CL'},
+                  'sub_total': 15,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final serverEntries = OrderMapper.finalizeDisplayEntries(detail);
+    final flatLive = [
+      for (final entry in serverEntries)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
+
+    final merged = OrderMapper.mergeLiveOptimisticDetail(
+      server: _order(display: serverEntries, total: '340.00'),
+      live: _order(display: flatLive, total: '340.00'),
+    );
+
+    expect(OrderMapper.suivreSeparatorCount(merged.displayEntries), 3);
+    expect(OrderMapper.productEntryCount(merged.displayEntries), 8);
+  });
+
+  test('split hints restore multiple suites when API parks items on course 1',
+      () {
+    // API: 19 lines on course 1, 3 on course 2 — waiter had 3 À SUIVRE splits.
+    final detail = <String, dynamic>{
+      'id': 407,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'requested_at': '2026-07-21T12:22:01.000000Z',
+              'items': [
+                for (var i = 1; i <= 19; i++)
+                  {
+                    'id': i,
+                    'course_number': 1,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'created_at':
+                        '2026-07-21T12:19:${(35 + i).toString().padLeft(2, '0')}.000000Z',
+                    'product': {'id': i, 'name': 'P$i'},
+                    'sub_total': 10,
+                  },
+              ],
+            },
+            {
+              'course_number': 2,
+              'requested_at': '2026-07-21T12:26:28.000000Z',
+              'items': [
+                for (var i = 20; i <= 22; i++)
+                  {
+                    'id': i,
+                    'course_number': 2,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'created_at': '2026-07-21T12:21:40.000000Z',
+                    'product': {'id': i, 'name': 'P$i'},
+                    'sub_total': 10,
+                  },
+              ],
+            },
+            for (var n = 3; n <= 5; n++)
+              {
+                'course_number': n,
+                'requested_at': '2026-07-21T12:22:01.000000Z',
+                'items': <dynamic>[],
+              },
+          ],
+        },
+      ],
+    };
+
+    final flatPrevious = [
+      for (var i = 0; i < 22; i++)
+        _product(i, 'P${i + 1}', itemId: i + 1),
+    ];
+
+    final entries = OrderMapper.finalizeDisplayEntries(
+      detail,
+      previousDisplayEntries: flatPrevious,
+      suivreSplitHints: const [6, 12, 18],
+      suivreCountHint: 3,
+      demandedSectionIndices: const {1},
+    );
+
+    expect(OrderMapper.sectionDividerCount(entries), 3);
+    expect(OrderMapper.demandeSeparatorCount(entries), 1);
+    expect(OrderMapper.suivreSeparatorCount(entries), 2);
+    expect(OrderMapper.productEntryCount(entries), 22);
+  });
+
+  test('fresh install shows DEMANDÉE for manually requested follow-up courses',
+      () {
+    final detail = <String, dynamic>{
+      'id': 409,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'requested_at': '2026-07-21T13:14:44.000000Z',
+              'items': [
+                for (final id in [4456, 4457, 4458, 4459, 4460])
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {
+                      'id': id == 4457 || id == 4459 || id == 4460 ? 74 : 16,
+                      'name': id == 4457 || id == 4459 || id == 4460
+                          ? 'test grammage'
+                          : 'COUPE KIDS',
+                    },
+                    'sub_total': id == 4457 || id == 4459 || id == 4460 ? 10 : 45,
+                  },
+              ],
+            },
+            {
+              'id': 2198,
+              'course_number': 2,
+              'items': <dynamic>[],
+            },
+            {
+              'id': 2199,
+              'course_number': 3,
+              'requested_at': '2026-07-21T13:19:06.000000Z',
+              'items': [
+                for (final id in [4465, 4466])
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 16, 'name': 'COUPE KIDS'},
+                    'sub_total': 45,
+                  },
+              ],
+            },
+            {
+              'id': 2200,
+              'course_number': 4,
+              'requested_at': '2026-07-21T13:19:17.000000Z',
+              'items': [
+                for (final id in [4463, 4464])
+                  {
+                    'id': id,
+                    'qty': 1,
+                    'status': 'to_be_continued',
+                    'product': {'id': 62, 'name': 'SIDI ALI 1L'},
+                    'sub_total': 30,
+                  },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    final entries = OrderMapper.finalizeDisplayEntries(detail);
+
+    expect(OrderMapper.demandeSeparatorCount(entries), 2);
+    expect(OrderMapper.suivreSeparatorCount(entries), 0);
+    expect(OrderMapper.countFollowUpCoursesWithItems(detail), 2);
+
+    final names = <String>[
+      for (final entry in entries)
+        if (entry.type == OrderDisplayEntryType.product)
+          entry.product!.name,
+    ];
+    final kidsAfterFirstDemande = names.indexOf('COUPE KIDS', 5);
+    final sidiIndex = names.indexOf('SIDI ALI 1L');
+    expect(kidsAfterFirstDemande, lessThan(sidiIndex));
   });
 
   test('extractKitchenSendCourseIds returns every pending course', () {
@@ -2181,5 +2899,107 @@ void main() {
       layout: layout,
     );
     expect(ids, [103]);
+  });
+
+  test('ensureSessionDisplayHydrated keeps empty display for summary rows', () {
+    final summary = OrderMapper.sessionOrderSummaryFromListMap({
+      'id': 408,
+      'table_number': 'T1',
+      'total_price': '345',
+      'number_of_guests': 3,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'sub_total': 45,
+                  'product': {'name': 'COUPE KIDS'},
+                },
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'sub_total': 45,
+                  'product': {'name': 'MENU'},
+                },
+              ],
+            },
+            {
+              'course_number': 2,
+              'items': [
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'sub_total': 30,
+                  'product': {'name': 'DESSERT'},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    final hydrated = OrderMapper.ensureSessionDisplayHydrated(summary);
+    expect(hydrated.displayEntries, isEmpty);
+    expect(OrderMapper.sessionListDetailIsHydrated(hydrated), isFalse);
+  });
+
+  test('session list summary is not hydrated until detail layout loads', () {
+    final summary = OrderMapper.sessionOrderSummaryFromListMap({
+      'id': 408,
+      'table_number': 'T1',
+      'total_price': '345',
+      'number_of_guests': 3,
+      'items_count': 10,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'course_number': 1,
+              'items': [
+                {
+                  'id': 1,
+                  'quantity': 1,
+                  'product': {'name': 'COUPE KIDS', 'price': 45},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(summary.displayEntries, isEmpty);
+    expect(summary.itemCount, 10);
+    expect(OrderMapper.sessionListDetailIsHydrated(summary), isFalse);
+  });
+
+  test('sessionListDetailIsHydrated true when course dividers present', () {
+    final order = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        const OrderDisplayEntry.suivre(sectionIndex: 1, courseNumber: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    expect(OrderMapper.sessionListDetailIsHydrated(order), isTrue);
+  });
+
+  test('sessionListDetailIsHydrated true for single-course detail with item ids', () {
+    final order = _order(
+      display: [
+        _product(0, 'A', itemId: 1),
+        _product(1, 'B', itemId: 2),
+      ],
+    );
+
+    expect(OrderMapper.sessionListDetailIsHydrated(order), isTrue);
   });
 }

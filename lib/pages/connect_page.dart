@@ -82,30 +82,6 @@ class ConnectPage extends GetView<ConnectController> {
           ),
           JtrResponsive.getResponsiveSpacing(context, 28),
           Obx(() => _buildProgressBar(context, controller.progress.value)),
-          JtrResponsive.getResponsiveSpacing(context, 16),
-          Obx(
-            () => Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  width: JtrResponsive.getResponsiveSize(context, 8),
-                  height: JtrResponsive.getResponsiveSize(context, 8),
-                  decoration: const BoxDecoration(
-                    color: AppTheme.primary,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-                Text(
-                  controller.statusDetail.value,
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                    color: AppTheme.textSecondary.withValues(alpha: 0.7),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

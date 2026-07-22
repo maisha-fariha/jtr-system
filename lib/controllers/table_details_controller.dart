@@ -16,6 +16,7 @@ import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../models/menu_active_selection.dart';
+import '../models/menu_selection_submit_result.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
 import '../utils/app_snackbar.dart';
@@ -217,6 +218,16 @@ class TableDetailsController extends GetxController {
         : OrderMapper.productEntryCount(live.displayEntries);
     final updatedCount =
         OrderMapper.productEntryCount(updated.displayEntries);
+    final adoptingNewServerLines = suppress.isEmpty &&
+        !pendingDelete &&
+        live != null &&
+        updatedCount > liveCount &&
+        (OrderMapper.sectionDividerCount(live.displayEntries) > 0 ||
+            OrderMapper.hasOptimisticProductEntries(live.displayEntries) ||
+            OrderMapper.layoutHasTrailingPendingSuivre(live.displayEntries) ||
+            OrderMapper.layoutHasProductsUnderPendingSuivre(
+              live.displayEntries,
+            ));
 
     // Waiter's current ticket wins — patch server ids only, never relayout.
     if (live != null && _shouldPreferLiveTicket(live, updated, suppress)) {
@@ -228,13 +239,11 @@ class TableDetailsController extends GetxController {
         }
       }
 
-      final patched = OrderMapper.preservePendingSuivreFromLive(
+      final patched = OrderMapper.mergeLiveWithPendingSuivreAdds(
+        server: updated,
         live: live,
-        candidate: OrderMapper.patchServerItemIdsOntoLive(
-          live: live,
-          server: updated,
-          suppressItemIds: suppress,
-        ),
+        selectedSuivreSectionIndex: selectedSuivreSection.value,
+        preferAdoptingNewServerLines: adoptingNewServerLines,
       );
       if (_liveItemIdsDiffer(live, patched) ||
           OrderMapper.suivreSeparatorCount(live.displayEntries) !=
@@ -304,22 +313,22 @@ class TableDetailsController extends GetxController {
     if (updatedCount == 0 && liveCount > 0) {
       base = live!;
     } else {
-      base = OrderMapper.mergeLiveOptimisticDetail(
+      base = OrderMapper.mergeLiveWithPendingSuivreAdds(
         server: updated,
-        live: live,
-        suppressItemIds: suppress,
+        live: live ?? updated,
+        selectedSuivreSectionIndex: selectedSuivreSection.value,
+        preferAdoptingNewServerLines: adoptingNewServerLines,
       );
+      if (suppress.isNotEmpty) {
+        base = OrderMapper.mergeLiveOptimisticDetail(
+          server: base,
+          live: live ?? base,
+          suppressItemIds: suppress,
+        );
+      }
     }
-
     // Hard guarantee: deleted ids never re-enter the ticket from any response.
     var toShow = base;
-    if (suppress.isNotEmpty) {
-      toShow = OrderMapper.mergeLiveOptimisticDetail(
-        server: base,
-        live: live ?? base,
-        suppressItemIds: suppress,
-      );
-    }
 
     if (toShow.products.isEmpty && toShow.id > 0) {
       _orderRepository.rememberEmptyShellDisplay(toShow.id);
@@ -692,7 +701,7 @@ class TableDetailsController extends GetxController {
     }
     raw ??= seedOrder;
     if (raw == null) return null;
-    return forDisplay(raw);
+    return forDisplay(OrderMapper.ensureSessionDisplayHydrated(raw));
   }
 
   int? get resolvedOrderId {
@@ -932,9 +941,10 @@ class TableDetailsController extends GetxController {
     final layoutBeforeNav = order?.displayEntries == null
         ? null
         : List<OrderDisplayEntry>.from(order!.displayEntries);
+    final suivreSectionBeforeNav = selectedSuivreSection.value;
     final id = await _ensureResolvedOrderId();
 
-    final menuAdded = await Get.toNamed(
+    final menuResult = await Get.toNamed(
       AppRoutes.menuSelection,
       arguments: {
         'orderNumber': orderNumber,
@@ -942,13 +952,61 @@ class TableDetailsController extends GetxController {
       },
     );
 
-    if (menuAdded == true) {
+    if (menuResult is MenuSelectionSubmitResult) {
+      _applyMenuSelectionFromToolbar(
+        menuResult,
+        suivreSectionIndex: suivreSectionBeforeNav,
+      );
       orderUiRevision.value++;
       return;
     }
 
     _restoreDisplayLayoutIfNeeded(layoutBeforeNav);
     orderUiRevision.value++;
+  }
+
+  void _applyMenuSelectionFromToolbar(
+    MenuSelectionSubmitResult submit, {
+    int? suivreSectionIndex,
+  }) {
+    _prepareForNewAdd();
+    _invalidateDeleteAppliesIfNeeded();
+
+    final product = CatalogProductModel(
+      id: submit.productId,
+      name: submit.productName,
+      price: submit.basePrice.toStringAsFixed(2),
+      categoryId: 0,
+      categoryName: '',
+      isComposed: true,
+      isActive: true,
+    );
+
+    final layoutHints = _rawSessionOrder?.displayEntries ?? order?.displayEntries;
+    final rollbackSnapshot = _rawSessionOrder != null
+        ? OrderOptimisticSync.deepSnapshot(_rawSessionOrder!)
+        : (order != null ? OrderOptimisticSync.deepSnapshot(order!) : null);
+    final effectiveSuivreSection =
+        suivreSectionIndex ?? selectedSuivreSection.value;
+
+    _applyAddComposedProductToUi(
+      product: product,
+      menuSelections: submit.menuSelections,
+      layoutHints: layoutHints,
+      comment: submit.comment,
+      selectedSuivreSectionIndex: effectiveSuivreSection,
+    );
+
+    unawaited(
+      _syncAddComposedProductInBackground(
+        product: product,
+        menuSelections: submit.menuSelections,
+        rollbackSnapshot: rollbackSnapshot,
+        layoutHints: layoutHints,
+        comment: submit.comment,
+        selectedSuivreSectionIndex: effectiveSuivreSection,
+      ),
+    );
   }
 
   void _restoreDisplayLayoutIfNeeded(List<OrderDisplayEntry>? layout) {
@@ -1321,17 +1379,50 @@ class TableDetailsController extends GetxController {
             previousDisplayEntries: layoutBeforeSend,
           );
           selectedSuivreSection.value = null;
-          // Use kitchen-mapped layout (DEMANDÉE) as the only display source.
+          // Keep waiter layout (À SUIVRE stays until manual Demande).
           _syncOrderInSession(
             updated,
             orderNumber,
             displayEntriesOverride: updated.displayEntries,
           );
-          // requestAllCourses already prints the raw request/response log,
-          // but we mirror it here so it is visible even if logs are filtered.
+          // requestAllCourses aligns layout only — no request-courses POST.
           if (_orderRepository.lastKitchenSendLog != null) {
             debugPrint(_orderRepository.lastKitchenSendLog);
           }
+
+          try {
+            final printed = await _orderRepository.markOrderPrinted(
+              id,
+              previousDisplayEntries: updated.displayEntries,
+            );
+            _syncOrderInSession(
+              printed,
+              orderNumber,
+              displayEntriesOverride: printed.displayEntries,
+            );
+            if (_orderRepository.lastPrintLog != null) {
+              debugPrint(_orderRepository.lastPrintLog);
+            }
+          } on ApiException catch (e) {
+            if (context.mounted) {
+              AppSnackbar.show(
+                'Impression',
+                'Envoi OK — ticket non imprimé: ${e.message}',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+            }
+          } catch (_) {
+            if (context.mounted) {
+              AppSnackbar.show(
+                'Impression',
+                'Envoi OK — impossible d\'imprimer le ticket.',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+            }
+          }
+
           _returnToSessionPage();
         } on ApiException catch (e) {
           if (_orderRepository.lastKitchenSendLog != null) {
@@ -1862,6 +1953,7 @@ class TableDetailsController extends GetxController {
                   orderId: created.id,
                   items: rest,
                   layoutHints: created.displayEntries,
+                  selectedSuivreSectionIndex: selectedSuivreSection.value,
                   tableNumber: orderNumber,
                   waiterId: _currentWaiterId,
                 );
@@ -1874,6 +1966,7 @@ class TableDetailsController extends GetxController {
                 orderId: id,
                 items: lines,
                 layoutHints: layoutHints,
+                selectedSuivreSectionIndex: selectedSuivreSection.value,
                 tableNumber: orderNumber,
                 waiterId: _currentWaiterId,
                 expectEmptyShell: reopeningEmpty,
@@ -1966,15 +2059,14 @@ class TableDetailsController extends GetxController {
 
   void _applyAddSimpleProductToUi(CatalogProductModel product) {
     _prepareForNewAdd();
-    // Lightweight session append only — never simulate full API detail on tap
-    // (json/deep copy + fromOrderDetail was the main ANR with many lines).
-    var current = _rawSessionOrder;
+    var current = _rawSessionOrder ?? order;
     if (current == null) {
       current = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: _parsedTableNumber,
         numberOfGuests: 1,
       );
     }
+    current = OrderMapper.ensureSessionDisplayHydrated(current);
     if (current.products.isEmpty) {
       current = current.copyWith(
         products: const [],
@@ -1987,6 +2079,7 @@ class TableDetailsController extends GetxController {
       current: current,
       productName: product.name,
       unitPrice: product.unitPrice,
+      selectedSuivreSectionIndex: selectedSuivreSection.value,
     );
     _syncOrderInSession(
       predicted,
@@ -2000,15 +2093,18 @@ class TableDetailsController extends GetxController {
     required CatalogProductModel product,
     required List<Map<String, dynamic>> menuSelections,
     List<OrderDisplayEntry>? layoutHints,
+    String comment = '',
+    int? selectedSuivreSectionIndex,
   }) {
     _prepareForNewAdd();
-    var current = _rawSessionOrder;
+    var current = _rawSessionOrder ?? order;
     if (current == null) {
       current = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: _parsedTableNumber,
         numberOfGuests: 1,
       );
     }
+    current = OrderMapper.ensureSessionDisplayHydrated(current);
     if (current.products.isEmpty) {
       current = current.copyWith(
         products: const [],
@@ -2023,6 +2119,8 @@ class TableDetailsController extends GetxController {
     final fastId = _fastResolvedOrderId;
     final cached =
         fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
+    final suivreTarget =
+        selectedSuivreSectionIndex ?? selectedSuivreSection.value;
 
     final predicted = OrderMapper.predictAfterAppendComposedProduct(
       current: current,
@@ -2031,9 +2129,11 @@ class TableDetailsController extends GetxController {
       productName: product.name,
       basePrice: product.unitPrice,
       menuSelections: menuSelections,
+      comment: comment,
       suivreSectionCount: suivreCount,
       suivreSplitHints: suivreSplits,
       layoutHints: hints,
+      selectedSuivreSectionIndex: suivreTarget,
     );
     _syncOrderInSession(
       predicted,
@@ -2055,6 +2155,8 @@ class TableDetailsController extends GetxController {
     required List<Map<String, dynamic>> menuSelections,
     SessionOrder? rollbackSnapshot,
     List<OrderDisplayEntry>? layoutHints,
+    String comment = '',
+    int? selectedSuivreSectionIndex,
   }) async {
     final snapshot = rollbackSnapshot ??
         _rawSessionOrder ??
@@ -2100,12 +2202,16 @@ class TableDetailsController extends GetxController {
         }
 
         orderId = id;
+        final suivreTarget =
+            selectedSuivreSectionIndex ?? selectedSuivreSection.value;
         final updated = await _orderRepository.addComposedProductToOrder(
           orderId: id,
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
+          comment: comment,
           layoutHints: hints,
+          selectedSuivreSectionIndex: suivreTarget,
           tableNumber: orderNumber,
           waiterId: _currentWaiterId,
           expectEmptyShell: snapshot.products.isEmpty,

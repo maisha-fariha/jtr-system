@@ -71,9 +71,11 @@ class TableDetailsController extends GetxController {
   final List<LocalDraftLine> _localDraftLines = [];
 
   bool get _isLocalDraft {
+    if (orderId != null && orderId! > 0) return false;
     final current = _rawSessionOrder ?? seedOrder;
-    if (current != null && current.isLocalOnly) return true;
-    return _deferDetailFetch && (orderId == null || orderId! <= 0);
+    if (current != null && current.id > 0) return false;
+    // Unsent ticket: first open or lines still queued for Send All.
+    return _deferDetailFetch || _localDraftLines.isNotEmpty;
   }
 
   /// Snapshot from navigation — avoids empty flashes and keeps latest total.
@@ -213,6 +215,7 @@ class TableDetailsController extends GetxController {
     if (updated.id > 0) {
       final previousId = orderId ?? _rawSessionOrder?.id ?? 0;
       orderId = updated.id;
+      _deferDetailFetch = false;
       if (previousId > 0 && previousId != updated.id) {
         _orderRepository.clearSuppressedOrderItemIds(previousId);
         _orderRepository.clearPendingLocalDeleteFlag(previousId);
@@ -616,9 +619,9 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
-    if (_deferDetailFetch || _isLocalDraft) return;
+    if (_deferDetailFetch && _localDraftLines.isEmpty) return;
     await _ensureResolvedOrderId();
-    // Always load GET /api/orders/:id — create snapshots may omit lines.
+    if (_isLocalDraft) return;
     await _refreshOrder();
   }
 
@@ -1047,10 +1050,12 @@ class TableDetailsController extends GetxController {
   }
 
   /// After a successful kitchen send, return to the session list.
-  void _returnToSessionPage() {
-    final currentOrder = order;
-    if (Get.isRegistered<SessionController>() && currentOrder != null) {
-      Get.find<SessionController>().updateOrderRow(currentOrder);
+  void _returnToSessionPage({bool skipOrderSnapshot = false}) {
+    if (!skipOrderSnapshot) {
+      final currentOrder = order;
+      if (Get.isRegistered<SessionController>() && currentOrder != null) {
+        Get.find<SessionController>().updateOrderRow(currentOrder);
+      }
     }
     if (Get.currentRoute == AppRoutes.tableDetails) {
       Get.back();
@@ -1401,7 +1406,7 @@ class TableDetailsController extends GetxController {
               );
 
         // Leave immediately — API sync runs in the background queue.
-        _returnToSessionPage();
+        _returnToSessionPage(skipOrderSnapshot: true);
 
         _flushQueuedSimpleAddsNow();
         _optimisticSync.enqueue(
@@ -1480,7 +1485,7 @@ class TableDetailsController extends GetxController {
           waiterName = user?.name;
         }
 
-        _returnToSessionPage();
+        _returnToSessionPage(skipOrderSnapshot: true);
 
         _optimisticSync.enqueue(
           syncKey: _optimisticSyncKey,
@@ -1714,9 +1719,14 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    final id = resolvedOrderId;
+    final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
+      AppSnackbar.show(
+        'Envoi requis',
+        'Envoyez d\'abord la commande avant une demande.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
       return;
     }
 

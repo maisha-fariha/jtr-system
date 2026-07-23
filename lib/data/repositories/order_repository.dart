@@ -830,9 +830,8 @@ class OrderRepository {
     }
 
     final visible = OrderMapper.countVisibleLineItems(detail);
-    // Empty / shell order: write the waiter's draft lines. If items already
-    // match or exceed the draft, treat create as done (prior successful POST).
-    if (visible < lines.length) {
+    // Send Order is the only sync point — always PUT the waiter's draft.
+    {
       final tableId = table.id > 0
           ? table.id
           : ((detail['table_id'] as num?)?.toInt() ?? 0);
@@ -860,7 +859,7 @@ class OrderRepository {
 
       apiLog.writeln(
         '── PUT draft lines onto existing order=$orderId '
-        '(had $visible, need ${lines.length}) ──',
+        '(had $visible, sending ${lines.length}) ──',
       );
       try {
         detail = await _putOrderUpdate(
@@ -887,15 +886,16 @@ class OrderRepository {
           rethrow;
         }
       }
-    } else {
-      apiLog.writeln(
-        '── Existing order=$orderId already has $visible items — skip PUT ──',
-      );
     }
 
     await _local.saveOrderDetail(orderId, detail);
     await _sessionLocal.upsertOpenOrderInList(detail);
     lastCreateOrderLog = apiLog.toString();
+
+    if (previousDisplayEntries != null &&
+        previousDisplayEntries.isNotEmpty) {
+      await _persistSuivreLayoutHints(orderId, previousDisplayEntries);
+    }
 
     final tableNumberForDisplay = table.tableNumber > 0
         ? table.tableNumber
@@ -917,6 +917,11 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
     required StringBuffer apiLog,
   }) async {
+    if (previousDisplayEntries != null &&
+        previousDisplayEntries.isNotEmpty) {
+      await _persistSuivreLayoutHints(orderId, previousDisplayEntries);
+    }
+
     final displayNumber = OrderMapper.displayKey(
       orderId: orderId,
       tableNumber: tableNumber,
@@ -3756,9 +3761,20 @@ class OrderRepository {
       final layoutHasSuites = fromLayout.count > 0 || fromLayout.splits.isNotEmpty;
       final hiveHasSuites = fromHive.count > 0 || fromHive.splits.isNotEmpty;
 
-      // Session list rows are often flat — keep Hive waiter layout when richer.
-      if (hiveHasSuites &&
-          (!layoutHasSuites || fromLayout.count < fromHive.count)) {
+      // Non-flat waiter layout is authoritative (includes local suite deletes).
+      if (layoutHasSuites) {
+        return (
+          splits: fromLayout.splits,
+          count: fromLayout.count,
+          demandedSections: {
+            ...fromLayout.demandedSections,
+            ...fromHive.demandedSections,
+          },
+        );
+      }
+
+      // Flat session-row hints: Hive may still carry the waiter's suite layout.
+      if (hiveHasSuites) {
         return (
           splits: fromHive.splits,
           count: fromHive.count,

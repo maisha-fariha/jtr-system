@@ -2993,14 +2993,18 @@ class OrderMapper {
     // After an explicit kitchen send, do not re-overlay pending À SUIVRE counts.
     // When a waiter layout is provided, trust it — never revive deleted suites
     // from a stale Hive count hint.
+    final hasExplicitWaiterLayout = previousDisplayEntries != null &&
+        previousDisplayEntries.isNotEmpty;
     final effectiveDividerCount = applyKitchenDemande
         ? 0
-        : [
-            previousDividerCount,
-            suivreCountHint,
-            suivreSplitHints.length,
-            extractedDividerCount,
-          ].reduce((a, b) => a > b ? a : b);
+        : hasExplicitWaiterLayout
+            ? previousDividerCount
+            : [
+                previousDividerCount,
+                suivreCountHint,
+                suivreSplitHints.length,
+                extractedDividerCount,
+              ].reduce((a, b) => a > b ? a : b);
     final trailingPending = !applyKitchenDemande &&
         layoutHasTrailingPendingSuivre(previousDisplayEntries);
     final previousIsFlat = previousDisplayEntries != null &&
@@ -3747,6 +3751,33 @@ class OrderMapper {
     if (tableId != null) payload['table_id'] = tableId;
 
     return payload;
+  }
+
+  /// Course number for a product line from the current display walk (Send All).
+  static int resolveCourseNumberForLineIndexInLayout(
+    List<OrderDisplayEntry> layout,
+    int lineIndex,
+  ) {
+    var course = 1;
+    for (final entry in layout) {
+      if (entry.isSectionDivider) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) {
+          course = above + 1;
+        } else {
+          final section = entry.sectionIndex ?? 0;
+          course = section > 0 ? section + 1 : 2;
+        }
+        continue;
+      }
+      if (entry.type == OrderDisplayEntryType.product &&
+          entry.lineIndex == lineIndex) {
+        final fromEntry = entry.courseNumber;
+        if (fromEntry != null && fromEntry > 0) return fromEntry;
+        return course;
+      }
+    }
+    return 1;
   }
 
   /// POST /api/orders with all locally drafted lines (no seed product).

@@ -1568,21 +1568,6 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  Future<bool> _orderNeedsKitchenSendBeforePayment(int orderId) async {
-    try {
-      final cached = _orderRepository.cachedOrderDetail(orderId);
-      if (cached != null) {
-        return OrderMapper.requiresKitchenSendBeforePayment(cached);
-      }
-      await _orderRepository.getOrderDetail(orderId);
-      final detail = _orderRepository.cachedOrderDetail(orderId);
-      return detail != null &&
-          OrderMapper.requiresKitchenSendBeforePayment(detail);
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<void> payOrder({required BuildContext context, required bool isCash}) async {
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
@@ -1619,22 +1604,23 @@ class TableDetailsController extends GetxController {
 
     final label = isCash ? 'espèces' : 'carte de crédit';
     final amountLabel = payableTotalLabel;
-    final needsKitchenSend = await _orderNeedsKitchenSendBeforePayment(id);
-    final sendNotice = needsKitchenSend
-        ? '\n\nLes articles non envoyés seront transmis en cuisine avant l\'encaissement.'
-        : '';
+    final amount = OrderMapper.formatPaymentAmount(
+      _parseFormattedLineTotal(currentOrder.total),
+    );
     AppConfirmDialog.show(
       context: context,
       title: 'Paiement',
       message:
-          'Encaisser $amountLabel pour la table $orderNumber en $label ?$sendNotice',
+          'Encaisser $amountLabel pour la table $orderNumber en $label ?',
       onConfirm: () async {
         payingIsCash.value = isCash;
         try {
           final updated = await _orderRepository.payOrder(
             orderId: id,
             isCash: isCash,
+            amount: amount,
             previousDisplayEntries: currentOrder.displayEntries,
+            localSnapshot: currentOrder,
           );
           _syncOrderInSession(updated, orderNumber);
           showPaymentOptions.value = false;

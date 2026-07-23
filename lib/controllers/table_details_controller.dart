@@ -766,12 +766,19 @@ class TableDetailsController extends GetxController {
   Future<int?> _ensureResolvedOrderId() async {
     if (orderId != null && orderId! > 0) {
       if (await _verifyOrderExists(orderId!)) return orderId;
+      // Keep the known id for local-first edits — a flaky GET must not wipe it
+      // (that blocked menu add with "Commande introuvable").
+      if (_mutationsAreLocalOnly) return orderId;
       orderId = null;
     }
 
     final current = order;
     if (current != null && current.id > 0) {
       if (await _verifyOrderExists(current.id)) {
+        orderId = current.id;
+        return orderId;
+      }
+      if (_mutationsAreLocalOnly) {
         orderId = current.id;
         return orderId;
       }
@@ -791,6 +798,10 @@ class TableDetailsController extends GetxController {
       _syncOrderInSession(detail, detail.number);
       return orderId;
     } catch (_) {
+      if (_mutationsAreLocalOnly && resolved > 0) {
+        orderId = resolved;
+        return orderId;
+      }
       orderId = null;
       return null;
     }
@@ -977,13 +988,20 @@ class TableDetailsController extends GetxController {
         ? null
         : List<OrderDisplayEntry>.from(order!.displayEntries);
     final suivreSectionBeforeNav = selectedSuivreSection.value;
-    final id = await _ensureResolvedOrderId();
+    // Local-first: keep known orderId even if a verify GET fails. Menu submit
+    // is optimistic and must not be blocked by "Commande introuvable".
+    final id = resolvedOrderId ?? orderId ?? seedOrder?.id;
+    if (id == null || id <= 0) {
+      unawaited(_ensureResolvedOrderId());
+    }
 
     final menuResult = await Get.toNamed(
       AppRoutes.menuSelection,
       arguments: {
         'orderNumber': orderNumber,
-        if (id != null && id > 0) 'orderId': id,
+        if ((resolvedOrderId ?? orderId ?? seedOrder?.id) != null &&
+            (resolvedOrderId ?? orderId ?? seedOrder?.id)! > 0)
+          'orderId': resolvedOrderId ?? orderId ?? seedOrder?.id,
       },
     );
 
@@ -1906,11 +1924,12 @@ class TableDetailsController extends GetxController {
             );
           },
           sync: () async {
-            final liveOrder = _rawSessionOrder ?? snapshot;
-            var layoutForDemande = OrderMapper.coalesceLayoutHints(
-                  liveOrder.displayEntries,
-                ) ??
-                layoutBefore;
+            // Prefer pre-demande layout — live ticket was flipped optimistically.
+            var layoutForDemande =
+                OrderMapper.coalesceLayoutHints(layoutBefore) ??
+                    OrderMapper.coalesceLayoutHints(
+                      (_rawSessionOrder ?? snapshot).displayEntries,
+                    );
 
             try {
               final serverOrder = await _orderRepository.getOrderDetail(
@@ -1918,7 +1937,7 @@ class TableDetailsController extends GetxController {
                 previousDisplayEntries: layoutForDemande,
               );
               layoutForDemande = OrderMapper.patchServerItemIdsOntoLive(
-                live: liveOrder,
+                live: snapshot,
                 server: serverOrder,
                 suppressItemIds: _suppressDeletedItemIds,
               ).displayEntries;
@@ -1927,7 +1946,7 @@ class TableDetailsController extends GetxController {
             return _orderRepository.requestCourseForSuivreSection(
               id,
               courseNumber: demandeCourseNumber,
-              previousDisplayEntries: layoutForDemande,
+              previousDisplayEntries: layoutForDemande ?? layoutBefore,
               suivreSectionIndex: sectionIndex,
             );
           },

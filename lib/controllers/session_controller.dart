@@ -1249,17 +1249,22 @@ class SessionController extends GetxController {
         final predictedLayout = predicted?.displayEntries;
         final syncKey = tableNumber.hashCode;
         final optimisticSync = _optimisticSyncFor(tableNumber);
+        // Capture pre-demande layout — live row is flipped optimistically before sync.
+        final layoutBeforeDemande = List<OrderDisplayEntry>.from(
+          layoutHints ?? snapshot.displayEntries,
+        );
+        final demandSectionIndex = sectionIndex;
         optimisticSync.enqueue(
           syncKey: syncKey,
           snapshot: snapshot,
           apply: (updated) {
-            if (sectionIndex != null &&
-                sectionIndex > 0 &&
+            if (demandSectionIndex != null &&
+                demandSectionIndex > 0 &&
                 predictedLayout != null) {
               final merged = OrderMapper.rebuildOrderAfterSuivreDemande(
                 serverOrder: updated,
                 liveLayout: predictedLayout,
-                suivreSectionIndex: sectionIndex,
+                suivreSectionIndex: demandSectionIndex,
                 demandeTimeLabel: demandeTimeLabel,
               );
               updateOrderRow(merged, replaceDetail: true);
@@ -1273,11 +1278,35 @@ class SessionController extends GetxController {
             );
           },
           sync: () async {
-            final live = findOrder(orderNumber: tableNumber) ?? layoutSource;
-            var layoutForDemande = OrderMapper.coalesceLayoutHints(
-                  live.displayEntries,
+            final layoutForDemande = OrderMapper.coalesceLayoutHints(
+                  layoutBeforeDemande,
                 ) ??
-                OrderMapper.coalesceLayoutHints(layoutSource.displayEntries);
+                OrderMapper.coalesceLayoutHints(snapshot.displayEntries);
+
+            // Same path as table-details Demande: ensure suite on a writable
+            // course then request-courses (session "next" path skipped ensure
+            // when live layout was already flipped to DEMANDÉE).
+            if (demandSectionIndex != null &&
+                demandSectionIndex > 0 &&
+                layoutForDemande != null) {
+              var preferred = demandSectionIndex + 1;
+              for (final entry in layoutForDemande) {
+                if (entry.type != OrderDisplayEntryType.suivreSeparator) {
+                  continue;
+                }
+                if (entry.sectionIndex != demandSectionIndex) continue;
+                final above = entry.courseNumber ?? demandSectionIndex;
+                preferred =
+                    above > 0 ? above + 1 : demandSectionIndex + 1;
+                break;
+              }
+              return _orderRepository.requestCourseForSuivreSection(
+                orderId,
+                courseNumber: preferred,
+                previousDisplayEntries: layoutForDemande,
+                suivreSectionIndex: demandSectionIndex,
+              );
+            }
 
             return _orderRepository.requestNextCourses(
               orderId,

@@ -1683,6 +1683,29 @@ class OrderRepository {
       layout: layoutHints,
     );
     if (courseIds.isEmpty) {
+      // Session UI may pass a post-optimistic DEMANDÉE layout; still try the
+      // robust table-details path when we know which À SUIVRE to fire.
+      if (layoutHints != null &&
+          demandSectionIndex != null &&
+          demandSectionIndex > 0) {
+        var preferred = demandSectionIndex + 1;
+        for (final entry in layoutHints) {
+          if (entry.type != OrderDisplayEntryType.suivreSeparator &&
+              entry.type != OrderDisplayEntryType.demandeSeparator) {
+            continue;
+          }
+          if (entry.sectionIndex != demandSectionIndex) continue;
+          final above = entry.courseNumber ?? demandSectionIndex;
+          preferred = above > 0 ? above + 1 : demandSectionIndex + 1;
+          break;
+        }
+        return requestCourseForSuivreSection(
+          orderId,
+          courseNumber: preferred,
+          previousDisplayEntries: layoutHints,
+          suivreSectionIndex: demandSectionIndex,
+        );
+      }
       throw ApiException(message: 'Aucun service à demander pour cette table.');
     }
 

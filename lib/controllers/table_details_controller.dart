@@ -1182,7 +1182,16 @@ class TableDetailsController extends GetxController {
   Future<void> reloadPaymentModes() =>
       _loadPaymentModes(forceRefresh: true);
 
-  String get payableTotalLabel => order?.total ?? '—';
+  String get payableTotalLabel {
+    final id = resolvedOrderId;
+    if (id != null && id > 0) {
+      final fromCache = _orderRepository.payableAmountForOrder(id);
+      if (fromCache != null && fromCache > 0) {
+        return OrderMapper.formatPaymentAmountDisplay(fromCache);
+      }
+    }
+    return order?.total ?? '—';
+  }
 
   bool get isPaying => payingIsCash.value != null;
 
@@ -1651,9 +1660,22 @@ class TableDetailsController extends GetxController {
 
     final label = isCash ? 'espèces' : 'carte de crédit';
     final amountLabel = payableTotalLabel;
+    // Prefer remaining_amount (partial pay) over ticket total_price.
+    final cachedPayable = _orderRepository.payableAmountForOrder(id);
     final amount = OrderMapper.formatPaymentAmount(
-      _parseFormattedLineTotal(currentOrder.total),
+      cachedPayable != null && cachedPayable > 0
+          ? cachedPayable
+          : _parseFormattedLineTotal(currentOrder.total),
     );
+    if (amount <= 0) {
+      AppSnackbar.show(
+        'Paiement indisponible',
+        'Aucun montant restant à encaisser.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
     AppConfirmDialog.show(
       context: context,
       title: 'Paiement',

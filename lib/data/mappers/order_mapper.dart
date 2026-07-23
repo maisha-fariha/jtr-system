@@ -7127,12 +7127,22 @@ class OrderMapper {
 
   static double parseOrderPayableAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
-    final remaining = order['remaining_amount'];
-    if (remaining is num && remaining > 0) return remaining.toDouble();
-    if (remaining is String) {
-      final parsed =
-          double.tryParse(remaining.replaceAll(',', '.').replaceAll('€', '').trim());
-      if (parsed != null && parsed > 0) return parsed;
+
+    double? parseMoney(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      if (raw is String) {
+        return double.tryParse(
+          raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+        );
+      }
+      return null;
+    }
+
+    final remaining = parseMoney(order['remaining_amount']);
+    final totalPaid = parseMoney(order['total_paid']) ?? 0;
+    // After a partial/full payment, remaining is authoritative (even when 0).
+    if (remaining != null && (remaining > 0 || totalPaid > 0)) {
+      return remaining < 0 ? 0 : remaining;
     }
 
     final total = parseOrderTotalAmount(data);

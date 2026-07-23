@@ -4728,6 +4728,15 @@ class OrderRepository {
     }
   }
 
+  /// Payable amount for pay UI / POST — prefers `remaining_amount`.
+  double? payableAmountForOrder(int orderId) {
+    if (orderId <= 0) return null;
+    final cached = _local.readOrderDetail(orderId);
+    if (cached == null) return null;
+    final amount = OrderMapper.parseOrderPayableAmount(cached);
+    return amount > 0 ? amount : null;
+  }
+
   Future<SessionOrder> payOrder({
     required int orderId,
     required bool isCash,
@@ -4744,13 +4753,38 @@ class OrderRepository {
       );
     }
 
-    final payable = OrderMapper.formatPaymentAmount(amount);
+    // Always resolve from latest order detail so partial pays use remaining,
+    // not total_price (API rejects amount > remaining_amount).
+    Map<String, dynamic> detail;
+    try {
+      detail = await _remote.fetchOrderDetail(orderId);
+      await _local.saveOrderDetail(orderId, detail);
+      apiLog.writeln('── GET /api/orders/$orderId before pay ──');
+      apiLog.writeln(
+        'total_price=${detail['total_price']} '
+        'total_paid=${detail['total_paid']} '
+        'remaining_amount=${detail['remaining_amount']}',
+      );
+    } catch (_) {
+      final cached = _local.readOrderDetail(orderId);
+      if (cached == null) rethrow;
+      detail = cached;
+      apiLog.writeln('── Using cached detail before pay (GET failed) ──');
+    }
+
+    final fromDetail = OrderMapper.parseOrderPayableAmount(detail);
+    final payable = OrderMapper.formatPaymentAmount(
+      fromDetail > 0 ? fromDetail : amount,
+    );
     if (payable <= 0) {
       throw ApiException(message: 'Montant à encaisser invalide.');
     }
 
     apiLog.writeln('── Paiement commande ──');
-    apiLog.writeln('order_id=$orderId isCash=$isCash amount=$payable');
+    apiLog.writeln(
+      'order_id=$orderId isCash=$isCash amount=$payable '
+      '(caller amount=$amount)',
+    );
 
     try {
       final modes = await getPaymentModes();
@@ -4787,18 +4821,39 @@ class OrderRepository {
       final cached = _local.readOrderDetail(orderId);
       final updated = cached != null
           ? Map<String, dynamic>.from(cached)
-          : <String, dynamic>{'id': orderId};
-      updated['payment_status'] = 'paid';
-      updated['payment_status_detailed'] = 'fully_paid';
-      updated['remaining_amount'] = 0;
-      updated['status'] = updated['status'] ?? 'closed';
+          : Map<String, dynamic>.from(detail);
+      final previousPaidRaw = updated['total_paid'];
+      final previousPaid = previousPaidRaw is num
+          ? previousPaidRaw.toDouble()
+          : (double.tryParse(
+                previousPaidRaw?.toString().replaceAll(',', '.') ?? '',
+              ) ??
+              0);
+      final totalPrice = OrderMapper.parseOrderTotalAmount(updated);
+      final nextPaid = OrderMapper.formatPaymentAmount(previousPaid + payable);
+      final nextRemaining = OrderMapper.formatPaymentAmount(
+        (totalPrice - nextPaid).clamp(0, double.infinity),
+      );
+      updated['total_paid'] = nextPaid.toStringAsFixed(2);
+      updated['remaining_amount'] = nextRemaining.toStringAsFixed(2);
+      if (nextRemaining <= 0.001) {
+        updated['payment_status'] = 'paid';
+        updated['payment_status_detailed'] = 'fully_paid';
+        updated['remaining_amount'] = '0.00';
+        updated['status'] = updated['status'] ?? 'closed';
+      } else {
+        updated['payment_status'] = 'partially_paid';
+        updated['payment_status_detailed'] = 'partially_paid';
+      }
       await _local.saveOrderDetail(orderId, updated);
 
       lastPaymentLog = apiLog.toString();
       debugPrint(lastPaymentLog!);
 
       if (localSnapshot != null) {
-        return localSnapshot;
+        return localSnapshot.copyWith(
+          total: OrderMapper.formatPrice(nextRemaining.toStringAsFixed(2)),
+        );
       }
 
       final suivreHints = _resolveSuivreHints(

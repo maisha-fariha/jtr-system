@@ -1418,154 +1418,149 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    _sendLocalDraftToKitchen(context: context, currentOrder: currentOrder);
+    _sendLocalDraftToKitchen(currentOrder: currentOrder);
   }
 
   void _sendLocalDraftToKitchen({
-    required BuildContext context,
     required SessionOrder currentOrder,
   }) {
-    AppConfirmDialog.show(
-      context: context,
-      title: 'Envoyer en cuisine',
-      message:
-          'Envoyer toutes les commandes en attente pour la table $orderNumber ?',
-      onConfirm: () {
-        final live = order;
-        if (live == null) return;
+    final live = order ?? currentOrder;
+    if (live.products.isEmpty) {
+      AppSnackbar.show(
+        'Envoi impossible',
+        'Ajoutez au moins un article avant l\'envoi.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
 
-        var layout = OrderMapper.stripEmptySuivreSectionsForCreate(
-          live.displayEntries,
-        );
-        if (layout.length != live.displayEntries.length ||
-            OrderMapper.suivreSeparatorCount(layout) !=
-                OrderMapper.suivreSeparatorCount(live.displayEntries)) {
-          _syncOrderInSession(
-            live.copyWith(displayEntries: layout),
-            orderNumber,
-            displayEntriesOverride: layout,
-          );
+    var layout = OrderMapper.stripEmptySuivreSectionsForCreate(
+      live.displayEntries,
+    );
+    if (layout.length != live.displayEntries.length ||
+        OrderMapper.suivreSeparatorCount(layout) !=
+            OrderMapper.suivreSeparatorCount(live.displayEntries)) {
+      _syncOrderInSession(
+        live.copyWith(displayEntries: layout),
+        orderNumber,
+        displayEntriesOverride: layout,
+      );
+    }
+
+    final draftLines = _buildDraftLinesForSend(layout: layout);
+    if (draftLines.isEmpty) {
+      AppSnackbar.show(
+        'Envoi impossible',
+        'Ajoutez au moins un article avant l\'envoi.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    activeToolbarIcon.value = Icons.send_outlined;
+    showPaymentOptions.value = false;
+    selectedSuivreSection.value = null;
+
+    final layoutBeforeSend = List<OrderDisplayEntry>.from(layout);
+    final snapshot = OrderOptimisticSync.deepSnapshot(
+      live.copyWith(displayEntries: layout),
+    );
+    final guests = int.tryParse(live.couverts) ?? 1;
+
+    final sendOrderId = orderId ?? live.id;
+    if (sendOrderId > 0) {
+      unawaited(
+        _orderRepository.persistSuivreLayoutHints(sendOrderId, layout),
+      );
+    }
+
+    int? salesZoneId;
+    if (Get.isRegistered<SessionController>()) {
+      salesZoneId =
+          Get.find<SessionController>().activeDay.value.salesZoneId;
+    }
+    String? waiterName;
+    if (Get.isRegistered<AuthRepository>()) {
+      final user = Get.find<AuthRepository>().cachedSession?.user;
+      waiterName = user?.name;
+    }
+
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) {
+        if (updated.id > 0) {
+          orderId = updated.id;
+          seedOrder = updated;
+          _localDraftLines.clear();
+          _deferDetailFetch = false;
         }
-
-        final draftLines = _buildDraftLinesForSend(layout: layout);
-        if (draftLines.isEmpty) {
-          AppSnackbar.show(
-            'Envoi impossible',
-            'Ajoutez au moins un article avant l\'envoi.',
-            snackPosition: SnackPosition.BOTTOM,
-            margin: const EdgeInsets.all(16),
-          );
+        if (Get.isRegistered<SessionController>()) {
+          final session = Get.find<SessionController>();
+          session.promoteOrderToTop(updated, replaceDetail: true);
+        }
+        try {
+          _applySyncedOrder(updated);
+        } catch (_) {}
+      },
+      sync: () async {
+        final sent = await _orderRepository.createAndSendLocalDraft(
+          tableNumber: orderNumber,
+          numberOfGuests: guests,
+          waiterId: _currentWaiterId,
+          lines: draftLines,
+          salesZoneId: salesZoneId,
+          waiterName: waiterName,
+          previousDisplayEntries: layoutBeforeSend,
+        );
+        orderId = sent.id;
+        seedOrder = sent;
+        _localDraftLines.clear();
+        _deferDetailFetch = false;
+        if (_orderRepository.lastKitchenSendLog != null) {
+          debugPrint(_orderRepository.lastKitchenSendLog);
+        }
+        return sent;
+      },
+      recover: (snap) async {
+        final recovered = await _orderRepository.tryRecoverCreatedOrder(
+          tableNumber: orderNumber,
+        );
+        if (recovered != null && recovered.order.id > 0) {
+          if (Get.isRegistered<SessionController>()) {
+            Get.find<SessionController>().promoteOrderToTop(
+              recovered.order,
+              replaceDetail: true,
+            );
+          }
+          return recovered.order;
+        }
+        return snap;
+      },
+      onError: (error) async {
+        final recovered = await _orderRepository.tryRecoverCreatedOrder(
+          tableNumber: orderNumber,
+        );
+        if (recovered != null && recovered.order.id > 0) {
+          if (Get.isRegistered<SessionController>()) {
+            Get.find<SessionController>().promoteOrderToTop(
+              recovered.order,
+              replaceDetail: true,
+            );
+          }
           return;
         }
-
-        activeToolbarIcon.value = Icons.send_outlined;
-        showPaymentOptions.value = false;
-        selectedSuivreSection.value = null;
-
-        final layoutBeforeSend = List<OrderDisplayEntry>.from(layout);
-        final snapshot = OrderOptimisticSync.deepSnapshot(
-          live.copyWith(displayEntries: layout),
+        _showKitchenMutationError(
+          title: 'Erreur envoi',
+          action: 'envoyer en cuisine',
+          error: error,
         );
-        final guests = int.tryParse(live.couverts) ?? 1;
-
-        final sendOrderId = orderId ?? live.id;
-        if (sendOrderId > 0) {
-          unawaited(
-            _orderRepository.persistSuivreLayoutHints(sendOrderId, layout),
-          );
-        }
-
-        int? salesZoneId;
-        if (Get.isRegistered<SessionController>()) {
-          salesZoneId =
-              Get.find<SessionController>().activeDay.value.salesZoneId;
-        }
-        String? waiterName;
-        if (Get.isRegistered<AuthRepository>()) {
-          final user = Get.find<AuthRepository>().cachedSession?.user;
-          waiterName = user?.name;
-        }
-
-        _optimisticSync.enqueue(
-          syncKey: _optimisticSyncKey,
-          snapshot: snapshot,
-          apply: (updated) {
-            if (updated.id > 0) {
-              orderId = updated.id;
-              seedOrder = updated;
-              _localDraftLines.clear();
-              _deferDetailFetch = false;
-            }
-            // Session list must update even if this details controller is
-            // already disposed after Get.back().
-            if (Get.isRegistered<SessionController>()) {
-              final session = Get.find<SessionController>();
-              session.promoteOrderToTop(updated, replaceDetail: true);
-            }
-            try {
-              _applySyncedOrder(updated);
-            } catch (_) {}
-          },
-          sync: () async {
-            final sent = await _orderRepository.createAndSendLocalDraft(
-              tableNumber: orderNumber,
-              numberOfGuests: guests,
-              waiterId: _currentWaiterId,
-              lines: draftLines,
-              salesZoneId: salesZoneId,
-              waiterName: waiterName,
-              previousDisplayEntries: layoutBeforeSend,
-            );
-            orderId = sent.id;
-            seedOrder = sent;
-            _localDraftLines.clear();
-            _deferDetailFetch = false;
-            if (_orderRepository.lastKitchenSendLog != null) {
-              debugPrint(_orderRepository.lastKitchenSendLog);
-            }
-            return sent;
-          },
-          recover: (snap) async {
-            final recovered = await _orderRepository.tryRecoverCreatedOrder(
-              tableNumber: orderNumber,
-            );
-            if (recovered != null && recovered.order.id > 0) {
-              if (Get.isRegistered<SessionController>()) {
-                Get.find<SessionController>().promoteOrderToTop(
-                  recovered.order,
-                  replaceDetail: true,
-                );
-              }
-              return recovered.order;
-            }
-            return snap;
-          },
-          onError: (error) async {
-            // Final safety: if the order exists on the server, drop the false
-            // error snack after adopting it into the session list.
-            final recovered = await _orderRepository.tryRecoverCreatedOrder(
-              tableNumber: orderNumber,
-            );
-            if (recovered != null && recovered.order.id > 0) {
-              if (Get.isRegistered<SessionController>()) {
-                Get.find<SessionController>().promoteOrderToTop(
-                  recovered.order,
-                  replaceDetail: true,
-                );
-              }
-              return;
-            }
-            _showKitchenMutationError(
-              title: 'Erreur envoi',
-              action: 'envoyer en cuisine',
-              error: error,
-            );
-          },
-        );
-
-        _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
       },
     );
+
+    _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
   }
 
   Future<void> payOrder({required BuildContext context, required bool isCash}) async {

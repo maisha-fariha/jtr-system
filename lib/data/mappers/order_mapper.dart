@@ -915,6 +915,116 @@ class OrderMapper {
     return '$hours:$minutes:$seconds';
   }
 
+  /// Resolve DEMANDÉE clock from API `requested_at` for a suite section.
+  ///
+  /// Backend often stamps `requested_at` on course N (or the course holding
+  /// suite lines), not always on N+1 — so we try several candidates.
+  static String? resolveDemandeTimeLabel(
+    Map<String, dynamic>? data, {
+    required int sectionIndex,
+    int? courseNumberHint,
+    List<OrderDisplayEntry>? layout,
+  }) {
+    if (data == null) return null;
+
+    if (layout != null && sectionIndex > 0) {
+      final underCourse = _findRequestedCourseUnderSuivreSection(
+        data,
+        layout,
+        sectionIndex: sectionIndex,
+      );
+      final fromUnder = formatDemandeTime(underCourse?['requested_at']);
+      if (fromUnder != null) return fromUnder;
+    }
+
+    final candidates = <int>{
+      if (courseNumberHint != null && courseNumberHint > 0) ...[
+        courseNumberHint,
+        courseNumberHint + 1,
+      ],
+      if (sectionIndex > 0) ...[
+        sectionIndex,
+        sectionIndex + 1,
+      ],
+    };
+    for (final number in candidates) {
+      final course = findCourseInOrderDetail(data, number);
+      final label = formatDemandeTime(course?['requested_at']);
+      if (label != null) return label;
+    }
+
+    // Last resort: any course that was already requested to kitchen.
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+    String? best;
+    var bestNumber = 1 << 30;
+    for (final seat in seatOrders) {
+      if (seat is! Map) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map) continue;
+        final map = Map<String, dynamic>.from(course);
+        if (!_courseWasRequestedToKitchen(map)) continue;
+        final label = formatDemandeTime(map['requested_at']);
+        if (label == null) continue;
+        final number = (map['course_number'] as num?)?.toInt() ?? 0;
+        if (number > 0 && number < bestNumber) {
+          bestNumber = number;
+          best = label;
+        } else if (best == null) {
+          best = label;
+        }
+      }
+    }
+    return best;
+  }
+
+  static bool _demandeTimeNeedsRefresh(String? label) {
+    if (label == null) return true;
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return true;
+    return trimmed.contains('--');
+  }
+
+  /// Fill DEMANDÉE `--:--:--` / empty labels from API `requested_at`.
+  static List<OrderDisplayEntry> refreshDemandeTimeLabelsFromApi(
+    Map<String, dynamic> data,
+    List<OrderDisplayEntry> entries,
+  ) {
+    var changed = false;
+    final result = <OrderDisplayEntry>[];
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.demandeSeparator) {
+        result.add(entry);
+        continue;
+      }
+      if (!_demandeTimeNeedsRefresh(entry.demandeTimeLabel)) {
+        result.add(entry);
+        continue;
+      }
+      final resolved = resolveDemandeTimeLabel(
+        data,
+        sectionIndex: entry.sectionIndex ?? 0,
+        courseNumberHint: entry.courseNumber,
+        layout: entries,
+      );
+      if (resolved == null) {
+        result.add(entry);
+        continue;
+      }
+      changed = true;
+      result.add(
+        OrderDisplayEntry.demande(
+          sectionIndex: entry.sectionIndex ?? 0,
+          courseNumber: entry.courseNumber ?? entry.sectionIndex ?? 0,
+          demandeTimeLabel: resolved,
+        ),
+      );
+    }
+    return changed ? result : entries;
+  }
+
   static Map<String, dynamic>? findCourseInOrderDetail(
     Map<String, dynamic> data,
     int courseNumber,
@@ -1111,7 +1221,13 @@ class OrderMapper {
       var timeLabel = courseFired == null
           ? null
           : formatDemandeTime(courseFired['requested_at']);
-      if (timeLabel == null && manualKitchenDemande) {
+      timeLabel ??= resolveDemandeTimeLabel(
+        data,
+        sectionIndex: sectionIndex,
+        courseNumberHint: courseNumber,
+        layout: entries,
+      );
+      if (timeLabel == null && (manualKitchenDemande || explicitlyDemanded)) {
         timeLabel =
             formatDemandeTime(DateTime.now().toUtc().toIso8601String());
       }
@@ -1645,17 +1761,21 @@ class OrderMapper {
         sectionIndex++;
         final demandCourseNumber = sectionIndex;
         if (demandedSectionIndices.contains(sectionIndex)) {
-          Map<String, dynamic>? course;
-          if (data != null) {
-            course = findCourseInOrderDetail(data, demandCourseNumber + 1);
-          }
+          final timeLabel = resolveDemandeTimeLabel(
+                data,
+                sectionIndex: sectionIndex,
+                courseNumberHint: demandCourseNumber,
+                layout: [
+                  ...rebuilt,
+                  for (var p = i; p < products.length; p++) products[p],
+                ],
+              ) ??
+              '--:--:--';
           rebuilt.add(
             OrderDisplayEntry.demande(
               sectionIndex: sectionIndex,
               courseNumber: demandCourseNumber,
-              demandeTimeLabel: course == null
-                  ? '--:--:--'
-                  : formatDemandeTime(course['requested_at']) ?? '--:--:--',
+              demandeTimeLabel: timeLabel,
             ),
           );
         } else {
@@ -3120,6 +3240,7 @@ class OrderMapper {
     }
 
     // Keep a trailing empty À SUIVRE the waiter just opened (before first item).
+    entries = refreshDemandeTimeLabelsFromApi(data, entries);
     return _normalizeSuivreLayout(
       entries,
       keepTrailingEmptySuivre: trailingPending ||
@@ -3835,6 +3956,186 @@ class OrderMapper {
       ],
     };
     if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    return payload;
+  }
+
+  static const waiterLineDeleteCancelReason =
+      'Annulé par le serveur (modification ticket)';
+
+  /// Server item ids absent from the waiter's local ticket — cancel on Send PUT.
+  static Set<int> itemIdsToCancelForLocalSend({
+    required Map<String, dynamic> serverDetail,
+    required List<OrderDisplayEntry> layoutHints,
+    Set<int> extraCancelItemIds = const {},
+  }) {
+    final keepIds = productItemIds(layoutHints);
+    final toCancel = <int>{...extraCancelItemIds};
+    final seatNumber = resolveDefaultSeatNumber(serverDetail);
+    for (final row in _visibleItemsWithCourseNumbers(
+      serverDetail,
+      seatNumber: seatNumber,
+    )) {
+      final id = (row.item['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      if (!keepIds.contains(id)) {
+        toCancel.add(id);
+      }
+    }
+    return toCancel;
+  }
+
+  static void _markItemCancelled(
+    Map<String, dynamic> item, {
+    String cancelReason = waiterLineDeleteCancelReason,
+  }) {
+    item['status'] = 'cancelled';
+    final now = DateTime.now().toUtc().toIso8601String();
+    item['cancel_reason'] = cancelReason;
+    item['canceled_datetime'] = now;
+    item['cancelled_at'] = now;
+  }
+
+  static int cancelItemIdsOnDetail(
+    Map<String, dynamic> orderDetail,
+    Set<int> itemIds,
+  ) {
+    var count = 0;
+    for (final id in itemIds) {
+      if (cancelOrderLineByItemId(orderDetail, id)) count++;
+    }
+    return count;
+  }
+
+  static bool mutateVisibleItemByItemId(
+    Map<String, dynamic> orderDetail,
+    int itemId,
+    void Function(Map<String, dynamic> item) mutate,
+  ) {
+    if (itemId <= 0) return false;
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          final id = (item['id'] as num?)?.toInt() ?? 0;
+          if (id != itemId) continue;
+          mutate(item);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// PUT sync for 2nd+ Send: cancel removed lines, update kept, append new.
+  static Map<String, dynamic> applyLocalDraftSendOntoExistingOrder({
+    required Map<String, dynamic> orderDetail,
+    required List<LocalDraftLine> lines,
+    required List<OrderDisplayEntry> layoutHints,
+    Set<int> extraCancelItemIds = const {},
+  }) {
+    final working = copyOrderDetail(orderDetail);
+    final cancelIds = itemIdsToCancelForLocalSend(
+      serverDetail: working,
+      layoutHints: layoutHints,
+      extraCancelItemIds: extraCancelItemIds,
+    );
+    cancelItemIdsOnDetail(working, cancelIds);
+
+    final productEntries = layoutHints
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .toList()
+      ..sort(
+        (a, b) => (a.lineIndex ?? 0).compareTo(b.lineIndex ?? 0),
+      );
+
+    final seatNumber = resolveDefaultSeatNumber(working);
+
+    for (final entry in productEntries) {
+      final lineIndex = entry.lineIndex ?? -1;
+      if (lineIndex < 0 || lineIndex >= lines.length) continue;
+      final draft = lines[lineIndex];
+      final itemId = entry.itemId ?? 0;
+
+      if (itemId > 0) {
+        mutateVisibleItemByItemId(working, itemId, (item) {
+          final qty = draft.qty < 1 ? 1 : draft.qty;
+          item['qty'] = qty;
+          item['sub_total'] = draft.unitPrice * qty;
+          final comment = draft.comment.trim();
+          if (comment.isNotEmpty) {
+            item['comment'] = comment;
+          }
+        });
+        continue;
+      }
+
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      final course = findCourseInOrderDetail(working, courseNumber);
+      final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
+      final itemStatus = _resolveAppendItemStatus(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+      );
+
+      final newItem = _buildNewItemPayload(
+        seatNumber: seatNumber,
+        courseId: courseId,
+        productId: draft.productId,
+        qty: draft.qty < 1 ? 1 : draft.qty,
+        subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+        status: itemStatus,
+        comment: draft.comment,
+        menuSelections: draft.menuSelections,
+        isStillMenuMissing: false,
+        forCreate: false,
+      );
+
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+        newItem: newItem,
+      );
+    }
+
+    // Safety: cancel anything still visible that is not on the waiter ticket.
+    cancelItemIdsOnDetail(
+      working,
+      itemIdsToCancelForLocalSend(
+        serverDetail: working,
+        layoutHints: layoutHints,
+        extraCancelItemIds: extraCancelItemIds,
+      ),
+    );
+
+    if (layoutHints.isNotEmpty &&
+        (layoutHasProductsUnderPendingSuivre(layoutHints) ||
+            layoutHasTrailingPendingSuivre(layoutHints) ||
+            suivreSeparatorCount(layoutHints) > 0)) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      if (aligned.changed) {
+        working['seat_orders'] = aligned.detail['seat_orders'];
+      }
+    }
+
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
     return payload;
   }
 
@@ -6724,6 +7025,10 @@ class OrderMapper {
           final id = (item['id'] as num?)?.toInt() ?? 0;
           if (id != itemId) continue;
           item['status'] = 'cancelled';
+          item['cancel_reason'] = waiterLineDeleteCancelReason;
+          final now = DateTime.now().toUtc().toIso8601String();
+          item['canceled_datetime'] = now;
+          item['cancelled_at'] = now;
           return true;
         }
       }

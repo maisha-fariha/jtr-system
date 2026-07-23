@@ -661,6 +661,8 @@ class OrderRepository {
     int? salesZoneId,
     String? waiterName,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    int? existingOrderId,
+    SessionOrder? localTicketBeforeSend,
   }) async {
     if (lines.isEmpty) {
       throw ApiException(
@@ -675,9 +677,47 @@ class OrderRepository {
 
     final apiLog = StringBuffer()
       ..writeln('── Create + send local draft ──')
-      ..writeln('table=$tableNumber lines=${lines.length}');
+      ..writeln('table=$tableNumber lines=${lines.length}')
+      ..writeln('existingOrderId=${existingOrderId ?? 'none'}');
     lastCreateOrderLog = apiLog.toString();
-    lastKitchenSendLog = null;
+    lastKitchenSendLog = apiLog.toString();
+    logOrderFlow(
+      'SEND START table=$tableNumber lines=${lines.length} '
+      'existingOrderId=${existingOrderId ?? 'none'}',
+    );
+
+    // 2nd+ Send: known order id → PUT immediately (skip open-by-number).
+    if (existingOrderId != null && existingOrderId > 0) {
+      final cached = _local.readOrderDetail(existingOrderId);
+      final tableId = (cached?['table_id'] as num?)?.toInt() ?? 0;
+      final parsedTable =
+          OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ?? 0;
+      final table = ResolvedTable(
+        id: tableId,
+        tableNumber: parsedTable > 0 ? parsedTable : 0,
+        salesZoneId: salesZoneId,
+        existingOrderId: existingOrderId,
+      );
+      apiLog.writeln(
+        '── PUT (known orderId=$existingOrderId, skip open-by-number) ──',
+      );
+      lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      logOrderFlow('SEND PUT direct orderId=$existingOrderId');
+      debugPrint(apiLog.toString());
+      return _sendLocalDraftOntoExistingOrder(
+        orderId: existingOrderId,
+        table: table,
+        tableNumber: tableNumber,
+        numberOfGuests: numberOfGuests,
+        waiterId: waiterId,
+        salesZoneId: salesZoneId,
+        lines: lines,
+        previousDisplayEntries: previousDisplayEntries,
+        localTicketBeforeSend: localTicketBeforeSend,
+        apiLog: apiLog,
+      );
+    }
 
     final table = await _openTableByNumberForCreate(
       tableNumber: tableNumber,
@@ -693,13 +733,19 @@ class OrderRepository {
         : table.salesZoneId;
 
     // Table already has an open order — never POST /api/orders again.
-    if (table.hasActiveOrder) {
+    if (table.hasActiveOrder &&
+        table.existingOrderId != null &&
+        table.existingOrderId! > 0) {
+      final resumeOrderId = table.existingOrderId!;
       apiLog.writeln(
-        '── Resume active_order=${table.existingOrderId} for local draft ──',
+        '── PUT item update on order=$resumeOrderId ──',
       );
       lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      logOrderFlow('SEND PUT via active_order=$resumeOrderId');
+      debugPrint(apiLog.toString());
       return _sendLocalDraftOntoExistingOrder(
-        orderId: table.existingOrderId!,
+        orderId: resumeOrderId,
         table: table,
         tableNumber: tableNumber,
         numberOfGuests: numberOfGuests,
@@ -707,6 +753,7 @@ class OrderRepository {
         salesZoneId: resolvedSalesZoneId,
         lines: lines,
         previousDisplayEntries: previousDisplayEntries,
+        localTicketBeforeSend: localTicketBeforeSend,
         apiLog: apiLog,
       );
     }
@@ -763,6 +810,7 @@ class OrderRepository {
           salesZoneId: resolvedSalesZoneId,
           lines: lines,
           previousDisplayEntries: previousDisplayEntries,
+          localTicketBeforeSend: localTicketBeforeSend,
           apiLog: apiLog,
         );
       }
@@ -797,6 +845,7 @@ class OrderRepository {
       tableNumber: table.tableNumber > 0 ? table.tableNumber : null,
       detail: detail,
       previousDisplayEntries: previousDisplayEntries,
+      localTicketBeforeSend: localTicketBeforeSend,
       apiLog: apiLog,
     );
   }
@@ -811,6 +860,7 @@ class OrderRepository {
     int? salesZoneId,
     required List<LocalDraftLine> lines,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    SessionOrder? localTicketBeforeSend,
     required StringBuffer apiLog,
   }) async {
     Map<String, dynamic> detail;
@@ -842,33 +892,48 @@ class OrderRepository {
         );
       }
 
-      final draftPayload = OrderMapper.buildCreateOrderFromDraftLines(
-        waiterId: waiterId,
-        numberOfGuests: numberOfGuests,
-        tableId: tableId,
-        salesZoneId: salesZoneId,
-        lines: lines,
+      final layoutHints = previousDisplayEntries ??
+          localTicketBeforeSend?.displayEntries ??
+          const <OrderDisplayEntry>[];
+      final cancelIds = OrderMapper.itemIdsToCancelForLocalSend(
+        serverDetail: detail,
+        layoutHints: layoutHints,
       );
-      final working = OrderMapper.copyOrderDetail(detail);
-      working['waiter_id'] = waiterId;
-      working['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
+
+      final payload = OrderMapper.applyLocalDraftSendOntoExistingOrder(
+        orderDetail: detail,
+        lines: lines,
+        layoutHints: layoutHints,
+      );
+      payload['waiter_id'] = waiterId;
+      payload['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
       if (salesZoneId != null && salesZoneId > 0) {
-        working['sales_zone_id'] = salesZoneId;
+        payload['sales_zone_id'] = salesZoneId;
       }
-      working['seat_orders'] = draftPayload['seat_orders'];
+      if (tableId > 0) {
+        payload['table_id'] = tableId;
+      }
 
       apiLog.writeln(
-        '── PUT draft lines onto existing order=$orderId '
-        '(had $visible, sending ${lines.length}) ──',
+        '── PUT local ticket order=$orderId '
+        '(server $visible lines, cancel ${cancelIds.length}, local ${lines.length}) ──',
       );
+      apiLog.writeln(formatApiPayload(payload));
+      lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      logOrderFlow(
+        'PUT /api/orders/$orderId cancel=${cancelIds.length} lines=${lines.length}',
+      );
+      debugPrint(apiLog.toString());
       try {
         detail = await _putOrderUpdate(
           orderId: orderId,
-          payload: OrderMapper.buildOrderUpdatePayload(working),
+          payload: payload,
           apiLog: apiLog,
         );
         try {
           detail = await _remote.fetchOrderDetail(orderId);
+          apiLog.writeln('── GET /api/orders/$orderId after PUT ──');
         } catch (_) {}
       } on ApiException catch (e) {
         apiLog.writeln('── PUT draft onto existing failed: ${e.message} ──');
@@ -906,6 +971,7 @@ class OrderRepository {
       tableNumber: tableNumberForDisplay,
       detail: detail,
       previousDisplayEntries: previousDisplayEntries,
+      localTicketBeforeSend: localTicketBeforeSend,
       apiLog: apiLog,
     );
   }
@@ -915,6 +981,7 @@ class OrderRepository {
     required int? tableNumber,
     required Map<String, dynamic> detail,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    SessionOrder? localTicketBeforeSend,
     required StringBuffer apiLog,
   }) async {
     if (previousDisplayEntries != null &&
@@ -926,6 +993,26 @@ class OrderRepository {
       orderId: orderId,
       tableNumber: tableNumber,
     );
+
+    // After local deletes: keep waiter ticket layout; only adopt server ids.
+    if (localTicketBeforeSend != null) {
+      apiLog.writeln(
+        '── Send complete — map from local ticket (skip requestAllCourses GET) ──',
+      );
+      final layoutHints = previousDisplayEntries ??
+          localTicketBeforeSend.displayEntries;
+      final mapped = OrderMapper.fromOrderDetail(
+        detail,
+        previousDisplayEntries: layoutHints,
+      );
+      final merged = OrderMapper.patchServerItemIdsOntoLive(
+        live: localTicketBeforeSend,
+        server: mapped,
+      );
+      await _persistSuivreLayoutHints(orderId, merged.displayEntries);
+      lastKitchenSendLog = apiLog.toString();
+      return merged.copyWith(id: orderId, number: displayNumber);
+    }
 
     try {
       final sent = await requestAllCourses(

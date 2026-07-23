@@ -1448,7 +1448,10 @@ class TableDetailsController extends GetxController {
       );
     }
 
-    final draftLines = _buildDraftLinesForSend(layout: layout);
+    final draftLines = _buildDraftLinesForSend(
+      layout: layout,
+      source: live,
+    );
     if (draftLines.isEmpty) {
       AppSnackbar.show(
         'Envoi impossible',
@@ -1470,6 +1473,10 @@ class TableDetailsController extends GetxController {
     final guests = int.tryParse(live.couverts) ?? 1;
 
     final sendOrderId = orderId ?? live.id;
+    logOrderFlow(
+      'UI SEND tap table=$orderNumber orderId=$sendOrderId '
+      'products=${live.products.length} draftLines=${draftLines.length}',
+    );
     if (sendOrderId > 0) {
       unawaited(
         _orderRepository.persistSuivreLayoutHints(sendOrderId, layout),
@@ -1491,38 +1498,60 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: (updated) {
-        if (updated.id > 0) {
-          orderId = updated.id;
-          seedOrder = updated;
+        final toApply = OrderMapper.patchServerItemIdsOntoLive(
+          live: snapshot,
+          server: updated,
+        );
+        if (toApply.id > 0) {
+          orderId = toApply.id;
+          seedOrder = toApply;
           _localDraftLines.clear();
           _deferDetailFetch = false;
         }
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
-          session.promoteOrderToTop(updated, replaceDetail: true);
+          session.promoteOrderToTop(toApply, replaceDetail: true);
         }
         try {
-          _applySyncedOrder(updated);
+          _applySyncedOrder(toApply);
         } catch (_) {}
       },
       sync: () async {
-        final sent = await _orderRepository.createAndSendLocalDraft(
-          tableNumber: orderNumber,
-          numberOfGuests: guests,
-          waiterId: _currentWaiterId,
-          lines: draftLines,
-          salesZoneId: salesZoneId,
-          waiterName: waiterName,
-          previousDisplayEntries: layoutBeforeSend,
+        logOrderFlow(
+          'SEND sync running orderId=$sendOrderId lines=${draftLines.length}',
         );
-        orderId = sent.id;
-        seedOrder = sent;
-        _localDraftLines.clear();
-        _deferDetailFetch = false;
-        if (_orderRepository.lastKitchenSendLog != null) {
-          debugPrint(_orderRepository.lastKitchenSendLog);
+        try {
+          final sent = await _orderRepository.createAndSendLocalDraft(
+            tableNumber: orderNumber,
+            numberOfGuests: guests,
+            waiterId: _currentWaiterId,
+            lines: draftLines,
+            salesZoneId: salesZoneId,
+            waiterName: waiterName,
+            previousDisplayEntries: layoutBeforeSend,
+            existingOrderId: sendOrderId > 0 ? sendOrderId : null,
+            localTicketBeforeSend: snapshot,
+          );
+          orderId = sent.id;
+          seedOrder = sent;
+          _localDraftLines.clear();
+          _deferDetailFetch = false;
+          final log = _orderRepository.lastKitchenSendLog ??
+              _orderRepository.lastCreateOrderLog;
+          if (log != null) {
+            debugPrint(log);
+          }
+          logOrderFlow('SEND sync OK orderId=${sent.id}');
+          return sent;
+        } catch (e) {
+          final log = _orderRepository.lastKitchenSendLog ??
+              _orderRepository.lastCreateOrderLog;
+          if (log != null) {
+            debugPrint(log);
+          }
+          logOrderFlow('SEND sync FAILED: $e');
+          rethrow;
         }
-        return sent;
       },
       recover: (snap) async {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
@@ -1540,6 +1569,11 @@ class TableDetailsController extends GetxController {
         return snap;
       },
       onError: (error) async {
+        final log = _orderRepository.lastKitchenSendLog ??
+            _orderRepository.lastCreateOrderLog;
+        if (log != null) {
+          debugPrint(log);
+        }
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
         );
@@ -3369,8 +3403,9 @@ class TableDetailsController extends GetxController {
 
   List<LocalDraftLine> _buildDraftLinesForSend({
     List<OrderDisplayEntry>? layout,
+    SessionOrder? source,
   }) {
-    final current = order;
+    final current = source ?? order;
     if (current == null) return const [];
 
     final effectiveLayout = OrderMapper.stripEmptySuivreSectionsForCreate(

@@ -9,7 +9,7 @@ class DeviceActivationBypass {
   static const bool enabled = true;
 
   /// Camera scan + PNG import on activation screen.
-  static const bool qrEnabled = false;
+  static const bool qrEnabled = true;
 
   /// Bypass APK without QR: prefilled fields. QR / POS mode: hints only.
   static bool get prefillBypassFields => enabled && !qrEnabled;

@@ -1090,30 +1090,52 @@ class OrderMapper {
     return layout.last.type == OrderDisplayEntryType.suivreSeparator;
   }
 
-  /// First open À SUIVRE on the ticket (session "Demander la suite").
+  /// True when any open À SUIVRE has no products under it.
+  static bool hasEmptyPendingSuivreSection(List<OrderDisplayEntry> entries) {
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+      final sectionIndex = entry.sectionIndex ?? 0;
+      if (sectionIndex <= 0) continue;
+      if (productEntriesUnderSection(entries, sectionIndex).isEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// First open À SUIVRE on the ticket that has at least one product under it.
   static int? firstPendingSuivreSectionIndex(List<OrderDisplayEntry> entries) {
     for (final entry in entries) {
       if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
       final sectionIndex = entry.sectionIndex ?? 0;
-      if (sectionIndex > 0) return sectionIndex;
+      if (sectionIndex <= 0) continue;
+      if (productEntriesUnderSection(entries, sectionIndex).isEmpty) continue;
+      return sectionIndex;
     }
     return null;
   }
 
   /// Exactly one course id — the next suite to demand (session screen).
   ///
-  /// Uses the first pending À SUIVRE in waiter layout order, never every
-  /// unrequested course on the ticket.
+  /// Uses the first pending À SUIVRE **with items** in waiter layout order.
+  /// Never falls back to an arbitrary unrequested course when the next
+  /// À SUIVRE is empty (that used to let empty suites fire course 1).
   static List<int> extractSingleNextCourseIdForDemande(
     Map<String, dynamic> data, {
     List<OrderDisplayEntry>? layout,
   }) {
     final layoutHints = coalesceLayoutHints(layout);
     if (layoutHints != null) {
+      var sawEmptyPendingSuivre = false;
       for (final entry in layoutHints) {
         if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
         final sectionIndex = entry.sectionIndex ?? 0;
         if (sectionIndex <= 0) continue;
+
+        if (productEntriesUnderSection(layoutHints, sectionIndex).isEmpty) {
+          sawEmptyPendingSuivre = true;
+          continue;
+        }
 
         final fromLayout = extractRequestableCourseIdsForSuivreLayout(
           data,
@@ -1134,6 +1156,8 @@ class OrderMapper {
         );
         if (fromNumber.isNotEmpty) return [fromNumber.first];
       }
+      // Do not request a random course when the waiter left an empty À SUIVRE.
+      if (sawEmptyPendingSuivre) return const [];
     }
 
     final fallback = extractRequestableCourseIds(data);
@@ -5680,7 +5704,7 @@ class OrderMapper {
     }
 
     if (_visibleItemCountInCourse(course) <= 0) {
-      return 'Ce service ne contient aucun article à envoyer en cuisine.';
+      return 'Ajoutez au moins un article sous ce À SUIVRE avant de demander.';
     }
 
     if (_courseNeedsKitchenSend(course)) {

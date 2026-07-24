@@ -1866,6 +1866,21 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    // Empty À SUIVRE (no products under the divider) cannot be demanded.
+    if (currentOrder != null &&
+        OrderMapper.productEntriesUnderSection(
+          currentOrder.displayEntries,
+          sectionIndex,
+        ).isEmpty) {
+      AppSnackbar.show(
+        'Articles requis',
+        'Ajoutez au moins un article sous ce À SUIVRE avant de demander.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
     final courseNumber = currentOrder == null
         ? null
         : OrderMapper.resolveCourseNumberForSuivreSection(

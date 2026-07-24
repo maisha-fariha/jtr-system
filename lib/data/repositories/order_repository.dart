@@ -1773,6 +1773,22 @@ class OrderRepository {
     }
 
     final apiLog = StringBuffer('── Demande À SUIVRE course=$courseNumber ──\n');
+
+    // Empty À SUIVRE must never fire kitchen (would pick another course).
+    if (previousDisplayEntries != null &&
+        suivreSectionIndex != null &&
+        suivreSectionIndex > 0 &&
+        OrderMapper.productEntriesUnderSection(
+          previousDisplayEntries,
+          suivreSectionIndex,
+        ).isEmpty) {
+      lastKitchenSendLog = apiLog.toString();
+      throw ApiException(
+        message:
+            'Ajoutez au moins un article sous ce À SUIVRE avant de demander.',
+      );
+    }
+
     var detail = await _remote.fetchOrderDetail(orderId);
     if (previousDisplayEntries != null &&
         previousDisplayEntries.isNotEmpty) {

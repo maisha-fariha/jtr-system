@@ -1212,6 +1212,32 @@ class SessionController extends GetxController {
       return;
     }
 
+    final layoutSourcePreview = _layoutSourceForSessionDemande(order);
+    final layoutHintsPreview = OrderMapper.coalesceLayoutHints(
+      layoutSourcePreview.displayEntries,
+    );
+    if (layoutHintsPreview != null) {
+      final pendingEmpty = layoutHintsPreview.any((entry) {
+        if (entry.type != OrderDisplayEntryType.suivreSeparator) return false;
+        final sectionIndex = entry.sectionIndex ?? 0;
+        if (sectionIndex <= 0) return false;
+        return OrderMapper.productEntriesUnderSection(
+          layoutHintsPreview,
+          sectionIndex,
+        ).isEmpty;
+      });
+      final requestableSection =
+          OrderMapper.firstPendingSuivreSectionIndex(layoutHintsPreview);
+      if (pendingEmpty && requestableSection == null) {
+        _showSnack(
+          'Articles requis',
+          'Ajoutez au moins un article sous le À SUIVRE avant de demander.',
+          context: context,
+        );
+        return;
+      }
+    }
+
     AppConfirmDialog.show(
       context: context,
       title: 'Demander la suite',
@@ -1305,6 +1331,14 @@ class SessionController extends GetxController {
                 courseNumber: preferred,
                 previousDisplayEntries: layoutForDemande,
                 suivreSectionIndex: demandSectionIndex,
+              );
+            }
+
+            if (layoutForDemande != null &&
+                OrderMapper.hasEmptyPendingSuivreSection(layoutForDemande)) {
+              throw ApiException(
+                message:
+                    'Ajoutez au moins un article sous le À SUIVRE avant de demander.',
               );
             }
 

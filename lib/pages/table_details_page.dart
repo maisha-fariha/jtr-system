@@ -4,7 +4,6 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../data/models/catalog/category_tree_node.dart';
-import '../controllers/session_controller.dart';
 import '../controllers/table_details_controller.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
@@ -27,9 +26,6 @@ class TableDetailsPage extends GetView<TableDetailsController> {
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Obx(() {
-          if (Get.isRegistered<SessionController>()) {
-            Get.find<SessionController>().orders.length;
-          }
           controller.orderUiRevision.value;
 
           final order = controller.order;
@@ -297,9 +293,14 @@ class _OrderSummaryState extends State<_OrderSummary> {
         color: AppTheme.textSecondary,
       );
 
-  List<Widget> _buildVisibleRows(BuildContext context, SessionOrder order) {
+  List<Widget> _buildVisibleRows(
+    BuildContext context,
+    SessionOrder order,
+    bool canModify,
+  ) {
     final rows = <Widget>[];
     final entries = order.displayEntries;
+    final orderOffered = !canModify;
     var index = 0;
 
     while (index < entries.length) {
@@ -317,6 +318,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
             isDemande: isDemande,
             demandeTimeLabel: entry.demandeTimeLabel,
             isCollapsed: collapsed,
+            canModify: canModify,
             onSelect: isDemande
                 ? null
                 : () => controller.selectSuivreSection(sectionIndex),
@@ -339,6 +341,8 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 orderNumber: order.number,
                 productIndex: productEntry.lineIndex!,
                 product: productEntry.product!,
+                canModify: canModify,
+                orderOffered: orderOffered,
                 groupTag: _productSlidableGroupTag,
               ),
             );
@@ -358,6 +362,8 @@ class _OrderSummaryState extends State<_OrderSummary> {
           orderNumber: order.number,
           productIndex: productEntry.lineIndex!,
           product: productEntry.product!,
+          canModify: canModify,
+          orderOffered: orderOffered,
           groupTag: _productSlidableGroupTag,
         ),
       );
@@ -370,9 +376,6 @@ class _OrderSummaryState extends State<_OrderSummary> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().orders.length;
-      }
       controller.orderUiRevision.value;
       controller.suivreUiRevision.value;
       controller.selectedSuivreSection.value;
@@ -382,7 +385,9 @@ class _OrderSummaryState extends State<_OrderSummary> {
         return const SizedBox.shrink();
       }
 
-      final rows = _buildVisibleRows(context, resolvedOrder);
+      // Hoist once — row Slidables must not re-hit offered/Hive checks.
+      final canModify = controller.canModifyOrder;
+      final rows = _buildVisibleRows(context, resolvedOrder, canModify);
       _scrollToLatestItemIfNeeded(resolvedOrder);
 
       return Column(
@@ -495,6 +500,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
     required this.sectionIndex,
     required this.isDemande,
     required this.isCollapsed,
+    required this.canModify,
     required this.onToggleCollapse,
     required this.groupTag,
     this.demandeTimeLabel,
@@ -505,6 +511,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
   final bool isDemande;
   final String? demandeTimeLabel;
   final bool isCollapsed;
+  final bool canModify;
   final VoidCallback? onSelect;
   final VoidCallback onToggleCollapse;
   final String groupTag;
@@ -578,7 +585,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
         groupTag: groupTag,
-        enabled: controller.canModifyOrder,
+        enabled: canModify,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -604,12 +611,16 @@ class _ProductLine extends GetView<TableDetailsController> {
     required this.orderNumber,
     required this.productIndex,
     required this.product,
+    required this.canModify,
+    required this.orderOffered,
     required this.groupTag,
   });
 
   final String orderNumber;
   final int productIndex;
   final OrderProduct product;
+  final bool canModify;
+  final bool orderOffered;
   final String groupTag;
 
   @override
@@ -624,7 +635,7 @@ class _ProductLine extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
-        enabled: controller.canModifyOrder,
+        enabled: canModify,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -659,10 +670,10 @@ class _ProductLine extends GetView<TableDetailsController> {
             ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
-              backgroundColor: product.isOffered || controller.isOrderOffered
+              backgroundColor: product.isOffered || orderOffered
                   ? AppTheme.lightButton
                   : null,
-              iconColor: product.isOffered || controller.isOrderOffered
+              iconColor: product.isOffered || orderOffered
                   ? AppTheme.primary
                   : null,
               onPressed: () => controller.offerProduct(productIndex),

@@ -8,34 +8,24 @@ class OrderLocalDataSource {
 
   final HiveStorage _storage;
 
-  /// In-memory detail maps — avoids repeated `jsonDecode` on the UI isolate
-  /// (ticket row Obx → `canModifyOrder` → `cachedOrderDetail` was ANRing).
-  final Map<int, Map<String, dynamic>> _detailMemory = {};
-
   String _detailKey(int orderId) =>
       '${StorageConstants.orderDetailsPrefix}$orderId';
 
   Future<void> saveOrderDetail(int orderId, Map<String, dynamic> detail) async {
-    _detailMemory[orderId] = detail;
     await _storage.writeString(_detailKey(orderId), jsonEncode(detail));
   }
 
   Map<String, dynamic>? readOrderDetail(int orderId) {
-    final memory = _detailMemory[orderId];
-    if (memory != null) return memory;
-
     final raw = _storage.readString(_detailKey(orderId));
     if (raw == null || raw.isEmpty) return null;
 
     final decoded = jsonDecode(raw);
     if (decoded is! Map<String, dynamic>) return null;
 
-    _detailMemory[orderId] = decoded;
     return decoded;
   }
 
   Future<void> removeOrderDetail(int orderId) async {
-    _detailMemory.remove(orderId);
     await _storage.delete(_detailKey(orderId));
     await _storage.delete(_suivreSplitKey(orderId));
     await _storage.delete(_suivreCountKey(orderId));

@@ -264,6 +264,7 @@ class TableDetailsController extends GetxController {
         live: live,
         selectedSuivreSectionIndex: selectedSuivreSection.value,
         preferAdoptingNewServerLines: adoptingNewServerLines,
+        suppressItemIds: suppress,
       );
       if (_liveItemIdsDiffer(live, patched) ||
           OrderMapper.suivreSeparatorCount(live.displayEntries) !=
@@ -335,6 +336,7 @@ class TableDetailsController extends GetxController {
         live: live ?? updated,
         selectedSuivreSectionIndex: selectedSuivreSection.value,
         preferAdoptingNewServerLines: adoptingNewServerLines,
+        suppressItemIds: suppress,
       );
       if (suppress.isNotEmpty) {
         base = OrderMapper.mergeLiveOptimisticDetail(
@@ -1539,9 +1541,29 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: (updated) {
+        // Prefer the session ticket *now* (may be thinner after a quick
+        // re-enter + delete). Never force the closed-over pre-Send snapshot
+        // back onto the UI — that makes deleted lines flash back.
+        SessionOrder? liveNow;
+        if (Get.isRegistered<SessionController>()) {
+          liveNow = Get.find<SessionController>().findOrder(
+            orderNumber: orderNumber,
+            orderId: updated.id > 0 ? updated.id : orderId,
+          );
+        }
+        liveNow ??= _rawSessionOrder;
+        final baseLive = liveNow ?? snapshot;
+        final orderKey = updated.id > 0
+            ? updated.id
+            : (baseLive.id > 0 ? baseLive.id : 0);
+        final suppress = orderKey > 0
+            ? _orderRepository.suppressedItemIdsFor(orderKey)
+            : const <int>{};
+
         final toApply = OrderMapper.patchServerItemIdsOntoLive(
-          live: snapshot,
+          live: baseLive,
           server: updated,
+          suppressItemIds: suppress,
         );
         if (toApply.id > 0) {
           orderId = toApply.id;

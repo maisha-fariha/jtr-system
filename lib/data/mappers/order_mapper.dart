@@ -2668,6 +2668,7 @@ class OrderMapper {
     required SessionOrder live,
     int? selectedSuivreSectionIndex,
     bool preferAdoptingNewServerLines = false,
+    Set<int> suppressItemIds = const {},
   }) {
     final liveHydrated = ensureSessionDisplayHydrated(live);
     final serverHydrated = ensureSessionDisplayHydrated(server);
@@ -2686,16 +2687,27 @@ class OrderMapper {
         live: liveHydrated,
         preferAdoptingNewServerLines: preferAdoptingNewServerLines,
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+        suppressItemIds: suppressItemIds,
       );
     }
 
     var patched = patchServerItemIdsOntoLive(
       live: liveHydrated,
       server: serverHydrated,
+      suppressItemIds: suppressItemIds,
     );
+    final serverDisplayForAppend = suppressItemIds.isEmpty
+        ? serverHydrated.displayEntries
+        : [
+            for (final entry in serverHydrated.displayEntries)
+              if (entry.type != OrderDisplayEntryType.product ||
+                  (entry.itemId ?? 0) <= 0 ||
+                  !suppressItemIds.contains(entry.itemId))
+                entry,
+          ];
     var display = appendUnmatchedServerProducts(
       liveDisplay: patched.displayEntries,
-      serverDisplay: serverHydrated.displayEntries,
+      serverDisplay: serverDisplayForAppend,
       selectedSuivreSectionIndex: selectedSuivreSectionIndex,
     );
     display = preferLivePendingSuivre(
@@ -2713,19 +2725,17 @@ class OrderMapper {
             entry.product != null)
           entry.product!,
     ];
-
-    final mergedTotal = products.length == serverHydrated.products.length
-        ? serverHydrated.total
-        : (products.isEmpty
-            ? formatPrice('0')
-            : _sumFormattedPrices(products));
-
-    return serverHydrated.copyWith(
-      products: products,
+    final merged = serverHydrated.copyWith(
+      products: products.isNotEmpty ? products : liveHydrated.products,
       displayEntries: display,
-      itemCount: products.length,
-      total: mergedTotal,
+      itemCount: products.isNotEmpty
+          ? products.length
+          : liveHydrated.itemCount,
+      total: products.isNotEmpty ? liveHydrated.total : serverHydrated.total,
     );
+    return suppressItemIds.isEmpty
+        ? merged
+        : _stripSuppressedItems(merged, suppressItemIds);
   }
 
   /// Never drop pending À SUIVRE rows the waiter opened locally when a stale

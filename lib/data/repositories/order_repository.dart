@@ -49,6 +49,13 @@ class OrderRepository {
         _connectivity = connectivity,
         _catalog = catalog;
 
+  /// When > 0, [updateOrder] PUTs are blocked (first kitchen Send is POST-only).
+  int _postOnlySendGuard = 0;
+
+  /// When >= 0, at most this many PUTs may run (2nd+ Send = exactly one PUT).
+  /// `-1` means unlimited (normal mutations outside Send).
+  int _sendPutBudget = -1;
+
   final OrderRemoteDataSource _remote;
   final OrderLocalDataSource _local;
   final SessionRemoteDataSource _sessionRemote;
@@ -664,12 +671,9 @@ class OrderRepository {
     return CreateTableOrderResult(order: order, apiLog: apiLog.toString());
   }
 
-  /// Opens the table, POSTs /api/orders with draft lines (no seed), then sends.
-  ///
-  /// If the table already has an active order (409 / prior partial create), we
-  /// resume that id and PUT the draft lines instead of failing with a false
-  /// "Impossible de créer" after the backend already has the order.
-  Future<SessionOrder> createAndSendLocalDraft({
+  /// First kitchen Send: open table + POST /api/orders with all lines.
+  /// Never calls PUT /api/orders/:id.
+  Future<SessionOrder> _createAndSendPostOnly({
     required String tableNumber,
     required int numberOfGuests,
     required int waiterId,
@@ -677,62 +681,17 @@ class OrderRepository {
     int? salesZoneId,
     String? waiterName,
     List<OrderDisplayEntry>? previousDisplayEntries,
-    int? existingOrderId,
     SessionOrder? localTicketBeforeSend,
+    int? existingOrderId,
+    required StringBuffer apiLog,
   }) async {
-    if (lines.isEmpty) {
-      throw ApiException(
-        message: 'Ajoutez au moins un article avant l\'envoi.',
-      );
-    }
-    if (!await _connectivity.isOnline) {
-      throw ApiException(
-        message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
-      );
-    }
+    apiLog.writeln('── POST-only first Send (PUT hard-blocked) ──');
 
-    final apiLog = StringBuffer()
-      ..writeln('── Create + send local draft ──')
-      ..writeln('table=$tableNumber lines=${lines.length}')
-      ..writeln('existingOrderId=${existingOrderId ?? 'none'}');
-    lastCreateOrderLog = apiLog.toString();
-    lastKitchenSendLog = apiLog.toString();
-    logOrderFlow(
-      'SEND START table=$tableNumber lines=${lines.length} '
-      'existingOrderId=${existingOrderId ?? 'none'}',
-    );
-
-    // 2nd+ Send: known order id → PUT immediately (skip open-by-number).
     if (existingOrderId != null && existingOrderId > 0) {
-      final cached = _local.readOrderDetail(existingOrderId);
-      final tableId = (cached?['table_id'] as num?)?.toInt() ?? 0;
-      final parsedTable =
-          OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ?? 0;
-      final table = ResolvedTable(
-        id: tableId,
-        tableNumber: parsedTable > 0 ? parsedTable : 0,
-        salesZoneId: salesZoneId,
-        existingOrderId: existingOrderId,
-      );
       apiLog.writeln(
-        '── PUT (known orderId=$existingOrderId, skip open-by-number) ──',
+        '── Retire stale orderId=$existingOrderId before POST create ──',
       );
-      lastCreateOrderLog = apiLog.toString();
-      lastKitchenSendLog = apiLog.toString();
-      logOrderFlow('SEND PUT direct orderId=$existingOrderId');
-      debugPrint(apiLog.toString());
-      return _sendLocalDraftOntoExistingOrder(
-        orderId: existingOrderId,
-        table: table,
-        tableNumber: tableNumber,
-        numberOfGuests: numberOfGuests,
-        waiterId: waiterId,
-        salesZoneId: salesZoneId,
-        lines: lines,
-        previousDisplayEntries: previousDisplayEntries,
-        localTicketBeforeSend: localTicketBeforeSend,
-        apiLog: apiLog,
-      );
+      await _retireDeadOrderShell(existingOrderId, apiLog: apiLog);
     }
 
     final table = await _openTableByNumberForCreate(
@@ -748,30 +707,300 @@ class OrderRepository {
         ? salesZoneId
         : table.salesZoneId;
 
-    // Table already has an open order — never POST /api/orders again.
     if (table.hasActiveOrder &&
         table.existingOrderId != null &&
         table.existingOrderId! > 0) {
       final resumeOrderId = table.existingOrderId!;
       apiLog.writeln(
-        '── PUT item update on order=$resumeOrderId ──',
+        '── First create: retire active_order=$resumeOrderId then POST ──',
       );
+      await _retireDeadOrderShell(resumeOrderId, apiLog: apiLog);
+    }
+
+    if (table.id <= 0) {
       lastCreateOrderLog = apiLog.toString();
       lastKitchenSendLog = apiLog.toString();
-      logOrderFlow('SEND PUT via active_order=$resumeOrderId');
-      debugPrint(apiLog.toString());
-      return _sendLocalDraftOntoExistingOrder(
-        orderId: resumeOrderId,
-        table: table,
-        tableNumber: tableNumber,
-        numberOfGuests: numberOfGuests,
-        waiterId: waiterId,
-        salesZoneId: resolvedSalesZoneId,
-        lines: lines,
-        previousDisplayEntries: previousDisplayEntries,
-        localTicketBeforeSend: localTicketBeforeSend,
-        apiLog: apiLog,
+      throw ApiException(
+        message: 'Impossible d\'ouvrir la table $tableNumber.',
       );
+    }
+
+    final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
+      waiterId: waiterId,
+      numberOfGuests: numberOfGuests,
+      tableId: table.id,
+      salesZoneId: resolvedSalesZoneId,
+      lines: lines,
+    );
+
+    apiLog.writeln('── POST /api/orders (local draft items, POST-only) ──');
+    apiLog.writeln(formatApiPayload(createPayload));
+    logOrderFlow(
+      'POST /api/orders POST-only table=${table.tableNumber} '
+      'items=${lines.length}',
+    );
+
+    final createdPayload = await _tryPostCreateOrder(
+      payload: createPayload,
+      label: 'local-draft-post-only',
+      apiLog: apiLog,
+    );
+
+    var orderId = createdPayload == null
+        ? null
+        : OrderMapper.extractOrderIdFromPayload(createdPayload);
+
+    if (orderId == null || orderId <= 0) {
+      apiLog.writeln('── POST create failed/empty — try recover (no PUT) ──');
+      final recovered = await tryRecoverCreatedOrder(tableNumber: tableNumber);
+      if (recovered != null && recovered.order.id > 0) {
+        final recoveredId = recovered.order.id;
+        apiLog.writeln(
+          '── Recovered orderId=$recoveredId (POST-only, skip PUT) ──',
+        );
+        Map<String, dynamic> recoveredDetail;
+        try {
+          recoveredDetail = await _remote.fetchOrderDetail(recoveredId);
+        } catch (_) {
+          recoveredDetail = _local.readOrderDetail(recoveredId) ??
+              <String, dynamic>{'id': recoveredId};
+        }
+        await _local.saveOrderDetail(recoveredId, recoveredDetail);
+        await _sessionLocal.upsertOpenOrderInList(recoveredDetail);
+        lastCreateOrderLog = apiLog.toString();
+        lastKitchenSendLog = apiLog.toString();
+        return _finishLocalDraftSend(
+          orderId: recoveredId,
+          tableNumber: table.tableNumber > 0 ? table.tableNumber : null,
+          detail: recoveredDetail,
+          previousDisplayEntries: previousDisplayEntries,
+          localTicketBeforeSend: localTicketBeforeSend,
+          apiLog: apiLog,
+        );
+      }
+      lastCreateOrderLog = apiLog.toString();
+      lastKitchenSendLog = apiLog.toString();
+      throw ApiException(
+        message: 'Impossible de créer la commande sur la table $tableNumber.',
+      );
+    }
+
+    var detail = OrderMapper.unwrapOrderDetail(createdPayload!);
+    detail = <String, dynamic>{
+      ...detail,
+      'id': orderId,
+      'table_id': table.id,
+      'table_number': table.tableNumber,
+    };
+
+    try {
+      detail = await _remote.fetchOrderDetail(orderId);
+      apiLog.writeln('── GET /api/orders/$orderId après POST-only create ──');
+    } catch (e) {
+      apiLog.writeln('── GET detail après POST-only create échoué: $e ──');
+    }
+
+    await _local.saveOrderDetail(orderId, detail);
+    await _sessionLocal.upsertOpenOrderInList(detail);
+    apiLog.writeln('── POST-only create complete — no PUT ──');
+    lastCreateOrderLog = apiLog.toString();
+    lastKitchenSendLog = apiLog.toString();
+
+    return _finishLocalDraftSend(
+      orderId: orderId,
+      tableNumber: table.tableNumber > 0 ? table.tableNumber : null,
+      detail: detail,
+      previousDisplayEntries: previousDisplayEntries,
+      localTicketBeforeSend: localTicketBeforeSend,
+      apiLog: apiLog,
+    );
+  }
+
+  /// Opens the table, POSTs /api/orders with **all** draft lines (first Send).
+  ///
+  /// When [isFirstKitchenCreate] is true this is **POST-only** (no follow-up
+  /// PUT). PUT is only for 2nd+ Send when the order already has kitchen lines.
+  Future<SessionOrder> createAndSendLocalDraft({
+    required String tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    required List<LocalDraftLine> lines,
+    int? salesZoneId,
+    String? waiterName,
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    int? existingOrderId,
+    SessionOrder? localTicketBeforeSend,
+    bool isFirstKitchenCreate = false,
+  }) async {
+    if (lines.isEmpty) {
+      throw ApiException(
+        message: 'Ajoutez au moins un article avant l\'envoi.',
+      );
+    }
+    if (!await _connectivity.isOnline) {
+      throw ApiException(
+        message: 'Envoi impossible hors ligne. Vérifiez votre réseau.',
+      );
+    }
+
+    final apiLog = StringBuffer()
+      ..writeln('── Create + send local draft ──')
+      ..writeln('table=$tableNumber lines=${lines.length}')
+      ..writeln('existingOrderId=${existingOrderId ?? 'none'}')
+      ..writeln('isFirstKitchenCreate=$isFirstKitchenCreate');
+    lastCreateOrderLog = apiLog.toString();
+    lastKitchenSendLog = apiLog.toString();
+    logOrderFlow(
+      'SEND START table=$tableNumber lines=${lines.length} '
+      'existingOrderId=${existingOrderId ?? 'none'} '
+      'firstCreate=$isFirstKitchenCreate',
+    );
+
+    if (isFirstKitchenCreate) {
+      _postOnlySendGuard++;
+      try {
+        return await _createAndSendPostOnly(
+          tableNumber: tableNumber,
+          numberOfGuests: numberOfGuests,
+          waiterId: waiterId,
+          lines: lines,
+          salesZoneId: salesZoneId,
+          waiterName: waiterName,
+          previousDisplayEntries: previousDisplayEntries,
+          localTicketBeforeSend: localTicketBeforeSend,
+          existingOrderId: existingOrderId,
+          apiLog: apiLog,
+        );
+      } finally {
+        _postOnlySendGuard--;
+      }
+    }
+
+    // 2nd+ Send only: known order that already has lines → PUT.
+    // First kitchen create never takes this path (POST-only).
+    if (!isFirstKitchenCreate &&
+        existingOrderId != null &&
+        existingOrderId > 0) {
+      var visibleOnServer = 0;
+      Map<String, dynamic>? knownDetail;
+      try {
+        knownDetail = await _remote.fetchOrderDetail(existingOrderId);
+        visibleOnServer = OrderMapper.countVisibleLineItems(knownDetail);
+      } catch (_) {
+        final cached = _local.readOrderDetail(existingOrderId);
+        if (cached != null) {
+          knownDetail = cached;
+          visibleOnServer = OrderMapper.countVisibleLineItems(cached);
+        }
+      }
+
+      if (visibleOnServer > 0) {
+        final tableId = (knownDetail?['table_id'] as num?)?.toInt() ?? 0;
+        final parsedTable =
+            OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ?? 0;
+        final table = ResolvedTable(
+          id: tableId,
+          tableNumber: parsedTable > 0 ? parsedTable : 0,
+          salesZoneId: salesZoneId,
+          existingOrderId: existingOrderId,
+        );
+        apiLog.writeln(
+          '── PUT (known orderId=$existingOrderId, $visibleOnServer lines) ──',
+        );
+        lastCreateOrderLog = apiLog.toString();
+        lastKitchenSendLog = apiLog.toString();
+        logOrderFlow('SEND PUT direct orderId=$existingOrderId');
+        debugPrint(apiLog.toString());
+        _sendPutBudget = 1;
+        try {
+          return await _sendLocalDraftOntoExistingOrder(
+            orderId: existingOrderId,
+            table: table,
+            tableNumber: tableNumber,
+            numberOfGuests: numberOfGuests,
+            waiterId: waiterId,
+            salesZoneId: salesZoneId,
+            lines: lines,
+            previousDisplayEntries: previousDisplayEntries,
+            localTicketBeforeSend: localTicketBeforeSend,
+            apiLog: apiLog,
+          );
+        } finally {
+          _sendPutBudget = -1;
+        }
+      }
+
+      apiLog.writeln(
+        '── Known orderId=$existingOrderId is empty → retire, then POST ──',
+      );
+      await _retireDeadOrderShell(existingOrderId, apiLog: apiLog);
+    } else if (isFirstKitchenCreate &&
+        existingOrderId != null &&
+        existingOrderId > 0) {
+      apiLog.writeln(
+        '── First create: retire stale orderId=$existingOrderId (POST-only) ──',
+      );
+      await _retireDeadOrderShell(existingOrderId, apiLog: apiLog);
+    }
+
+    final table = await _openTableByNumberForCreate(
+      tableNumber: tableNumber,
+      numberOfGuests: numberOfGuests,
+      waiterId: waiterId,
+      waiterName: waiterName,
+      salesZoneId: salesZoneId,
+      apiLog: apiLog,
+    );
+
+    final resolvedSalesZoneId = salesZoneId != null && salesZoneId > 0
+        ? salesZoneId
+        : table.salesZoneId;
+
+    // Active order: 2nd+ Send may PUT. First create always retires then POST.
+    if (table.hasActiveOrder &&
+        table.existingOrderId != null &&
+        table.existingOrderId! > 0) {
+      final resumeOrderId = table.existingOrderId!;
+      var visibleOnActive = 0;
+      try {
+        final activeDetail = await _remote.fetchOrderDetail(resumeOrderId);
+        visibleOnActive = OrderMapper.countVisibleLineItems(activeDetail);
+      } catch (e) {
+        apiLog.writeln('── GET active_order=$resumeOrderId failed: $e ──');
+      }
+
+      if (!isFirstKitchenCreate && visibleOnActive > 0) {
+        apiLog.writeln(
+          '── PUT resume order=$resumeOrderId ($visibleOnActive lines) ──',
+        );
+        lastCreateOrderLog = apiLog.toString();
+        lastKitchenSendLog = apiLog.toString();
+        logOrderFlow('SEND PUT via active_order=$resumeOrderId');
+        debugPrint(apiLog.toString());
+        _sendPutBudget = 1;
+        try {
+          return await _sendLocalDraftOntoExistingOrder(
+            orderId: resumeOrderId,
+            table: table,
+            tableNumber: tableNumber,
+            numberOfGuests: numberOfGuests,
+            waiterId: waiterId,
+            salesZoneId: resolvedSalesZoneId,
+            lines: lines,
+            previousDisplayEntries: previousDisplayEntries,
+            localTicketBeforeSend: localTicketBeforeSend,
+            apiLog: apiLog,
+          );
+        } finally {
+          _sendPutBudget = -1;
+        }
+      }
+
+      apiLog.writeln(
+        '── ${isFirstKitchenCreate ? 'First create' : 'Empty'} '
+        'active_order=$resumeOrderId → retire, then POST ──',
+      );
+      await _retireDeadOrderShell(resumeOrderId, apiLog: apiLog);
     }
 
     if (table.id <= 0) {
@@ -807,24 +1036,32 @@ class OrderRepository {
         : OrderMapper.extractOrderIdFromPayload(createdPayload);
 
     // Backend often creates the order even when the client sees a failed /
-    // unparseable POST (timeout, 409, odd envelope). Recover instead of
-    // showing a false error while the table is already open with items.
+    // unparseable POST (timeout, 409, odd envelope). Recover the created id
+    // and finish — never PUT again (first Send is POST-only).
     if (orderId == null || orderId <= 0) {
       apiLog.writeln('── POST create failed/empty — try recover ──');
       final recovered = await tryRecoverCreatedOrder(tableNumber: tableNumber);
       if (recovered != null && recovered.order.id > 0) {
+        final recoveredId = recovered.order.id;
         apiLog.writeln(
-          '── Recovered orderId=${recovered.order.id} after create miss ──',
+          '── Recovered orderId=$recoveredId after create miss '
+          '(POST-only, skip PUT) ──',
         );
+        Map<String, dynamic> recoveredDetail;
+        try {
+          recoveredDetail = await _remote.fetchOrderDetail(recoveredId);
+        } catch (_) {
+          recoveredDetail = _local.readOrderDetail(recoveredId) ??
+              <String, dynamic>{'id': recoveredId};
+        }
+        await _local.saveOrderDetail(recoveredId, recoveredDetail);
+        await _sessionLocal.upsertOpenOrderInList(recoveredDetail);
         lastCreateOrderLog = apiLog.toString();
-        return _sendLocalDraftOntoExistingOrder(
-          orderId: recovered.order.id,
-          table: table,
-          tableNumber: tableNumber,
-          numberOfGuests: numberOfGuests,
-          waiterId: waiterId,
-          salesZoneId: resolvedSalesZoneId,
-          lines: lines,
+        lastKitchenSendLog = apiLog.toString();
+        return _finishLocalDraftSend(
+          orderId: recoveredId,
+          tableNumber: table.tableNumber > 0 ? table.tableNumber : null,
+          detail: recoveredDetail,
           previousDisplayEntries: previousDisplayEntries,
           localTicketBeforeSend: localTicketBeforeSend,
           apiLog: apiLog,
@@ -855,6 +1092,7 @@ class OrderRepository {
     await _local.saveOrderDetail(orderId, detail);
     await _sessionLocal.upsertOpenOrderInList(detail);
     lastCreateOrderLog = apiLog.toString();
+    apiLog.writeln('── POST create complete — no follow-up PUT ──');
 
     return _finishLocalDraftSend(
       orderId: orderId,
@@ -1010,10 +1248,11 @@ class OrderRepository {
       tableNumber: tableNumber,
     );
 
-    // After local deletes: keep waiter ticket layout; only adopt server ids.
+    // Never call requestAllCourses here — that path can PUT to align suites
+    // after a successful POST create. First Send must stay POST-only.
     if (localTicketBeforeSend != null) {
       apiLog.writeln(
-        '── Send complete — map from local ticket (skip requestAllCourses GET) ──',
+        '── Send complete — map from local ticket (no align PUT) ──',
       );
       final layoutHints = previousDisplayEntries ??
           localTicketBeforeSend.displayEntries;
@@ -1030,25 +1269,13 @@ class OrderRepository {
       return merged.copyWith(id: orderId, number: displayNumber);
     }
 
-    try {
-      final sent = await requestAllCourses(
-        orderId,
-        previousDisplayEntries: previousDisplayEntries,
-      );
-      lastKitchenSendLog = apiLog.toString();
-      return sent.copyWith(id: orderId, number: displayNumber);
-    } catch (e) {
-      apiLog.writeln(
-        '── requestAllCourses after create (non-fatal): $e ──',
-      );
-      lastCreateOrderLog = apiLog.toString();
-      lastKitchenSendLog = apiLog.toString();
-      final mapped = OrderMapper.fromOrderDetail(
-        detail,
-        previousDisplayEntries: previousDisplayEntries,
-      );
-      return mapped.copyWith(id: orderId, number: displayNumber);
-    }
+    apiLog.writeln('── Send complete — map server detail (no align PUT) ──');
+    lastKitchenSendLog = apiLog.toString();
+    final mapped = OrderMapper.fromOrderDetail(
+      detail,
+      previousDisplayEntries: previousDisplayEntries,
+    );
+    return mapped.copyWith(id: orderId, number: displayNumber);
   }
 
   Future<ResolvedTable> _openTableByNumberForCreate({
@@ -4014,6 +4241,36 @@ class OrderRepository {
     required Map<String, dynamic> payload,
     required StringBuffer apiLog,
   }) async {
+    if (_postOnlySendGuard > 0) {
+      apiLog.writeln(
+        '── BLOCKED PUT /api/orders/$orderId during POST-only first Send ──',
+      );
+      logOrderFlow(
+        'BLOCKED PUT during POST-only first Send order=$orderId',
+      );
+      debugPrint(
+        'BLOCKED PUT /api/orders/$orderId during POST-only first Send\n'
+        '${StackTrace.current}',
+      );
+      return OrderMapper.unwrapOrderDetail(payload);
+    }
+    if (_sendPutBudget == 0) {
+      apiLog.writeln(
+        '── BLOCKED extra PUT /api/orders/$orderId '
+        '(Send allows only one PUT) ──',
+      );
+      logOrderFlow(
+        'BLOCKED extra PUT during single-PUT Send order=$orderId',
+      );
+      debugPrint(
+        'BLOCKED extra PUT /api/orders/$orderId (one PUT per Send)\n'
+        '${StackTrace.current}',
+      );
+      return OrderMapper.unwrapOrderDetail(payload);
+    }
+    if (_sendPutBudget > 0) {
+      _sendPutBudget--;
+    }
     apiLog.writeln('── PUT /api/orders/$orderId ──');
     apiLog.writeln(formatApiPayload(payload));
 

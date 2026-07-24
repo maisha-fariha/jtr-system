@@ -4070,7 +4070,11 @@ class OrderMapper {
     return false;
   }
 
-  /// PUT sync for 2nd+ Send: cancel removed lines, update kept, append new.
+  /// PUT the waiter's full local ticket onto an existing order (2nd+ Send).
+  ///
+  /// [lines] must be in display-walk order (same as layout product rows).
+  /// Do **not** alignPendingSuivreLayoutOntoCourses here — duplicate product
+  /// names can strip the last À SUIVRE (missing items after reinstall).
   static Map<String, dynamic> applyLocalDraftSendOntoExistingOrder({
     required Map<String, dynamic> orderDetail,
     required List<LocalDraftLine> lines,
@@ -4085,19 +4089,30 @@ class OrderMapper {
     );
     cancelItemIdsOnDetail(working, cancelIds);
 
-    final productEntries = layoutHints
-        .where((entry) => entry.type == OrderDisplayEntryType.product)
-        .toList()
-      ..sort(
-        (a, b) => (a.lineIndex ?? 0).compareTo(b.lineIndex ?? 0),
-      );
+    // Display order — matches how Send builds [lines]. Never sort+index by
+    // lineIndex (that skips newly added rows when indexes are sparse).
+    final productEntries = [
+      for (final entry in layoutHints)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
 
     final seatNumber = resolveDefaultSeatNumber(working);
 
-    for (final entry in productEntries) {
-      final lineIndex = entry.lineIndex ?? -1;
-      if (lineIndex < 0 || lineIndex >= lines.length) continue;
-      final draft = lines[lineIndex];
+    for (final draft in lines) {
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      _ensureCourseShellExists(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+      );
+    }
+
+    final draftCount = lines.length < productEntries.length
+        ? lines.length
+        : productEntries.length;
+    for (var entryPos = 0; entryPos < draftCount; entryPos++) {
+      final entry = productEntries[entryPos];
+      final draft = lines[entryPos];
       final itemId = entry.itemId ?? 0;
 
       if (itemId > 0) {
@@ -4122,48 +4137,56 @@ class OrderMapper {
         courseNumber: courseNumber,
       );
 
-      final newItem = _buildNewItemPayload(
-        seatNumber: seatNumber,
-        courseId: courseId,
-        productId: draft.productId,
-        qty: draft.qty < 1 ? 1 : draft.qty,
-        subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
-        status: itemStatus,
-        comment: draft.comment,
-        menuSelections: draft.menuSelections,
-        isStillMenuMissing: false,
-        forCreate: false,
-      );
-
       _appendItemToSeatOrders(
         working,
         seatNumber: seatNumber,
         courseNumber: courseNumber,
-        newItem: newItem,
+        newItem: _buildNewItemPayload(
+          seatNumber: seatNumber,
+          courseId: courseId,
+          productId: draft.productId,
+          qty: draft.qty < 1 ? 1 : draft.qty,
+          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          status: itemStatus,
+          comment: draft.comment,
+          menuSelections: draft.menuSelections,
+          isStillMenuMissing: false,
+          forCreate: false,
+        ),
       );
     }
 
-    // Safety: cancel anything still visible that is not on the waiter ticket.
-    cancelItemIdsOnDetail(
-      working,
-      itemIdsToCancelForLocalSend(
-        serverDetail: working,
-        layoutHints: layoutHints,
-        extraCancelItemIds: extraCancelItemIds,
-      ),
-    );
-
-    if (layoutHints.isNotEmpty &&
-        (layoutHasProductsUnderPendingSuivre(layoutHints) ||
-            layoutHasTrailingPendingSuivre(layoutHints) ||
-            suivreSeparatorCount(layoutHints) > 0)) {
-      final aligned = alignPendingSuivreLayoutOntoCourses(
+    for (var i = productEntries.length; i < lines.length; i++) {
+      final draft = lines[i];
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      _ensureCourseShellExists(
         working,
-        layout: layoutHints,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
       );
-      if (aligned.changed) {
-        working['seat_orders'] = aligned.detail['seat_orders'];
-      }
+      final course = findCourseInOrderDetail(working, courseNumber);
+      final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+        newItem: _buildNewItemPayload(
+          seatNumber: seatNumber,
+          courseId: courseId,
+          productId: draft.productId,
+          qty: draft.qty < 1 ? 1 : draft.qty,
+          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          status: _resolveAppendItemStatus(
+            working,
+            seatNumber: seatNumber,
+            courseNumber: courseNumber,
+          ),
+          comment: draft.comment,
+          menuSelections: draft.menuSelections,
+          isStillMenuMissing: false,
+          forCreate: false,
+        ),
+      );
     }
 
     final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);

@@ -70,6 +70,9 @@ class TableDetailsController extends GetxController {
   /// Lines queued locally until Send All POSTs /api/orders (no seed product).
   final List<LocalDraftLine> _localDraftLines = [];
 
+  /// After a successful kitchen Send, further sends use PUT (not POST create).
+  bool _didCompleteKitchenSend = false;
+
   bool get _isLocalDraft {
     if (orderId != null && orderId! > 0) return false;
     final current = _rawSessionOrder ?? seedOrder;
@@ -632,6 +635,14 @@ class TableDetailsController extends GetxController {
       if ((orderId == null || orderId! <= 0) && rawSeed.isLocalOnly) {
         _deferDetailFetch = true;
       }
+      // Reopened remote ticket with synced lines → later Send uses PUT.
+      if (!rawSeed.isLocalOnly &&
+          _layoutHasServerItemIds(rawSeed.displayEntries)) {
+        _didCompleteKitchenSend = true;
+      }
+    }
+    if (_deferDetailFetch) {
+      _didCompleteKitchenSend = false;
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
@@ -1056,6 +1067,13 @@ class TableDetailsController extends GetxController {
       comment: submit.comment,
       selectedSuivreSectionIndex: effectiveSuivreSection,
     );
+    _trackLocalDraftAddComposed(
+      product: product,
+      menuSelections: submit.menuSelections,
+      comment: submit.comment,
+    );
+    // Local-first: no PUT until Send (same as catalog composed adds).
+    if (_mutationsAreLocalOnly || _isLocalDraft) return;
 
     unawaited(
       _syncAddComposedProductInBackground(
@@ -1505,10 +1523,25 @@ class TableDetailsController extends GetxController {
       layout: layout,
       source: live,
     );
+    final layoutProductCount = layout
+        .where((e) => e.type == OrderDisplayEntryType.product)
+        .length;
     if (draftLines.isEmpty) {
       AppSnackbar.show(
         'Envoi impossible',
-        'Ajoutez au moins un article avant l\'envoi.',
+        live.products.isEmpty
+            ? 'Ajoutez au moins un article avant l\'envoi.'
+            : 'Impossible de préparer tous les articles pour l\'envoi. Réessayez.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+    if (draftLines.length < layoutProductCount) {
+      AppSnackbar.show(
+        'Envoi impossible',
+        'Le ticket n\'est pas complet pour l\'envoi '
+        '(${draftLines.length}/$layoutProductCount). Réessayez.',
         snackPosition: SnackPosition.BOTTOM,
         margin: const EdgeInsets.all(16),
       );
@@ -1526,11 +1559,17 @@ class TableDetailsController extends GetxController {
     final guests = int.tryParse(live.couverts) ?? 1;
 
     final sendOrderId = orderId ?? live.id;
+    // First Send: no kitchen sync yet and no server item ids → one POST.
+    // Later Send (edit/add on existing order) → exactly one PUT.
+    final isFirstKitchenCreate = !_didCompleteKitchenSend &&
+        !_layoutHasServerItemIds(layout) &&
+        (live.isLocalOnly || sendOrderId <= 0 || _deferDetailFetch);
     logOrderFlow(
       'UI SEND tap table=$orderNumber orderId=$sendOrderId '
-      'products=${live.products.length} draftLines=${draftLines.length}',
+      'products=${live.products.length} draftLines=${draftLines.length} '
+      'firstCreate=$isFirstKitchenCreate didSend=$_didCompleteKitchenSend',
     );
-    if (sendOrderId > 0) {
+    if (sendOrderId > 0 && !isFirstKitchenCreate) {
       unawaited(
         _orderRepository.persistSuivreLayoutHints(sendOrderId, layout),
       );
@@ -1580,6 +1619,7 @@ class TableDetailsController extends GetxController {
           seedOrder = toApply;
           _localDraftLines.clear();
           _deferDetailFetch = false;
+          _didCompleteKitchenSend = true;
         }
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
@@ -1602,13 +1642,18 @@ class TableDetailsController extends GetxController {
             salesZoneId: salesZoneId,
             waiterName: waiterName,
             previousDisplayEntries: layoutBeforeSend,
-            existingOrderId: sendOrderId > 0 ? sendOrderId : null,
+            // Only pass id for 2nd+ Send (order already has API lines).
+            existingOrderId: (!isFirstKitchenCreate && sendOrderId > 0)
+                ? sendOrderId
+                : null,
             localTicketBeforeSend: snapshot,
+            isFirstKitchenCreate: isFirstKitchenCreate,
           );
           orderId = sent.id;
           seedOrder = sent;
           _localDraftLines.clear();
           _deferDetailFetch = false;
+          _didCompleteKitchenSend = true;
           final log = _orderRepository.lastKitchenSendLog ??
               _orderRepository.lastCreateOrderLog;
           if (log != null) {
@@ -3533,6 +3578,15 @@ class TableDetailsController extends GetxController {
     _localDraftLines[index] = _localDraftLines[index].copyWith(qty: qty);
   }
 
+  /// True when any product line already has a server item id (2nd+ Send).
+  bool _layoutHasServerItemIds(List<OrderDisplayEntry> layout) {
+    for (final entry in layout) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      if ((entry.itemId ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
   List<LocalDraftLine> _buildDraftLinesForSend({
     List<OrderDisplayEntry>? layout,
     SessionOrder? source,
@@ -3545,36 +3599,74 @@ class TableDetailsController extends GetxController {
     );
 
     final rebuilt = <LocalDraftLine>[];
-    for (var i = 0; i < current.products.length; i++) {
-      final line = current.products[i];
+    final usedDraftIndexes = <int>{};
+    var course = 1;
+
+    // Walk display order so multi-suivre courses stay correct on POST.
+    for (final entry in effectiveLayout) {
+      if (entry.isSectionDivider) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) {
+          course = above + 1;
+        } else {
+          final section = entry.sectionIndex ?? 0;
+          course = section > 0 ? section + 1 : 2;
+        }
+        continue;
+      }
+      if (entry.type != OrderDisplayEntryType.product) continue;
+
+      final lineIndex = entry.lineIndex;
+      final line = entry.product ??
+          ((lineIndex != null &&
+                  lineIndex >= 0 &&
+                  lineIndex < current.products.length)
+              ? current.products[lineIndex]
+              : null);
+      if (line == null) continue;
+
       final catalog = catalogProductByName(line.name);
-      if (catalog == null) continue;
-
-      final qty = int.tryParse(line.quantity) ?? 1;
-      final lineTotal = _parseFormattedLineTotal(line.price);
-
       LocalDraftLine? tracked;
-      if (i < _localDraftLines.length &&
-          _localDraftLines[i].productId == catalog.id) {
-        tracked = _localDraftLines[i];
-      } else {
-        for (final draft in _localDraftLines) {
-          if (draft.productId == catalog.id) {
-            tracked = draft;
+      if (lineIndex != null &&
+          lineIndex >= 0 &&
+          lineIndex < _localDraftLines.length &&
+          !usedDraftIndexes.contains(lineIndex)) {
+        final atIndex = _localDraftLines[lineIndex];
+        if (catalog == null || atIndex.productId == catalog.id) {
+          tracked = atIndex;
+          usedDraftIndexes.add(lineIndex);
+        }
+      }
+      if (tracked == null && catalog != null) {
+        for (var d = 0; d < _localDraftLines.length; d++) {
+          if (usedDraftIndexes.contains(d)) continue;
+          if (_localDraftLines[d].productId == catalog.id) {
+            tracked = _localDraftLines[d];
+            usedDraftIndexes.add(d);
             break;
           }
         }
       }
 
+      final productId = catalog?.id ?? tracked?.productId ?? 0;
+      if (productId <= 0) {
+        logOrderFlow(
+          'SEND abort — cannot resolve productId for "${line.name}"',
+        );
+        return const [];
+      }
+
+      final qty = int.tryParse(line.quantity) ?? 1;
+      final lineTotal = _parseFormattedLineTotal(line.price);
+
       rebuilt.add(
         LocalDraftLine(
-          productId: catalog.id,
-          unitPrice: qty > 0 ? lineTotal / qty : catalog.unitPrice,
+          productId: productId,
+          unitPrice: qty > 0
+              ? lineTotal / qty
+              : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0),
           qty: qty,
-          courseNumber: OrderMapper.resolveCourseNumberForLineIndexInLayout(
-            effectiveLayout,
-            i,
-          ),
+          courseNumber: course > 0 ? course : 1,
           menuSelections: tracked?.menuSelections ?? const [],
           comment: line.message?.trim().isNotEmpty == true
               ? line.message!.trim()

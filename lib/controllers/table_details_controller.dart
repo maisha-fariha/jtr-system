@@ -638,6 +638,10 @@ class TableDetailsController extends GetxController {
     );
 
     _loadCatalog();
+    // Seed path: resolve offered flag once without waiting for network.
+    if (orderId != null && orderId! > 0) {
+      _refreshOrderOfferedCache();
+    }
     unawaited(_bootstrapOrder());
   }
 
@@ -1206,18 +1210,28 @@ class TableDetailsController extends GetxController {
       !paymentModesLoading.value;
 
   /// True when cached API detail has `status: "offered"`.
-  bool get isOrderOffered {
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) return false;
-    final status = _orderRepository
-        .cachedOrderDetail(id)?['status']
-        ?.toString()
-        .trim()
-        .toLowerCase();
-    return status == 'offered';
-  }
+  ///
+  /// Kept as a field so ticket-row Obx rebuilds never hit Hive/`jsonDecode`.
+  bool _orderOfferedCached = false;
 
-  bool get canModifyOrder => !isOrderOffered;
+  bool get isOrderOffered => _orderOfferedCached;
+
+  bool get canModifyOrder => !_orderOfferedCached;
+
+  void _refreshOrderOfferedCache({Map<String, dynamic>? detail}) {
+    final id = resolvedOrderId;
+    if (id == null || id <= 0) {
+      _orderOfferedCached = false;
+      return;
+    }
+    final raw = detail ?? _orderRepository.cachedOrderDetail(id);
+    final status = raw?['status']?.toString().trim().toLowerCase();
+    final next = status == 'offered';
+    if (_orderOfferedCached == next) return;
+    _orderOfferedCached = next;
+    // Toolbar / slidables read this outside a dedicated Rx — bump revision.
+    orderUiRevision.value++;
+  }
 
   bool _blockIfOrderOffered() {
     if (!isOrderOffered) return false;
@@ -2574,6 +2588,12 @@ class TableDetailsController extends GetxController {
     bool throttleUiRevision = false,
   }) {
     if (!Get.isRegistered<SessionController>()) return;
+
+    // Refresh offered flag once per sync (not per ticket-row Obx rebuild).
+    if (updated.id > 0) {
+      orderId ??= updated.id;
+      _refreshOrderOfferedCache();
+    }
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
     final synced = updated.copyWith(

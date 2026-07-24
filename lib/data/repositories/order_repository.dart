@@ -5139,10 +5139,17 @@ class OrderRepository {
       lastPaymentLog = apiLog.toString();
       debugPrint(lastPaymentLog!);
 
+      // Session list TOTAL = ticket amount (total_price), never remaining.
+      // After full pay remaining is 0 — that must not zero the row.
+      final ticketTotalLabel = totalPrice > 0
+          ? OrderMapper.formatPrice(totalPrice.toStringAsFixed(2))
+          : (localSnapshot?.total ??
+              OrderMapper.formatPrice(
+                '${updated['total_price'] ?? '0'}',
+              ));
+
       if (localSnapshot != null) {
-        return localSnapshot.copyWith(
-          total: OrderMapper.formatPrice(nextRemaining.toStringAsFixed(2)),
-        );
+        return localSnapshot.copyWith(total: ticketTotalLabel);
       }
 
       final suivreHints = _resolveSuivreHints(
@@ -5150,13 +5157,14 @@ class OrderRepository {
         layoutHints: previousDisplayEntries,
       );
 
-      return OrderMapper.fromOrderDetail(
+      final mapped = OrderMapper.fromOrderDetail(
         updated,
         previousDisplayEntries: previousDisplayEntries,
         suivreSplitHints: suivreHints.splits,
         suivreCountHint: suivreHints.count,
         demandedSectionIndices: suivreHints.demandedSections,
       );
+      return mapped.copyWith(total: ticketTotalLabel);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

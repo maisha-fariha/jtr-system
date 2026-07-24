@@ -5566,6 +5566,11 @@ class OrderMapper {
       final match = movable.removeAt(idx);
       final id = (match.item['id'] as num?)?.toInt() ?? 0;
       if (id > 0) cancelOrderLineByItemId(working, id);
+      final menuSelections = match.item['menu_selections'] is List
+          ? (match.item['menu_selections'] as List)
+              .whereType<Map<String, dynamic>>()
+              .toList()
+          : const <Map<String, dynamic>>[];
       final newItem = _buildNewItemPayload(
         seatNumber: seatNumber,
         courseId: targetCourseId > 0 ? targetCourseId : 0,
@@ -5574,6 +5579,8 @@ class OrderMapper {
         subTotal: _parseMoney(match.item['sub_total']),
         status: 'to_be_continued',
         comment: match.item['comment'] as String? ?? '',
+        menuSelections: menuSelections,
+        isStillMenuMissing: match.item['is_still_menu_missing'] == true,
         forCreate: false,
       );
       final sourceProduct = match.item['product'];
@@ -5610,6 +5617,7 @@ class OrderMapper {
       final qty = int.tryParse(entry.product?.quantity ?? '1') ?? 1;
       final unit = resolveUnitPrice?.call(name) ??
           _parseMoney(entry.product?.price);
+      final sourceMenus = _menuSelectionsForProductInOrder(working, productId);
       final newItem = _buildNewItemPayload(
         seatNumber: seatNumber,
         courseId: targetCourseId > 0 ? targetCourseId : 0,
@@ -5618,6 +5626,7 @@ class OrderMapper {
         subTotal: unit * qty,
         status: 'to_be_continued',
         comment: entry.product?.message ?? '',
+        menuSelections: sourceMenus,
         forCreate: false,
       );
       if (name.isNotEmpty) {
@@ -5668,6 +5677,26 @@ class OrderMapper {
       seat['courses'] = list;
       return;
     }
+  }
+
+  /// Menu lines for [productId] if any visible item already has them (Demande
+  /// recreate must not drop platter children).
+  static List<Map<String, dynamic>> _menuSelectionsForProductInOrder(
+    Map<String, dynamic> detail,
+    int productId,
+  ) {
+    if (productId <= 0) return const [];
+    final seatNumber = resolveDefaultSeatNumber(detail);
+    for (final row in _visibleItemsWithCourseNumbers(
+      detail,
+      seatNumber: seatNumber,
+    )) {
+      if (_itemProductId(row.item) != productId) continue;
+      final menus = row.item['menu_selections'];
+      if (menus is! List || menus.isEmpty) continue;
+      return menus.whereType<Map<String, dynamic>>().toList();
+    }
+    return const [];
   }
 
   /// Find a product id by name anywhere on the order (including cancelled).

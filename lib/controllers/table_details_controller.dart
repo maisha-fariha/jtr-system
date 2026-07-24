@@ -3602,7 +3602,7 @@ class TableDetailsController extends GetxController {
     final usedDraftIndexes = <int>{};
     var course = 1;
 
-    // Walk display order so multi-suivre courses stay correct on POST.
+    // Walk display order so multi-suivre courses stay correct on POST/PUT.
     for (final entry in effectiveLayout) {
       if (entry.isSectionDivider) {
         final above = entry.courseNumber;
@@ -3626,8 +3626,31 @@ class TableDetailsController extends GetxController {
       if (line == null) continue;
 
       final catalog = catalogProductByName(line.name);
+      // After first Send, `_localDraftLines` only holds *new* adds (not 1:1
+      // with lineIndex). Attach drafts only to unsynced rows (itemId 0).
       LocalDraftLine? tracked;
-      if (lineIndex != null &&
+      final serverItemId = entry.itemId ?? 0;
+      if (serverItemId <= 0 && catalog != null) {
+        // Prefer a draft that still carries menu_selections for platters.
+        final preferMenus =
+            line.menuItems.isNotEmpty || (catalog.isComposed);
+        for (var pass = 0; pass < 2 && tracked == null; pass++) {
+          for (var d = 0; d < _localDraftLines.length; d++) {
+            if (usedDraftIndexes.contains(d)) continue;
+            final candidate = _localDraftLines[d];
+            if (candidate.productId != catalog.id) continue;
+            if (pass == 0 && preferMenus && candidate.menuSelections.isEmpty) {
+              continue;
+            }
+            tracked = candidate;
+            usedDraftIndexes.add(d);
+            break;
+          }
+        }
+      }
+      if (tracked == null &&
+          serverItemId <= 0 &&
+          lineIndex != null &&
           lineIndex >= 0 &&
           lineIndex < _localDraftLines.length &&
           !usedDraftIndexes.contains(lineIndex)) {
@@ -3635,16 +3658,6 @@ class TableDetailsController extends GetxController {
         if (catalog == null || atIndex.productId == catalog.id) {
           tracked = atIndex;
           usedDraftIndexes.add(lineIndex);
-        }
-      }
-      if (tracked == null && catalog != null) {
-        for (var d = 0; d < _localDraftLines.length; d++) {
-          if (usedDraftIndexes.contains(d)) continue;
-          if (_localDraftLines[d].productId == catalog.id) {
-            tracked = _localDraftLines[d];
-            usedDraftIndexes.add(d);
-            break;
-          }
         }
       }
 

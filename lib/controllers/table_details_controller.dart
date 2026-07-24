@@ -648,15 +648,16 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _bootstrapOrder() async {
+    // New local draft (create → details): never resolve a stale remote id.
+    // That GET often returns "The order id not found" (e.g. after offer/retire).
+    if (_deferDetailFetch || _isLocalDraft) return;
+
     await _ensureResolvedOrderId();
     final resolved = resolvedOrderId;
     if (resolved != null && resolved > 0) {
-      _deferDetailFetch = false;
       await _refreshOrder();
       return;
     }
-    if (_deferDetailFetch && _localDraftLines.isEmpty) return;
-    if (_isLocalDraft) return;
     await _refreshOrder();
   }
 
@@ -1222,18 +1223,27 @@ class TableDetailsController extends GetxController {
 
   void _refreshOrderOfferedCache({Map<String, dynamic>? detail}) {
     final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      _orderOfferedCached = false;
-      return;
+    var next = false;
+    if (id != null && id > 0) {
+      final raw = detail ?? _orderRepository.cachedOrderDetail(id);
+      final status = raw?['status']?.toString().trim().toLowerCase();
+      next = status == 'offered';
     }
-    final raw = detail ?? _orderRepository.cachedOrderDetail(id);
-    final status = raw?['status']?.toString().trim().toLowerCase();
-    final next = status == 'offered';
+    // Local table-offer (no remote status yet): all lines marked offered.
+    if (!next) {
+      final current = order;
+      next = current != null &&
+          current.products.isNotEmpty &&
+          current.products.every((product) => product.isOffered);
+    }
     if (_orderOfferedCached == next) return;
     _orderOfferedCached = next;
-    // Toolbar / slidables read this outside a dedicated Rx — bump revision.
+    // Toolbar / menu / slidables read this outside a dedicated Rx — bump.
     orderUiRevision.value++;
   }
+
+  /// Re-read offered lock after session-level table offer.
+  void refreshOfferedLock() => _refreshOrderOfferedCache();
 
   bool _blockIfOrderOffered() {
     if (!isOrderOffered) return false;
@@ -2713,6 +2723,53 @@ class TableDetailsController extends GetxController {
     await _mutateLineQuantity(productIndex, -1);
   }
 
+  void _applyLocalProductOffer(SessionOrder currentOrder, int productIndex) {
+    final updatedProducts = [...currentOrder.products];
+    updatedProducts[productIndex] =
+        updatedProducts[productIndex].copyWith(isOffered: true);
+    final updatedEntries = [
+      for (final entry in currentOrder.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == productIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(isOffered: true),
+            lineIndex: productIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    _syncOrderInSession(
+      currentOrder.copyWith(
+        products: updatedProducts,
+        displayEntries: updatedEntries,
+      ),
+      orderNumber,
+      displayEntriesOverride: updatedEntries,
+    );
+    AppSnackbar.show(
+      'Offert',
+      '${currentOrder.products[productIndex].name} a été offert.',
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  bool _isOrderIdNotFoundError(Object error) {
+    if (error is! ApiException) return false;
+    final msg = error.message.toLowerCase();
+    return error.statusCode == 404 ||
+        msg.contains('order id not found') ||
+        msg.contains('the order id not found') ||
+        msg.contains('commande introuvable') ||
+        (msg.contains('order') && msg.contains('not found')) ||
+        (msg.contains('order') && msg.contains('introuvable'));
+  }
+
   Future<void> offerProduct(int productIndex) async {
     if (_blockIfOrderOffered()) return;
 
@@ -2723,46 +2780,18 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (_mutationsAreLocalOnly) {
-      final updatedProducts = [...currentOrder.products];
-      updatedProducts[productIndex] =
-          updatedProducts[productIndex].copyWith(isOffered: true);
-      final updatedEntries = [
-        for (final entry in currentOrder.displayEntries)
-          if (entry.type == OrderDisplayEntryType.product &&
-              entry.lineIndex == productIndex &&
-              entry.product != null)
-            OrderDisplayEntry.product(
-              product: entry.product!.copyWith(isOffered: true),
-              lineIndex: productIndex,
-              sectionIndex: entry.sectionIndex ?? 0,
-              courseNumber: entry.courseNumber,
-              itemId: entry.itemId,
-            )
-          else
-            entry,
-      ];
-      _syncOrderInSession(
-        currentOrder.copyWith(
-          products: updatedProducts,
-          displayEntries: updatedEntries,
-        ),
-        orderNumber,
-        displayEntriesOverride: updatedEntries,
-      );
-      AppSnackbar.show(
-        'Offert',
-        '${currentOrder.products[productIndex].name} a été offert.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
-      );
+    // New / local-first tickets: offer stays on-device (no remote id yet).
+    if (_mutationsAreLocalOnly ||
+        _isLocalDraft ||
+        currentOrder.isLocalOnly) {
+      _applyLocalProductOffer(currentOrder, productIndex);
       return;
     }
 
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
+      // Creating a new order → details: never toast "order id not found".
+      _applyLocalProductOffer(currentOrder, productIndex);
       return;
     }
 
@@ -2782,6 +2811,11 @@ class TableDetailsController extends GetxController {
       );
     } on ApiException catch (e) {
       debugPrint(_orderRepository.lastAddItemLog);
+      // Offer on a fresh/retired id: keep local offer, hide not-found noise.
+      if (_isOrderIdNotFoundError(e)) {
+        _applyLocalProductOffer(currentOrder, productIndex);
+        return;
+      }
       ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
       AppSnackbar.show('Erreur', 'Impossible d\'offrir l\'article.');

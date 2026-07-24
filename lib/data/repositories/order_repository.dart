@@ -453,8 +453,24 @@ class OrderRepository {
     final detail = await _remote.fetchOrderDetail(orderId);
     final payload = OrderMapper.applyTableOffer(detail);
     final updated = await _remote.updateOrder(orderId, payload);
-    await _local.saveOrderDetail(orderId, updated);
-    return OrderMapper.fromOrderDetail(updated);
+    // Ensure local lock even if API omits status on the PUT response.
+    final saved = Map<String, dynamic>.from(updated);
+    saved['status'] = 'offered';
+    await _local.saveOrderDetail(orderId, saved);
+    return OrderMapper.fromOrderDetail(saved);
+  }
+
+  /// Marks a cached detail as offered (local table-offer / not-found fallback).
+  Future<void> markOrderOfferedLocally(int orderId) async {
+    if (orderId <= 0) return;
+    final existing = _local.readOrderDetail(orderId);
+    if (existing == null) {
+      await _local.saveOrderDetail(orderId, {'id': orderId, 'status': 'offered'});
+      return;
+    }
+    final copy = Map<String, dynamic>.from(existing);
+    copy['status'] = 'offered';
+    await _local.saveOrderDetail(orderId, copy);
   }
 
   /// Updates couverts via PUT /api/orders/:id and returns the mapped order.

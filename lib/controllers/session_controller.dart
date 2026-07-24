@@ -16,6 +16,7 @@ import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
 import '../controllers/login_controller.dart';
+import '../controllers/table_details_controller.dart';
 import '../utils/api_log.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
@@ -1516,6 +1517,60 @@ class SessionController extends GetxController {
     );
   }
 
+  void _applyLocalTableOfferAt(int idx, SessionOrder order) {
+    final offeredProducts = order.products
+        .map(
+          (product) => product.copyWith(
+            price: '0,00 €',
+            isOffered: true,
+          ),
+        )
+        .toList();
+    final offeredEntries = [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(
+              price: '0,00 €',
+              isOffered: true,
+            ),
+            lineIndex: entry.lineIndex ?? 0,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    orders[idx] = order.copyWith(
+      total: '0,00 €',
+      products: offeredProducts,
+      displayEntries: offeredEntries.isNotEmpty
+          ? offeredEntries
+          : order.displayEntries,
+    );
+    orders.refresh();
+    if (order.id > 0) {
+      unawaited(_orderRepository.markOrderOfferedLocally(order.id));
+    }
+  }
+
+  void _notifyTableDetailsOfferedLock() {
+    if (!Get.isRegistered<TableDetailsController>()) return;
+    Get.find<TableDetailsController>().refreshOfferedLock();
+  }
+
+  bool _isOrderIdNotFoundError(ApiException error) {
+    final msg = error.message.toLowerCase();
+    return error.statusCode == 404 ||
+        msg.contains('order id not found') ||
+        msg.contains('the order id not found') ||
+        msg.contains('commande introuvable') ||
+        (msg.contains('order') && msg.contains('not found')) ||
+        (msg.contains('order') && msg.contains('introuvable'));
+  }
+
   Future<void> applyOffer(String orderNumber) async {
     final idx = orders.indexWhere((order) => order.number == orderNumber);
     if (idx < 0) return;
@@ -1524,18 +1579,22 @@ class SessionController extends GetxController {
 
     try {
       if (order.isLocalOnly) {
-        final offeredProducts = order.products
-            .map((product) => product.copyWith(price: '0,00 €'))
-            .toList();
-        orders[idx] = order.copyWith(
-          total: '0,00 €',
-          products: offeredProducts,
-        );
+        _applyLocalTableOfferAt(idx, order);
       } else {
-        final updated = await _orderRepository.applyTableOffer(order.id);
-        _upsertOrderInList(updated);
+        try {
+          final updated = await _orderRepository.applyTableOffer(order.id);
+          _upsertOrderInList(updated);
+        } on ApiException catch (e) {
+          // Fresh create / retired offered shell — apply locally, no error toast.
+          if (_isOrderIdNotFoundError(e)) {
+            _applyLocalTableOfferAt(idx, order);
+          } else {
+            rethrow;
+          }
+        }
       }
 
+      _notifyTableDetailsOfferedLock();
       _showSnack(
         'Offre',
         'Offre appliquée sur la table $orderNumber.',

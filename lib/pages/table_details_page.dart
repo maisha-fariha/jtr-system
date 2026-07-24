@@ -1335,6 +1335,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
       }
 
       final currentOrder = controller.order;
+      final orderOffered = controller.isOrderOffered;
 
       final isCompact = JtrResponsive.isCompactSquare(context);
       final isLarge = JtrResponsive.isLargeDevice(context);
@@ -1391,113 +1392,125 @@ class _MenuGrid extends GetView<TableDetailsController> {
               final itemRadius =
                   JtrResponsive.getResponsiveRadius(context, 10);
 
-              return GestureDetector(
-                onTap: () => controller.onProductTap(product),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  decoration: BoxDecoration(
-                    color: _menuGridItemBackground(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
+              return Opacity(
+                opacity: orderOffered ? 0.45 : 1,
+                child: GestureDetector(
+                  onTap: orderOffered
+                      ? null
+                      : () => controller.onProductTap(product),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: BoxDecoration(
+                      color: _menuGridItemBackground(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      gradient: _menuGridItemGradient(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      borderRadius: BorderRadius.circular(itemRadius),
+                      border: _menuGridItemBorder(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      boxShadow: orderOffered
+                          ? null
+                          : _menuGridItemShadow(isSelected),
                     ),
-                    gradient: _menuGridItemGradient(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
-                    ),
-                    borderRadius: BorderRadius.circular(itemRadius),
-                    border: _menuGridItemBorder(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
-                    ),
-                    boxShadow: _menuGridItemShadow(isSelected),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        top: JtrResponsive.getResponsiveHeight(context, 0),
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          height: JtrResponsive.getResponsiveHeight(context, 4),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? AppTheme.primary.withValues(alpha: 0.95)
-                                : (isInOrder
-                                    ? AppTheme.primary.withValues(alpha: 0.65)
-                                    : Colors.transparent),
-                            borderRadius: BorderRadius.vertical(
-                              top: Radius.circular(itemRadius),
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          top: JtrResponsive.getResponsiveHeight(context, 0),
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            height:
+                                JtrResponsive.getResponsiveHeight(context, 4),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? AppTheme.primary.withValues(alpha: 0.95)
+                                  : (isInOrder
+                                      ? AppTheme.primary.withValues(alpha: 0.65)
+                                      : Colors.transparent),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(itemRadius),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      Padding(
-                        padding: JtrResponsive.getResponsivePadding(
-                          context,
-                          left: 10,
-                          right: 10,
-                          top: 12,
-                          bottom: 10,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                if (product.isComposed)
-                                  Container(
-                                    padding: JtrResponsive.getResponsivePadding(
-                                      context,
-                                      horizontal: 6,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.lightButton.withValues(
-                                        alpha: 0.7,
+                        Padding(
+                          padding: JtrResponsive.getResponsivePadding(
+                            context,
+                            left: 10,
+                            right: 10,
+                            top: 12,
+                            bottom: 10,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  if (product.isComposed)
+                                    Container(
+                                      padding:
+                                          JtrResponsive.getResponsivePadding(
+                                        context,
+                                        horizontal: 6,
+                                        vertical: 4,
                                       ),
-                                      borderRadius: BorderRadius.circular(
-                                        JtrResponsive.getResponsiveRadius(
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.lightButton.withValues(
+                                          alpha: 0.7,
+                                        ),
+                                        borderRadius: BorderRadius.circular(
+                                          JtrResponsive.getResponsiveRadius(
+                                            context,
+                                            8,
+                                          ),
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        Icons.tune,
+                                        size: JtrResponsive.getResponsiveSize(
                                           context,
-                                          8,
+                                          12,
+                                        ),
+                                        color: AppTheme.primary.withValues(
+                                          alpha: 0.85,
                                         ),
                                       ),
                                     ),
-                                    child: Icon(
-                                      Icons.tune,
-                                      size: JtrResponsive.getResponsiveSize(
-                                        context,
-                                        12,
+                                ],
+                              ),
+                              Expanded(
+                                child: Center(
+                                  child: Text(
+                                    product.name,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize:
+                                          _categoryPartFontSize(context, 11),
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.darkText.withValues(
+                                        alpha: orderOffered
+                                            ? 0.45
+                                            : (isInOrder ? 0.78 : 0.92),
                                       ),
-                                      color: AppTheme.primary.withValues(
-                                        alpha: 0.85,
-                                      ),
+                                      height: 1.28,
                                     ),
-                                  ),
-                              ],
-                            ),
-                            Expanded(
-                              child: Center(
-                                child: Text(
-                                  product.name,
-                                  textAlign: TextAlign.center,
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: _categoryPartFontSize(context, 11),
-                                    fontWeight: FontWeight.w700,
-                                    color: AppTheme.darkText.withValues(
-                                      alpha: isInOrder ? 0.78 : 0.92,
-                                    ),
-                                    height: 1.28,
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );

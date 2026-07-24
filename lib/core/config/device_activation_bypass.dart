@@ -6,7 +6,7 @@ class DeviceActivationBypass {
 
   /// When true: prefill test API + bypass code (only if [qrEnabled] is false).
   /// QR scan/import stays available; API stays static until a QR is applied.
-  static const bool enabled = true;
+  static const bool enabled = false;
 
   /// Camera scan + PNG import on activation screen.
   static const bool qrEnabled = false;

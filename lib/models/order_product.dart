@@ -5,6 +5,7 @@ class OrderProduct {
     required this.price,
     this.message,
     this.menuItems = const [],
+    this.isOffered = false,
   });
 
   final String quantity;
@@ -12,6 +13,7 @@ class OrderProduct {
   final String price;
   final String? message;
   final List<String> menuItems;
+  final bool isOffered;
 
   bool get hasMenuItems => menuItems.isNotEmpty;
 
@@ -21,6 +23,7 @@ class OrderProduct {
     String? price,
     String? message,
     List<String>? menuItems,
+    bool? isOffered,
     bool clearMessage = false,
   }) {
     return OrderProduct(
@@ -29,6 +32,7 @@ class OrderProduct {
       price: price ?? this.price,
       message: clearMessage ? null : (message ?? this.message),
       menuItems: menuItems ?? this.menuItems,
+      isOffered: isOffered ?? this.isOffered,
     );
   }
 }

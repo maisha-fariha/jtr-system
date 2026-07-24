@@ -4,6 +4,7 @@ import '../../core/network/api_exception.dart';
 import '../../models/order_display_entry.dart';
 import '../../models/order_product.dart';
 import '../../models/session_order.dart';
+import '../models/local_draft_line.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/order_item_uid.dart';
 
@@ -914,6 +915,116 @@ class OrderMapper {
     return '$hours:$minutes:$seconds';
   }
 
+  /// Resolve DEMANDÉE clock from API `requested_at` for a suite section.
+  ///
+  /// Backend often stamps `requested_at` on course N (or the course holding
+  /// suite lines), not always on N+1 — so we try several candidates.
+  static String? resolveDemandeTimeLabel(
+    Map<String, dynamic>? data, {
+    required int sectionIndex,
+    int? courseNumberHint,
+    List<OrderDisplayEntry>? layout,
+  }) {
+    if (data == null) return null;
+
+    if (layout != null && sectionIndex > 0) {
+      final underCourse = _findRequestedCourseUnderSuivreSection(
+        data,
+        layout,
+        sectionIndex: sectionIndex,
+      );
+      final fromUnder = formatDemandeTime(underCourse?['requested_at']);
+      if (fromUnder != null) return fromUnder;
+    }
+
+    final candidates = <int>{
+      if (courseNumberHint != null && courseNumberHint > 0) ...[
+        courseNumberHint,
+        courseNumberHint + 1,
+      ],
+      if (sectionIndex > 0) ...[
+        sectionIndex,
+        sectionIndex + 1,
+      ],
+    };
+    for (final number in candidates) {
+      final course = findCourseInOrderDetail(data, number);
+      final label = formatDemandeTime(course?['requested_at']);
+      if (label != null) return label;
+    }
+
+    // Last resort: any course that was already requested to kitchen.
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+    String? best;
+    var bestNumber = 1 << 30;
+    for (final seat in seatOrders) {
+      if (seat is! Map) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map) continue;
+        final map = Map<String, dynamic>.from(course);
+        if (!_courseWasRequestedToKitchen(map)) continue;
+        final label = formatDemandeTime(map['requested_at']);
+        if (label == null) continue;
+        final number = (map['course_number'] as num?)?.toInt() ?? 0;
+        if (number > 0 && number < bestNumber) {
+          bestNumber = number;
+          best = label;
+        } else if (best == null) {
+          best = label;
+        }
+      }
+    }
+    return best;
+  }
+
+  static bool _demandeTimeNeedsRefresh(String? label) {
+    if (label == null) return true;
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return true;
+    return trimmed.contains('--');
+  }
+
+  /// Fill DEMANDÉE `--:--:--` / empty labels from API `requested_at`.
+  static List<OrderDisplayEntry> refreshDemandeTimeLabelsFromApi(
+    Map<String, dynamic> data,
+    List<OrderDisplayEntry> entries,
+  ) {
+    var changed = false;
+    final result = <OrderDisplayEntry>[];
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.demandeSeparator) {
+        result.add(entry);
+        continue;
+      }
+      if (!_demandeTimeNeedsRefresh(entry.demandeTimeLabel)) {
+        result.add(entry);
+        continue;
+      }
+      final resolved = resolveDemandeTimeLabel(
+        data,
+        sectionIndex: entry.sectionIndex ?? 0,
+        courseNumberHint: entry.courseNumber,
+        layout: entries,
+      );
+      if (resolved == null) {
+        result.add(entry);
+        continue;
+      }
+      changed = true;
+      result.add(
+        OrderDisplayEntry.demande(
+          sectionIndex: entry.sectionIndex ?? 0,
+          courseNumber: entry.courseNumber ?? entry.sectionIndex ?? 0,
+          demandeTimeLabel: resolved,
+        ),
+      );
+    }
+    return changed ? result : entries;
+  }
+
   static Map<String, dynamic>? findCourseInOrderDetail(
     Map<String, dynamic> data,
     int courseNumber,
@@ -1110,7 +1221,13 @@ class OrderMapper {
       var timeLabel = courseFired == null
           ? null
           : formatDemandeTime(courseFired['requested_at']);
-      if (timeLabel == null && manualKitchenDemande) {
+      timeLabel ??= resolveDemandeTimeLabel(
+        data,
+        sectionIndex: sectionIndex,
+        courseNumberHint: courseNumber,
+        layout: entries,
+      );
+      if (timeLabel == null && (manualKitchenDemande || explicitlyDemanded)) {
         timeLabel =
             formatDemandeTime(DateTime.now().toUtc().toIso8601String());
       }
@@ -1644,17 +1761,21 @@ class OrderMapper {
         sectionIndex++;
         final demandCourseNumber = sectionIndex;
         if (demandedSectionIndices.contains(sectionIndex)) {
-          Map<String, dynamic>? course;
-          if (data != null) {
-            course = findCourseInOrderDetail(data, demandCourseNumber + 1);
-          }
+          final timeLabel = resolveDemandeTimeLabel(
+                data,
+                sectionIndex: sectionIndex,
+                courseNumberHint: demandCourseNumber,
+                layout: [
+                  ...rebuilt,
+                  for (var p = i; p < products.length; p++) products[p],
+                ],
+              ) ??
+              '--:--:--';
           rebuilt.add(
             OrderDisplayEntry.demande(
               sectionIndex: sectionIndex,
               courseNumber: demandCourseNumber,
-              demandeTimeLabel: course == null
-                  ? '--:--:--'
-                  : formatDemandeTime(course['requested_at']) ?? '--:--:--',
+              demandeTimeLabel: timeLabel,
             ),
           );
         } else {
@@ -2992,14 +3113,18 @@ class OrderMapper {
     // After an explicit kitchen send, do not re-overlay pending À SUIVRE counts.
     // When a waiter layout is provided, trust it — never revive deleted suites
     // from a stale Hive count hint.
+    final hasExplicitWaiterLayout = previousDisplayEntries != null &&
+        previousDisplayEntries.isNotEmpty;
     final effectiveDividerCount = applyKitchenDemande
         ? 0
-        : [
-            previousDividerCount,
-            suivreCountHint,
-            suivreSplitHints.length,
-            extractedDividerCount,
-          ].reduce((a, b) => a > b ? a : b);
+        : hasExplicitWaiterLayout
+            ? previousDividerCount
+            : [
+                previousDividerCount,
+                suivreCountHint,
+                suivreSplitHints.length,
+                extractedDividerCount,
+              ].reduce((a, b) => a > b ? a : b);
     final trailingPending = !applyKitchenDemande &&
         layoutHasTrailingPendingSuivre(previousDisplayEntries);
     final previousIsFlat = previousDisplayEntries != null &&
@@ -3115,6 +3240,7 @@ class OrderMapper {
     }
 
     // Keep a trailing empty À SUIVRE the waiter just opened (before first item).
+    entries = refreshDemandeTimeLabelsFromApi(data, entries);
     return _normalizeSuivreLayout(
       entries,
       keepTrailingEmptySuivre: trailingPending ||
@@ -3226,6 +3352,106 @@ class OrderMapper {
     if (product == null) return null;
     // Name + qty only — price formatting ("5" vs "5,00 €") breaks matching.
     return '${product.name.trim().toUpperCase()}|${product.quantity}';
+  }
+
+  /// True when any visible line message differs (comment / pencil edits).
+  static bool orderLineMessagesDiffer(SessionOrder a, SessionOrder b) {
+    final left = _lineMessagesInDisplayOrder(a);
+    final right = _lineMessagesInDisplayOrder(b);
+    if (left.length != right.length) return true;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] != right[i]) return true;
+    }
+    return false;
+  }
+
+  static List<String> _lineMessagesInDisplayOrder(SessionOrder order) {
+    return [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product)
+          entry.product?.message?.trim() ?? '',
+    ];
+  }
+
+  /// Copies `comment` from [sourceDetail] onto [order] lines (by item id, then index).
+  static SessionOrder overlayCommentsFromDetail({
+    required SessionOrder order,
+    required Map<String, dynamic> sourceDetail,
+  }) {
+    final byItemId = <int, String>{};
+    final byLineIndex = <int, String>{};
+    var lineIndex = 0;
+    final seatOrders = sourceDetail['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        for (final course in _sortedCoursesList(seat['courses'])) {
+          for (final item in _visibleItemsInStableAddOrder(course['items'])) {
+            final raw = item['comment'];
+            final text = raw is String ? raw.trim() : '';
+            final id = (item['id'] as num?)?.toInt() ?? 0;
+            if (id > 0) {
+              byItemId[id] = text;
+            } else {
+              byLineIndex[lineIndex] = text;
+            }
+            lineIndex++;
+          }
+        }
+      }
+    }
+
+    if (byItemId.isEmpty && byLineIndex.isEmpty) return order;
+
+    OrderProduct patchProduct(
+      OrderProduct product, {
+      required int index,
+      int? itemId,
+    }) {
+      String? text;
+      if (itemId != null && itemId > 0 && byItemId.containsKey(itemId)) {
+        text = byItemId[itemId];
+      } else if (byLineIndex.containsKey(index)) {
+        text = byLineIndex[index];
+      } else {
+        return product;
+      }
+      if (text == null || text.isEmpty) {
+        return product.copyWith(clearMessage: true);
+      }
+      return product.copyWith(message: text);
+    }
+
+    final patchedEntries = [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: patchProduct(
+              entry.product!,
+              index: entry.lineIndex ?? 0,
+              itemId: entry.itemId,
+            ),
+            lineIndex: entry.lineIndex ?? 0,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+
+    final patchedProducts = [
+      for (final entry in patchedEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          entry.product!,
+    ];
+
+    return order.copyWith(
+      products: patchedProducts.isNotEmpty ? patchedProducts : order.products,
+      displayEntries: patchedEntries,
+    );
   }
 
   static List<OrderDisplayEntry> _rebuildEntriesKeepingDividers({
@@ -3648,6 +3874,271 @@ class OrderMapper {
     return payload;
   }
 
+  /// Course number for a product line from the current display walk (Send All).
+  static int resolveCourseNumberForLineIndexInLayout(
+    List<OrderDisplayEntry> layout,
+    int lineIndex,
+  ) {
+    var course = 1;
+    for (final entry in layout) {
+      if (entry.isSectionDivider) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) {
+          course = above + 1;
+        } else {
+          final section = entry.sectionIndex ?? 0;
+          course = section > 0 ? section + 1 : 2;
+        }
+        continue;
+      }
+      if (entry.type == OrderDisplayEntryType.product &&
+          entry.lineIndex == lineIndex) {
+        final fromEntry = entry.courseNumber;
+        if (fromEntry != null && fromEntry > 0) return fromEntry;
+        return course;
+      }
+    }
+    return 1;
+  }
+
+  /// POST /api/orders with all locally drafted lines (no seed product).
+  static Map<String, dynamic> buildCreateOrderFromDraftLines({
+    required int waiterId,
+    required int numberOfGuests,
+    required int tableId,
+    int? salesZoneId,
+    required List<LocalDraftLine> lines,
+  }) {
+    if (lines.isEmpty) {
+      throw ArgumentError('Cannot create an order without items.');
+    }
+
+    const defaultSeat = 1;
+    final byCourse = <int, List<LocalDraftLine>>{};
+    for (final line in lines) {
+      final courseNumber = line.courseNumber > 0 ? line.courseNumber : 1;
+      byCourse.putIfAbsent(courseNumber, () => []).add(line);
+    }
+
+    final courseNumbers = byCourse.keys.toList()..sort();
+    final courses = [
+      for (final courseNumber in courseNumbers)
+        {
+          'id': 0,
+          'course_number': courseNumber,
+          'seat_number': defaultSeat,
+          'items': [
+            for (final line in byCourse[courseNumber]!)
+              _buildNewItemPayload(
+                seatNumber: line.seatNumber > 0 ? line.seatNumber : defaultSeat,
+                courseId: 0,
+                productId: line.productId,
+                qty: line.qty,
+                subTotal: line.unitPrice * line.qty,
+                status: 'to_be_continued',
+                comment: line.comment,
+                menuSelections: line.menuSelections,
+                forCreate: true,
+              ),
+          ],
+        },
+    ];
+
+    final payload = <String, dynamic>{
+      'waiter_id': waiterId,
+      'number_of_guests': numberOfGuests,
+      'table_id': tableId,
+      'seat_orders': [
+        {
+          'seat_number': defaultSeat,
+          'courses': courses,
+        },
+      ],
+    };
+    if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    return payload;
+  }
+
+  static const waiterLineDeleteCancelReason =
+      'Annulé par le serveur (modification ticket)';
+
+  /// Server item ids absent from the waiter's local ticket — cancel on Send PUT.
+  static Set<int> itemIdsToCancelForLocalSend({
+    required Map<String, dynamic> serverDetail,
+    required List<OrderDisplayEntry> layoutHints,
+    Set<int> extraCancelItemIds = const {},
+  }) {
+    final keepIds = productItemIds(layoutHints);
+    final toCancel = <int>{...extraCancelItemIds};
+    final seatNumber = resolveDefaultSeatNumber(serverDetail);
+    for (final row in _visibleItemsWithCourseNumbers(
+      serverDetail,
+      seatNumber: seatNumber,
+    )) {
+      final id = (row.item['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      if (!keepIds.contains(id)) {
+        toCancel.add(id);
+      }
+    }
+    return toCancel;
+  }
+
+  static void _markItemCancelled(
+    Map<String, dynamic> item, {
+    String cancelReason = waiterLineDeleteCancelReason,
+  }) {
+    item['status'] = 'cancelled';
+    final now = DateTime.now().toUtc().toIso8601String();
+    item['cancel_reason'] = cancelReason;
+    item['canceled_datetime'] = now;
+    item['cancelled_at'] = now;
+  }
+
+  static int cancelItemIdsOnDetail(
+    Map<String, dynamic> orderDetail,
+    Set<int> itemIds,
+  ) {
+    var count = 0;
+    for (final id in itemIds) {
+      if (cancelOrderLineByItemId(orderDetail, id)) count++;
+    }
+    return count;
+  }
+
+  static bool mutateVisibleItemByItemId(
+    Map<String, dynamic> orderDetail,
+    int itemId,
+    void Function(Map<String, dynamic> item) mutate,
+  ) {
+    if (itemId <= 0) return false;
+    final seatOrders = orderDetail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is! Map<String, dynamic>) continue;
+          if (item['status'] == 'cancelled') continue;
+          final id = (item['id'] as num?)?.toInt() ?? 0;
+          if (id != itemId) continue;
+          mutate(item);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /// PUT sync for 2nd+ Send: cancel removed lines, update kept, append new.
+  static Map<String, dynamic> applyLocalDraftSendOntoExistingOrder({
+    required Map<String, dynamic> orderDetail,
+    required List<LocalDraftLine> lines,
+    required List<OrderDisplayEntry> layoutHints,
+    Set<int> extraCancelItemIds = const {},
+  }) {
+    final working = copyOrderDetail(orderDetail);
+    final cancelIds = itemIdsToCancelForLocalSend(
+      serverDetail: working,
+      layoutHints: layoutHints,
+      extraCancelItemIds: extraCancelItemIds,
+    );
+    cancelItemIdsOnDetail(working, cancelIds);
+
+    final productEntries = layoutHints
+        .where((entry) => entry.type == OrderDisplayEntryType.product)
+        .toList()
+      ..sort(
+        (a, b) => (a.lineIndex ?? 0).compareTo(b.lineIndex ?? 0),
+      );
+
+    final seatNumber = resolveDefaultSeatNumber(working);
+
+    for (final entry in productEntries) {
+      final lineIndex = entry.lineIndex ?? -1;
+      if (lineIndex < 0 || lineIndex >= lines.length) continue;
+      final draft = lines[lineIndex];
+      final itemId = entry.itemId ?? 0;
+
+      if (itemId > 0) {
+        mutateVisibleItemByItemId(working, itemId, (item) {
+          final qty = draft.qty < 1 ? 1 : draft.qty;
+          item['qty'] = qty;
+          item['sub_total'] = draft.unitPrice * qty;
+          final comment = draft.comment.trim();
+          if (comment.isNotEmpty) {
+            item['comment'] = comment;
+          }
+        });
+        continue;
+      }
+
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      final course = findCourseInOrderDetail(working, courseNumber);
+      final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
+      final itemStatus = _resolveAppendItemStatus(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+      );
+
+      final newItem = _buildNewItemPayload(
+        seatNumber: seatNumber,
+        courseId: courseId,
+        productId: draft.productId,
+        qty: draft.qty < 1 ? 1 : draft.qty,
+        subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+        status: itemStatus,
+        comment: draft.comment,
+        menuSelections: draft.menuSelections,
+        isStillMenuMissing: false,
+        forCreate: false,
+      );
+
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+        newItem: newItem,
+      );
+    }
+
+    // Safety: cancel anything still visible that is not on the waiter ticket.
+    cancelItemIdsOnDetail(
+      working,
+      itemIdsToCancelForLocalSend(
+        serverDetail: working,
+        layoutHints: layoutHints,
+        extraCancelItemIds: extraCancelItemIds,
+      ),
+    );
+
+    if (layoutHints.isNotEmpty &&
+        (layoutHasProductsUnderPendingSuivre(layoutHints) ||
+            layoutHasTrailingPendingSuivre(layoutHints) ||
+            suivreSeparatorCount(layoutHints) > 0)) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      if (aligned.changed) {
+        working['seat_orders'] = aligned.detail['seat_orders'];
+      }
+    }
+
+    final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
+    payload['status'] = 'open';
+    payload['payment_status'] = 'not_paid';
+    payload['payment_status_detailed'] = 'not_paid';
+    return payload;
+  }
+
   static Map<String, dynamic> buildStartTableSessionPayload({
     required int waiterId,
     required int numberOfGuests,
@@ -3656,6 +4147,92 @@ class OrderMapper {
       'waiter_id': waiterId,
       'number_of_guests': numberOfGuests,
     };
+  }
+
+  /// Parses a waiter-entered table key (`42`, `T42`) for open-by-number.
+  static int? parseTableNumberForOpenByNumber(String tableNumber) {
+    final normalized = normalizeTableKey(tableNumber);
+    if (normalized.isEmpty) return null;
+    return int.tryParse(normalized);
+  }
+
+  /// POST /api/tables/open-by-number request body.
+  static Map<String, dynamic> buildOpenTableByNumberPayload({
+    required int tableNumber,
+    required int numberOfGuests,
+    required int waiterId,
+    String? waiterName,
+    int? salesZoneId,
+  }) {
+    final payload = <String, dynamic>{
+      'table_number': tableNumber,
+      'number_of_guests': numberOfGuests < 1 ? 1 : numberOfGuests,
+      'waiter_id': waiterId,
+    };
+    final name = waiterName?.trim();
+    if (name != null && name.isNotEmpty) {
+      payload['waiter_name'] =
+          name.length > 255 ? name.substring(0, 255) : name;
+    }
+    if (salesZoneId != null && salesZoneId > 0) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
+    return payload;
+  }
+
+  /// Table row from open-by-number success or conflict `data`.
+  static ResolvedTable resolvedTableFromPayload(
+    Map<String, dynamic> data, {
+    int? fallbackTableNumber,
+  }) {
+    return _toResolvedTable(data);
+  }
+
+  /// Active order id from a 409 open-by-number response (table or nested data).
+  static int? activeOrderIdFromConflictBody(Object? body) {
+    if (body is! Map<String, dynamic>) return null;
+
+    int? fromMap(Map<String, dynamic> map) {
+      final fromTable = _activeOrderId(map);
+      if (fromTable != null && fromTable > 0) return fromTable;
+
+      final active = map['active_order'];
+      if (active is Map<String, dynamic>) {
+        final id = (active['id'] as num?)?.toInt();
+        if (id != null && id > 0) return id;
+      }
+
+      final direct = map['order_id'] ?? map['active_order_id'];
+      if (direct is num && direct > 0) return direct.toInt();
+      return null;
+    }
+
+    final data = body['data'];
+    if (data is Map<String, dynamic>) {
+      final nested = fromMap(data);
+      if (nested != null) return nested;
+    }
+    return fromMap(body);
+  }
+
+  static ResolvedTable? resolvedTableFromConflictBody(
+    Object? body, {
+    required int fallbackTableNumber,
+  }) {
+    if (body is! Map<String, dynamic>) return null;
+
+    Map<String, dynamic>? tableMap;
+    final data = body['data'];
+    if (data is Map<String, dynamic>) {
+      if (data.containsKey('id') || data.containsKey('table_number')) {
+        tableMap = data;
+      }
+    }
+    tableMap ??= body.containsKey('id') || body.containsKey('table_number')
+        ? body
+        : null;
+    if (tableMap == null) return null;
+    return _toResolvedTable(tableMap);
   }
 
   static ResolvedTable? resolveTable(
@@ -6102,6 +6679,21 @@ class OrderMapper {
   static const emptyCreateSeedCancelReason =
       'Commande vide — article automatique annulé';
 
+  /// Builds the server `cancel_reason` from the table-delete note dialog.
+  static String buildCancelReason({
+    required String note,
+    required String reportedTo,
+  }) {
+    final trimmedNote = note.trim();
+    final trimmedTo = reportedTo.trim();
+    if (trimmedNote.isEmpty && trimmedTo.isEmpty) {
+      return emptyCreateSeedCancelReason;
+    }
+    if (trimmedNote.isEmpty) return 'Signalé par $trimmedTo';
+    if (trimmedTo.isEmpty) return trimmedNote;
+    return '$trimmedNote — signalé par $trimmedTo';
+  }
+
   /// True when the ticket still has ONLY the empty-create seed line(s).
   static bool hasOnlyEmptyCreateSeed(
     Map<String, dynamic> orderDetail, {
@@ -6433,6 +7025,10 @@ class OrderMapper {
           final id = (item['id'] as num?)?.toInt() ?? 0;
           if (id != itemId) continue;
           item['status'] = 'cancelled';
+          item['cancel_reason'] = waiterLineDeleteCancelReason;
+          final now = DateTime.now().toUtc().toIso8601String();
+          item['canceled_datetime'] = now;
+          item['cancelled_at'] = now;
           return true;
         }
       }
@@ -6531,12 +7127,22 @@ class OrderMapper {
 
   static double parseOrderPayableAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
-    final remaining = order['remaining_amount'];
-    if (remaining is num && remaining > 0) return remaining.toDouble();
-    if (remaining is String) {
-      final parsed =
-          double.tryParse(remaining.replaceAll(',', '.').replaceAll('€', '').trim());
-      if (parsed != null && parsed > 0) return parsed;
+
+    double? parseMoney(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      if (raw is String) {
+        return double.tryParse(
+          raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+        );
+      }
+      return null;
+    }
+
+    final remaining = parseMoney(order['remaining_amount']);
+    final totalPaid = parseMoney(order['total_paid']) ?? 0;
+    // After a partial/full payment, remaining is authoritative (even when 0).
+    if (remaining != null && (remaining > 0 || totalPaid > 0)) {
+      return remaining < 0 ? 0 : remaining;
     }
 
     final total = parseOrderTotalAmount(data);
@@ -7028,6 +7634,14 @@ class OrderMapper {
       );
     }
 
+    if (layoutHints != null && layoutHints.isNotEmpty) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      working = aligned.detail;
+    }
+
     return buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
   }
 
@@ -7077,6 +7691,16 @@ class OrderMapper {
       courseNumber: course.number,
       newItem: newItem,
     );
+
+    if (layoutHints != null && layoutHints.isNotEmpty) {
+      final aligned = alignPendingSuivreLayoutOntoCourses(
+        working,
+        layout: layoutHints,
+      );
+      if (aligned.changed) {
+        return buildOrderUpdatePayload(aligned.detail);
+      }
+    }
 
     return buildOrderUpdatePayload(working);
   }
@@ -7318,7 +7942,7 @@ class OrderMapper {
         : 'Article';
     final qty = item['qty'] ?? 1;
     final subTotal = item['sub_total']?.toString() ?? '0';
-    final isOffer = item['is_offer'] == true;
+    final isOffer = _isOfferedLineItem(item);
     final comment = item['comment'];
     final message = comment is String && comment.trim().isNotEmpty
         ? comment.trim()
@@ -7330,6 +7954,7 @@ class OrderMapper {
       price: isOffer ? '0,00 €' : formatPrice(subTotal),
       message: message,
       menuItems: menuSelectionLabelsFromItem(item),
+      isOffered: isOffer,
     );
   }
 

@@ -11,6 +11,7 @@ import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../data/mappers/order_mapper.dart';
+import '../data/order_optimistic_sync.dart';
 import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
@@ -77,6 +78,9 @@ class SessionController extends GetxController {
   final SessionRepository _sessionRepository;
   final AuthRepository _authRepository;
 
+  OrderOptimisticSync _optimisticSyncFor(String orderNumber) =>
+      _orderRepository.optimisticSyncFor(orderNumber.hashCode);
+
   final selectedAction = SessionAction.nouvelleCommande.obs;
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
@@ -88,6 +92,9 @@ class SessionController extends GetxController {
   final isLoadingStatistics = false.obs;
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
+
+  /// Bumped when the session list should jump to the top (e.g. after Send).
+  final listScrollSignal = 0.obs;
 
   /// When deleting an order we optimistically remove it from [orders],
   /// but a subsequent forced refresh may temporarily still return the
@@ -421,9 +428,13 @@ class SessionController extends GetxController {
   ) {
     if (previous == null) return incoming;
 
-    // Brand-new empty table: never keep a leaked API seed in memory.
+    // Intentional empty ticket after delete-all — keep empty until real lines arrive.
     if (previous.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(previous.id)) {
+      if (incoming.products.isNotEmpty || incoming.displayEntries.isNotEmpty) {
+        _orderRepository.clearEmptyShellDisplay(previous.id);
+        return incoming;
+      }
       return previous.copyWith(
         products: const [],
         displayEntries: const [],
@@ -572,30 +583,9 @@ class SessionController extends GetxController {
           final cached = _orderRepository.cachedOrderDetail(summary.id);
           SessionOrder detail;
           if (cached != null) {
-            final seedId = _orderRepository.lastEmptyOrderSeedProductId;
-            detail = OrderMapper.sessionOrderHidingCreateSeed(
-              cached,
-              seedProductId: seedId,
-            ).copyWith(
+            detail = OrderMapper.fromOrderDetail(cached).copyWith(
               id: summary.id,
             );
-            // Keep brand-new tables empty until a real line is added — do not
-            // clear the lock just because cache still holds the API seed.
-            // If the session already has optimistic lines, lift the lock.
-            if (_orderRepository.shouldDisplayAsEmptyCreateShell(summary.id)) {
-              if (previous != null &&
-                  (previous.products.isNotEmpty ||
-                      previous.displayEntries.isNotEmpty)) {
-                _orderRepository.clearEmptyShellDisplay(summary.id);
-              } else {
-                detail = detail.copyWith(
-                  products: const [],
-                  displayEntries: const [],
-                  itemCount: 0,
-                  total: OrderMapper.formatPrice('0'),
-                );
-              }
-            }
           } else {
             detail = await _orderRepository.getOrderDetail(summary.id);
           }
@@ -605,7 +595,7 @@ class SessionController extends GetxController {
               _orderRepository.detailRevision(summary.id)) {
             return;
           }
-          // Empty-shell may replace a brief seed flash — never wipe a ticket
+          // Empty-shell may replace a brief stale row — never wipe a ticket
           // that already shows waiter-added lines (add after delete-all).
           final emptyShellOverride =
               _orderRepository.shouldDisplayAsEmptyCreateShell(summary.id) &&
@@ -671,6 +661,9 @@ class SessionController extends GetxController {
 
   /// After delete we suppress that table briefly; recreating must clear it
   /// or the new order never appears in the list (and row sync is dropped).
+  void clearSuppressedTable(String tableNumber) =>
+      _clearSuppressedTable(tableNumber);
+
   void _clearSuppressedTable(String tableNumber) {
     _suppressedTableNumbers.removeWhere(
       (suppressed) => _tableKeysMatch(suppressed, tableNumber),
@@ -687,24 +680,12 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Never let create-seed flash into the session list / table details.
     var safeOrder = order;
     var forceReplace = replaceDetail;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
-      // A forced non-empty replace is a real add after delete-all — lift the lock.
-      if (forceReplace &&
-          (order.products.isNotEmpty || order.displayEntries.isNotEmpty)) {
+      if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
         _orderRepository.clearEmptyShellDisplay(order.id);
-      } else if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
-        safeOrder = order.copyWith(
-          products: const [],
-          displayEntries: const [],
-          itemCount: 0,
-          total: OrderMapper.formatPrice('0'),
-        );
-        // PreferDetailed would otherwise keep a seed that already leaked in.
-        forceReplace = true;
       } else {
         forceReplace = true;
       }
@@ -762,6 +743,29 @@ class SessionController extends GetxController {
   /// which broke deleting the last article).
   void updateOrderRow(SessionOrder order, {bool replaceDetail = false}) =>
       _upsertOrderInList(order, replaceDetail: replaceDetail);
+
+  /// Moves [order] to the top of the session list and asks the UI to scroll up.
+  ///
+  /// Used after Send All so the waiter sees the newly created/updated table
+  /// without manually scrolling.
+  void promoteOrderToTop(
+    SessionOrder order, {
+    bool replaceDetail = true,
+  }) {
+    clearSuppressedTable(order.number);
+    _upsertOrderInList(order, replaceDetail: replaceDetail);
+
+    final idx = orders.indexWhere((item) {
+      if (order.id > 0 && item.id == order.id) return true;
+      return _tableKeysMatch(item.number, order.number);
+    });
+    if (idx > 0) {
+      final row = orders.removeAt(idx);
+      orders.insert(0, row);
+      orders.refresh();
+    }
+    listScrollSignal.value++;
+  }
 
   static String normalizeTableKey(String value) =>
       OrderMapper.normalizeTableKey(value);
@@ -986,6 +990,10 @@ class SessionController extends GetxController {
     // Own open order already in this app's session list → reopen + optional guest PUT.
     final existingOwn = _findOwnOpenOrderForTable(tableNumber);
     if (existingOwn != null) {
+      logOrderFlow(
+        '_createTableAndOpenDetails SKIP open-by-number — '
+        'own order already in list orderId=${existingOwn.id}',
+      );
       await _reopenOwnOrderAndUpdateGuests(
         existing: existingOwn,
         guests: guests,
@@ -993,241 +1001,51 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Delete suppress must not block the recreate upsert / details open.
     _clearSuppressedTable(tableNumber);
 
-    isCreatingOrder.value = true;
-    SessionOrder? created;
-    var attemptedCreate = false;
-    var blockRecovery = false;
-
-    try {
-      // Prefer cached tables for speed; refresh only if the table is missing
-      // or create fails with a stale "already active" guard.
-      var tables = await _sessionRepository.getTablesList();
-      logOrderFlow(
-        OrderMapper.buildTablesPostOrderAvailabilityLog(
-          tables,
-          targetTableNumber: tableNumber,
-        ),
-      );
-      var target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
-      if (target == null) {
-        tables = await _sessionRepository.getTablesList(forceRefresh: true);
-        target = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
-      }
-      if (target == null) {
-        logOrderFlow('_createTableAndOpenDetails ABORT table not found');
-        _showSnack('Erreur', 'Table $tableNumber introuvable.');
-        return;
-      }
-      final reclaimOwnOrphan = OrderMapper.canReclaimOrphanTableSession(
-        tables,
-        tableNumber,
-        waiterId: waiterId,
-      );
-
-      // Other waiter's table → Skip dialog (do not create / release).
-      if (OrderMapper.shouldShowSkipDialogForCreate(
-        tables,
-        tableNumber,
-        waiterId: waiterId,
-      )) {
-        logOrderFlow(
-          '_createTableAndOpenDetails ABORT skip dialog '
-          'table=$tableNumber '
-          'owner=${OrderMapper.activeOrderOwnerId(tables, tableNumber)} '
-          'status=${OrderMapper.activeOrderStatus(tables, tableNumber)}',
-        );
-        blockRecovery = true;
-        if (context.mounted) {
-          await TableOccupiedDialog.show(
-            context: context,
-            userName: _currentUserDisplayName,
-            tableNumber: tableNumber,
-          );
-        }
-        return;
-      }
-      if (reclaimOwnOrphan) {
-        logOrderFlow(
-          '_createTableAndOpenDetails reclaim orphan session '
-          'table=$tableNumber tableId=${target.id}',
-        );
-      }
-
-      final salesZoneId = OrderMapper.inferSalesZoneId(
-        tables,
-        preferred: activeDay.value.salesZoneId,
-        table: target,
-      );
-
-      attemptedCreate = true;
-      try {
-        created = await _createTableOrderWithFreshTablesRetry(
-          waiterId: waiterId,
-          tableNumber: tableNumber,
-          guests: guests,
-          tables: tables,
-          salesZoneId: salesZoneId,
-          context: context,
-        );
-        if (created == null) return;
-
-        final opened = created!;
-        _clearSuppressedTable(tableNumber);
-        _clearSuppressedTable(opened.number);
-        _upsertOrderInList(opened);
-        isCreatingOrder.value = false;
-        logOrderFlow(
-          '_createTableAndOpenDetails OPEN table=${opened.number} '
-          'orderId=${opened.id}',
-        );
-        openTableDetails(
-          opened.number,
-          orderId: opened.id,
-          deferDetailFetch: true,
-          seedOrder: opened,
-        );
-        unawaited(
-          refreshOrderList(
-            pinOrder: opened,
-            background: true,
-          ),
-        );
-        return;
-      } on ApiException catch (e) {
-        final recovered = await _orderRepository.tryRecoverCreatedOrder(
-          tableNumber: tableNumber,
-        );
-        created = recovered?.order;
-        if (created != null) {
-          final recoveredWaiter = created.waiterId;
-          if (recoveredWaiter != null &&
-              recoveredWaiter > 0 &&
-              recoveredWaiter != waiterId) {
-            created = null;
-            blockRecovery = true;
-            if (context.mounted) {
-              await TableOccupiedDialog.show(
-                context: context,
-                userName: _currentUserDisplayName,
-                tableNumber: tableNumber,
-              );
-            }
-            return;
-          }
-        } else {
-          if (OrderMapper.isTableOwnershipDeniedMessage(e.message)) {
-            blockRecovery = true;
-            if (context.mounted) {
-              await TableOccupiedDialog.show(
-                context: context,
-                userName: _currentUserDisplayName,
-                tableNumber: tableNumber,
-              );
-            }
-          } else {
-            _showSnack('Erreur', e.message);
-          }
-        }
-      }
-    } catch (_) {
-      // Background refresh may still surface the order if the backend created it.
-    } finally {
-      isCreatingOrder.value = false;
-      if (attemptedCreate && !blockRecovery) {
-        if (created == null) {
-          final resolved = await _orderRepository.resolveOrderIdForTableNumber(
-            tableNumber,
-          );
-          if (resolved != null && resolved > 0) {
-            try {
-              created = await _orderRepository.openAsEmptyTableOrder(resolved);
-            } catch (_) {
-              created = null;
-            }
-          }
-        }
-
-        final usable = created;
-        if (usable != null &&
-            usable.id > 0 &&
-            (usable.waiterId == null ||
-                usable.waiterId == 0 ||
-                usable.waiterId == waiterId)) {
-          // Delete suppress is keyed by table number — clear so recreate shows.
-          _clearSuppressedTable(tableNumber);
-          _clearSuppressedTable(usable.number);
-          _upsertOrderInList(usable);
-          logOrderFlow(
-            '_createTableAndOpenDetails OPEN table=${usable.number} orderId=${usable.id}',
-          );
-          openTableDetails(
-            usable.number,
-            orderId: usable.id,
-            deferDetailFetch: true,
-            seedOrder: usable,
-          );
-          // Keep empty shell pinned if list soft-refresh races ahead of API.
-          unawaited(
-            refreshOrderList(
-              pinOrder: usable,
-              background: true,
-            ),
-          );
-        } else if (usable != null &&
-            usable.waiterId != null &&
-            usable.waiterId != waiterId) {
-          if (context.mounted) {
-            await TableOccupiedDialog.show(
-              context: context,
-              userName: _currentUserDisplayName,
-              tableNumber: tableNumber,
-            );
-          }
-        }
-      }
+    final parsedTableNumber =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
+            int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
+            0;
+    if (parsedTableNumber < 1) {
+      _showSnack('Erreur', 'Numéro de table invalide.');
+      return;
     }
+
+    // Local-first: no POST /api/orders until Send All — items stay on-device.
+    final placeholder = OrderMapper.buildSessionPlaceholderOrder(
+      tableNumber: parsedTableNumber,
+      numberOfGuests: guests,
+    );
+
+    _upsertOrderInList(placeholder);
+    logOrderFlow(
+      '_createTableAndOpenDetails LOCAL DRAFT table=$parsedTableNumber '
+      'guests=$guests',
+    );
+    openTableDetails(
+      placeholder.number,
+      deferDetailFetch: true,
+      seedOrder: placeholder,
+    );
   }
 
-  Future<SessionOrder?> _createTableOrderWithFreshTablesRetry({
+  Future<SessionOrder?> _createTableOrderFromNumber({
     required int waiterId,
     required String tableNumber,
     required int guests,
-    required List<Map<String, dynamic>> tables,
     required int? salesZoneId,
+    required String? waiterName,
     required BuildContext context,
   }) async {
-    Future<SessionOrder> run(List<Map<String, dynamic>> snapshot) async {
-      final result = await _orderRepository.createTableOrder(
-        waiterId: waiterId,
-        tableNumber: tableNumber,
-        numberOfGuests: guests,
-        tables: snapshot,
-        salesZoneId: salesZoneId,
-      );
-      return result.order;
-    }
-
-    SessionOrder order;
-    try {
-      order = await run(tables);
-    } on ApiException catch (error) {
-      final message = error.message.toLowerCase();
-      final staleTableGuard = message.contains('déjà') ||
-          message.contains('deja') ||
-          message.contains('active') ||
-          message.contains('already');
-      if (!staleTableGuard) rethrow;
-
-      logOrderFlow(
-        '_createTableOrderWithFreshTablesRetry refresh tables after: '
-        '${error.message}',
-      );
-      final fresh = await _sessionRepository.getTablesList(forceRefresh: true);
-      order = await run(fresh);
-    }
+    final result = await _orderRepository.createTableOrder(
+      waiterId: waiterId,
+      tableNumber: tableNumber,
+      numberOfGuests: guests,
+      salesZoneId: salesZoneId,
+      waiterName: waiterName,
+    );
+    final order = result.order;
 
     final createdWaiter = order.waiterId;
     if (createdWaiter != null &&
@@ -1313,6 +1131,7 @@ class SessionController extends GetxController {
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );
   }
@@ -1333,28 +1152,30 @@ class SessionController extends GetxController {
   }
 
   String get _currentUserDisplayName {
+    final full = _currentUserFullName;
+    if (full == null || full.isEmpty) return 'Utilisateur';
+    return full.split(' ').first;
+  }
+
+  String? get _currentUserFullName {
     if (Get.isRegistered<AuthRepository>()) {
       final session = Get.find<AuthRepository>().cachedSession;
-      final name = session?.user.name;
-      if (name != null && name.isNotEmpty) {
-        return name.split(' ').first;
-      }
+      final name = session?.user.name?.trim();
+      if (name != null && name.isNotEmpty) return name;
     }
 
     if (Get.isRegistered<LoginController>()) {
       final login = Get.find<LoginController>();
       final selected = login.selectedUser.value;
-      if (selected != null) {
-        return selected.name.split(' ').first;
+      if (selected != null && selected.name.trim().isNotEmpty) {
+        return selected.name.trim();
       }
 
       final identifiant = login.identifiantController.text.trim();
-      if (identifiant.isNotEmpty) {
-        return identifiant.split(' ').first.toUpperCase();
-      }
+      if (identifiant.isNotEmpty) return identifiant;
     }
 
-    return 'Utilisateur';
+    return null;
   }
 
   int get _currentWaiterId {
@@ -1396,51 +1217,142 @@ class SessionController extends GetxController {
       title: 'Demander la suite',
       message:
           'Envoyer la demande de suite pour la table ${selected.orderNumber} ?',
-      onConfirm: () async {
-        try {
-          var layoutSource = order;
-          if (OrderMapper.sectionDividerCount(layoutSource.displayEntries) ==
-                  0 &&
-              layoutSource.id > 0) {
-            try {
-              layoutSource = await _orderRepository.getOrderDetail(
-                layoutSource.id,
-                previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-                  layoutSource.displayEntries,
-                ),
-              );
-            } catch (_) {}
-          }
+      onConfirm: () {
+        final orderId = order.id;
+        final tableNumber = selected.orderNumber;
+        final layoutSource = _layoutSourceForSessionDemande(order);
+        final layoutHints = OrderMapper.coalesceLayoutHints(
+          layoutSource.displayEntries,
+        );
+        final sectionIndex = layoutHints == null
+            ? null
+            : OrderMapper.firstPendingSuivreSectionIndex(layoutHints);
+        final snapshot = OrderOptimisticSync.deepSnapshot(layoutSource);
+        final demandeTimeLabel = _freshDemandeTimeLabel();
+        SessionOrder? predicted;
 
-          final updated = await _orderRepository.requestNextCourses(
-            layoutSource.id,
-            previousDisplayEntries: OrderMapper.coalesceLayoutHints(
-              layoutSource.displayEntries,
-            ),
+        if (sectionIndex != null && sectionIndex > 0 && layoutHints != null) {
+          predicted = OrderMapper.rebuildOrderAfterSuivreDemande(
+            serverOrder: layoutSource,
+            liveLayout: layoutHints,
+            suivreSectionIndex: sectionIndex,
+            demandeTimeLabel: demandeTimeLabel,
           );
-          updateOrderRow(updated, replaceDetail: true);
-          if (context.mounted) {
+          updateOrderRow(predicted, replaceDetail: true);
+          _showSnack(
+            'Suite demandée',
+            'La suite a été envoyée pour la table $tableNumber.',
+            context: context,
+          );
+        }
+
+        final predictedLayout = predicted?.displayEntries;
+        final syncKey = tableNumber.hashCode;
+        final optimisticSync = _optimisticSyncFor(tableNumber);
+        // Capture pre-demande layout — live row is flipped optimistically before sync.
+        final layoutBeforeDemande = List<OrderDisplayEntry>.from(
+          layoutHints ?? snapshot.displayEntries,
+        );
+        final demandSectionIndex = sectionIndex;
+        optimisticSync.enqueue(
+          syncKey: syncKey,
+          snapshot: snapshot,
+          apply: (updated) {
+            if (demandSectionIndex != null &&
+                demandSectionIndex > 0 &&
+                predictedLayout != null) {
+              final merged = OrderMapper.rebuildOrderAfterSuivreDemande(
+                serverOrder: updated,
+                liveLayout: predictedLayout,
+                suivreSectionIndex: demandSectionIndex,
+                demandeTimeLabel: demandeTimeLabel,
+              );
+              updateOrderRow(merged, replaceDetail: true);
+              return;
+            }
+            updateOrderRow(updated, replaceDetail: true);
             _showSnack(
               'Suite demandée',
-              'La suite a été envoyée pour la table ${selected.orderNumber}.',
+              'La suite a été envoyée pour la table $tableNumber.',
               context: context,
             );
-          }
-        } on ApiException catch (e) {
-          if (context.mounted) {
-            _showSnack('Erreur', e.message, context: context);
-          }
-        } catch (_) {
-          if (context.mounted) {
+          },
+          sync: () async {
+            final layoutForDemande = OrderMapper.coalesceLayoutHints(
+                  layoutBeforeDemande,
+                ) ??
+                OrderMapper.coalesceLayoutHints(snapshot.displayEntries);
+
+            // Same path as table-details Demande: ensure suite on a writable
+            // course then request-courses (session "next" path skipped ensure
+            // when live layout was already flipped to DEMANDÉE).
+            if (demandSectionIndex != null &&
+                demandSectionIndex > 0 &&
+                layoutForDemande != null) {
+              var preferred = demandSectionIndex + 1;
+              for (final entry in layoutForDemande) {
+                if (entry.type != OrderDisplayEntryType.suivreSeparator) {
+                  continue;
+                }
+                if (entry.sectionIndex != demandSectionIndex) continue;
+                final above = entry.courseNumber ?? demandSectionIndex;
+                preferred =
+                    above > 0 ? above + 1 : demandSectionIndex + 1;
+                break;
+              }
+              return _orderRepository.requestCourseForSuivreSection(
+                orderId,
+                courseNumber: preferred,
+                previousDisplayEntries: layoutForDemande,
+                suivreSectionIndex: demandSectionIndex,
+              );
+            }
+
+            return _orderRepository.requestNextCourses(
+              orderId,
+              previousDisplayEntries: layoutForDemande,
+            );
+          },
+          recover: (snap) async {
+            try {
+              return await _orderRepository.getOrderDetail(
+                orderId,
+                previousDisplayEntries: snap.displayEntries,
+              );
+            } catch (_) {
+              return snap;
+            }
+          },
+          onError: (error) {
+            updateOrderRow(snapshot, replaceDetail: true);
+            if (error is ApiException) {
+              _showSnack('Erreur', error.message, context: context);
+              return;
+            }
             _showSnack(
               'Erreur',
               'Impossible d\'envoyer la demande de suite.',
               context: context,
             );
-          }
-        }
+          },
+        );
       },
     );
+  }
+
+  SessionOrder _layoutSourceForSessionDemande(SessionOrder order) {
+    if (OrderMapper.coalesceLayoutHints(order.displayEntries) != null) {
+      return order;
+    }
+    if (order.id <= 0) return order;
+    return _orderRepository.cachedSessionOrder(order.id) ?? order;
+  }
+
+  String _freshDemandeTimeLabel() {
+    return OrderMapper.formatDemandeTime(
+          DateTime.now().toUtc().toIso8601String(),
+        ) ??
+        '--:--:--';
   }
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
@@ -1636,7 +1548,7 @@ class SessionController extends GetxController {
 
     try {
       final updated = await _orderRepository.markOrderPrinted(order.id);
-      _upsertOrderInList(updated);
+      _upsertOrderInList(updated, replaceDetail: true);
 
       if (context.mounted) {
         Navigator.of(context, rootNavigator: true).pop();

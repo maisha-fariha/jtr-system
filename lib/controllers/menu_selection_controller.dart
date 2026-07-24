@@ -391,11 +391,6 @@ class MenuSelectionController extends GetxController {
 
     _resolveOrderIdFromSession();
 
-    if (orderId == null || orderId! <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
-      return;
-    }
-
     final requestedPerCourse = selection.choiceNumber < 1
         ? 1
         : selection.choiceNumber;
@@ -430,7 +425,8 @@ class MenuSelectionController extends GetxController {
         .where((message) => message.trim().isNotEmpty)
         .join(' | ');
 
-    // Optimistic only — table details syncs API in background (like catalog tap).
+    // Optimistic only — table details applies locally / syncs on Send Order.
+    // Do not require orderId here (local draft / verify GET can be empty).
     Get.back(
       result: MenuSelectionSubmitResult(
         productId: selection.menu.productId,

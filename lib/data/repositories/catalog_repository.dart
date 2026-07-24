@@ -1,5 +1,7 @@
+import '../../core/constants/order_create_constants.dart';
 import '../../core/network/api_exception.dart';
 import '../../services/connectivity_service.dart';
+import '../../utils/api_log.dart';
 import '../datasources/catalog_local_datasource.dart';
 import '../datasources/catalog_remote_datasource.dart';
 import '../models/catalog/catalog_product_model.dart';
@@ -178,13 +180,49 @@ class CatalogRepository {
       ..sort((a, b) => a.name.compareTo(b.name));
   }
 
-  /// First simple (non-composed) product — used only to satisfy API create
-  /// validation, then cancelled/stripped so the new order stays empty in UI.
-  /// Prefers the cheapest active simple product (often a placeholder SKU).
+  /// POS placeholder for POST /api/orders on empty table open.
+  /// UI always shows GET detail as returned by the API.
   Future<CatalogProductModel?> resolveSeedProductForEmptyOrder() async {
     if (_cachedSeedProduct != null) return _cachedSeedProduct;
     try {
+      const preferredId = OrderCreateConstants.emptyOrderSeedProductId;
+
+      try {
+        final preferred = await getProductDetail(preferredId);
+        if (preferred.isActive && preferred.id == preferredId) {
+          logOrderFlow(
+            'resolveSeedProductForEmptyOrder using preferred id=$preferredId '
+            '"${preferred.name}" composed=${preferred.isComposed}',
+          );
+          _cachedSeedProduct = preferred;
+          return preferred;
+        }
+      } catch (_) {}
+
       final products = await getProducts();
+      final fromList =
+          products.where((p) => p.id == preferredId && p.isActive).firstOrNull;
+      if (fromList != null) {
+        if (fromList.isComposed && fromList.menuCategories.isEmpty) {
+          try {
+            final detailed =
+                await getProductDetail(preferredId, forceRefresh: true);
+            logOrderFlow(
+              'resolveSeedProductForEmptyOrder using preferred id=$preferredId '
+              '(detail fetch) "${detailed.name}"',
+            );
+            _cachedSeedProduct = detailed;
+            return detailed;
+          } catch (_) {}
+        }
+        logOrderFlow(
+          'resolveSeedProductForEmptyOrder using preferred id=$preferredId '
+          'from list "${fromList.name}"',
+        );
+        _cachedSeedProduct = fromList;
+        return fromList;
+      }
+
       CatalogProductModel? best;
       for (final product in products) {
         if (!product.isActive || product.isComposed) continue;
@@ -192,6 +230,12 @@ class CatalogRepository {
         if (best == null || product.unitPrice < best.unitPrice) {
           best = product;
         }
+      }
+      if (best != null) {
+        logOrderFlow(
+          'resolveSeedProductForEmptyOrder fallback id=${best.id} '
+          '"${best.name}" (preferred $preferredId unavailable)',
+        );
       }
       _cachedSeedProduct = best;
       return best;

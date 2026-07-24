@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
@@ -6,7 +8,11 @@ import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
 import '../routes/app_pages.dart';
 
-/// Cold-start loading screen that decides Activation / Blocked / Login / Connect.
+/// Cold-start router: Activation / Blocked / Login / Session.
+///
+/// Returning authenticated waiters skip the spinner + Connect preload and open
+/// the session home immediately (cache paints first, network refreshes in
+/// background). Device status is still verified after navigation.
 class DeviceGateController extends GetxController {
   DeviceGateController({
     required DeviceRepository deviceRepository,
@@ -38,6 +44,14 @@ class DeviceGateController extends GetxController {
     statusText.value = 'Vérification du poste…';
 
     try {
+      // Already logged in: open home now, verify device afterwards.
+      if (_authRepository.isAuthenticated &&
+          await _deviceRepository.hasStoredCredentials) {
+        _go(AppRoutes.session);
+        unawaited(_validateDeviceInBackground());
+        return;
+      }
+
       final outcome = await _deviceRepository.resolveStartupGate();
       switch (outcome) {
         case DeviceGateOutcome.needsActivation:
@@ -50,11 +64,10 @@ class DeviceGateController extends GetxController {
           _go(AppRoutes.deviceBlocked, arguments: {'reason': 'license'});
           return;
         case DeviceGateOutcome.active:
-          // Connect (session preload) only makes sense once authenticated;
-          // otherwise go straight to Login — no sync screen before auth.
+          // Connect preload is only for fresh login (see LoginController).
           _go(
             _authRepository.isAuthenticated
-                ? AppRoutes.connect
+                ? AppRoutes.session
                 : AppRoutes.login,
           );
           return;
@@ -62,6 +75,27 @@ class DeviceGateController extends GetxController {
     } catch (e) {
       errorMessage.value = e.toString();
       isLoading.value = false;
+    }
+  }
+
+  Future<void> _validateDeviceInBackground() async {
+    try {
+      final outcome = await _deviceRepository.resolveStartupGate();
+      switch (outcome) {
+        case DeviceGateOutcome.needsActivation:
+          _go(AppRoutes.activation);
+          return;
+        case DeviceGateOutcome.deactivated:
+          _go(AppRoutes.deviceBlocked, arguments: {'reason': 'deactivated'});
+          return;
+        case DeviceGateOutcome.licenseBlocked:
+          _go(AppRoutes.deviceBlocked, arguments: {'reason': 'license'});
+          return;
+        case DeviceGateOutcome.active:
+          return;
+      }
+    } catch (_) {
+      // Keep session open on transient network errors (same as gate fallback).
     }
   }
 

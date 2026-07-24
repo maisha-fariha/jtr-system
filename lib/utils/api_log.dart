@@ -9,6 +9,43 @@ void logOrderFlow(String message) {
   debugPrint(line);
 }
 
+/// Logs POST /api/tables/open-by-number (always printed — table create flow).
+void logOpenTableByNumber({
+  required String phase,
+  Object? request,
+  Object? response,
+  int? statusCode,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ POST /api/tables/open-by-number [$phase]'
+        '${statusCode != null ? ' → $statusCode' : ''} ════════');
+
+  if (request != null) {
+    buffer
+      ..writeln('REQUEST:')
+      ..writeln(_encode(request));
+  }
+
+  if (response != null) {
+    buffer
+      ..writeln('RESPONSE:')
+      ..writeln(_encode(response));
+  }
+
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('ERROR:')
+      ..writeln(error);
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
 /// Logs POST /api/orders to the console (uses [print] so it always appears).
 void logOrderPost({
   required String phase,
@@ -37,6 +74,58 @@ void logOrderPost({
     buffer
       ..writeln('ERROR:')
       ..writeln(error);
+  }
+
+  buffer.writeln('════════════════════════════════════════');
+
+  final text = buffer.toString();
+  print(text);
+  debugPrint(text);
+}
+
+/// Delete-item trace (cancel line / clear ticket) — always printed to console.
+void logOrderDelete({
+  required String phase,
+  int? orderId,
+  String? tableNumber,
+  int? lineIndex,
+  int? itemId,
+  String? productName,
+  bool clearingAll = false,
+  String? apiTrace,
+  String? error,
+}) {
+  final buffer = StringBuffer()
+    ..writeln('════════ DELETE ITEM [$phase]'
+        '${orderId != null ? ' order=$orderId' : ''} ════════');
+
+  if (tableNumber != null && tableNumber.isNotEmpty) {
+    buffer.writeln('table: $tableNumber');
+  }
+  if (productName != null && productName.isNotEmpty) {
+    buffer.writeln('product: $productName');
+  }
+  if (lineIndex != null) {
+    buffer.writeln('line_index: $lineIndex');
+  }
+  if (itemId != null && itemId > 0) {
+    buffer.writeln('item_id: $itemId');
+  }
+  if (clearingAll) {
+    buffer.writeln('clearing_all: true');
+  }
+  if (apiTrace != null && apiTrace.isNotEmpty) {
+    buffer
+      ..writeln('── API trace ──')
+      ..writeln(apiTrace);
+  }
+  if (error != null && error.isNotEmpty) {
+    buffer
+      ..writeln('STATUS: ERREUR')
+      ..writeln('ERROR:')
+      ..writeln(error);
+  } else if (phase == 'sync_ok' || phase == 'api_ok' || phase == 'tap') {
+    buffer.writeln('STATUS: OK');
   }
 
   buffer.writeln('════════════════════════════════════════');

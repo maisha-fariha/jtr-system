@@ -645,8 +645,13 @@ class _ProductLine extends GetView<TableDetailsController> {
           children: [
             _ProductSlidableAction(
               icon: Icons.edit_outlined,
-              backgroundColor: AppTheme.lightButton,
-              iconColor: AppTheme.primary,
+              backgroundColor:
+                  (product.message?.trim().isNotEmpty ?? false)
+                      ? AppTheme.lightButton
+                      : null,
+              iconColor: (product.message?.trim().isNotEmpty ?? false)
+                  ? AppTheme.primary
+                  : null,
               onPressed: () => controller.editOrderLineComment(
                 productIndex,
                 context: context,
@@ -654,8 +659,12 @@ class _ProductLine extends GetView<TableDetailsController> {
             ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
-              backgroundColor: AppTheme.lightButton,
-              iconColor: AppTheme.primary,
+              backgroundColor: product.isOffered || controller.isOrderOffered
+                  ? AppTheme.lightButton
+                  : null,
+              iconColor: product.isOffered || controller.isOrderOffered
+                  ? AppTheme.primary
+                  : null,
               onPressed: () => controller.offerProduct(productIndex),
             ),
             _ProductSlidableAction(
@@ -900,6 +909,9 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Widget buildIconRow(BuildContext toolbarContext) {
       return Obx(() {
         final expanded = controller.isBottomPanelExpanded.value;
+        // Rebuild when order lines / send eligibility change.
+        controller.orderUiRevision.value;
+        controller.isAddingProduct.value;
         // Subscribe so the category-back icon enables/disables with navigation.
         controller.categoryPath.length;
         controller.selectedCategoryIndex.value;
@@ -911,6 +923,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
             for (final icon in _icons)
               _ToolbarIconButton(
                 icon: icon,
+                label: icon == Icons.restaurant ? 'A' : null,
                 isActive: controller.isToolbarIconActive(icon),
                 isEnabled: controller.isToolbarIconEnabled(icon),
                 onPressed: () =>
@@ -922,6 +935,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
                   ? Icons.keyboard_arrow_down
                   : Icons.keyboard_arrow_up,
               isActive: expanded && !controller.showPaymentOptions.value,
+              isEnabled: !controller.isOrderOffered,
               onPressed: controller.toggleBottomPanel,
               compact: isLarge,
             ),
@@ -974,11 +988,13 @@ class _ToolbarIconButton extends StatelessWidget {
     required this.icon,
     required this.isActive,
     required this.onPressed,
+    this.label,
     this.isEnabled = true,
     this.compact = false,
   });
 
   final IconData icon;
+  final String? label;
   final bool isActive;
   final bool isEnabled;
   final VoidCallback onPressed;
@@ -993,17 +1009,34 @@ class _ToolbarIconButton extends StatelessWidget {
     );
 
     final tapSize = JtrResponsive.getResponsiveSize(context, 44);
+    final iconSize = _toolbarIconSize(context);
 
     return SizedBox(
       width: tapSize,
       height: tapSize,
       child: IconButton(
         onPressed: isEnabled ? onPressed : null,
-        icon: Icon(
-          icon,
-          size: _toolbarIconSize(context),
-          color: color,
-        ),
+        icon: label != null
+            ? SizedBox(
+                width: iconSize,
+                height: iconSize,
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: Text(
+                    label!,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      height: 1,
+                      color: color,
+                    ),
+                  ),
+                ),
+              )
+            : Icon(
+                icon,
+                size: iconSize,
+                color: color,
+              ),
         padding: compact
             ? EdgeInsets.zero
             : JtrResponsive.getResponsivePadding(context, horizontal: 4),
@@ -1344,10 +1377,6 @@ class _MenuGrid extends GetView<TableDetailsController> {
                 source: currentOrder,
               );
               final isSelected = controller.isProductSelected(product);
-              final orderQty = controller.productQuantityInOrder(
-                product,
-                source: currentOrder,
-              );
               final itemRadius =
                   JtrResponsive.getResponsiveRadius(context, 10);
 
@@ -1453,45 +1482,6 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                   ),
                                 ),
                               ),
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                if (isInOrder)
-                                  Container(
-                                    padding: JtrResponsive.getResponsivePadding(
-                                      context,
-                                      horizontal: 8,
-                                      vertical: 3,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.primary.withValues(
-                                        alpha: 0.12,
-                                      ),
-                                      borderRadius: BorderRadius.circular(
-                                        JtrResponsive.getResponsiveRadius(
-                                          context,
-                                          999,
-                                        ),
-                                      ),
-                                    ),
-                                    child: Text(
-                                      'In order x$orderQty',
-                                      style: TextStyle(
-                                        fontSize:
-                                            JtrResponsive.getResponsiveFontSize(
-                                          context,
-                                          9,
-                                        ),
-                                        fontWeight: FontWeight.w800,
-                                        color: AppTheme.primary,
-                                        letterSpacing: 0.2,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  const SizedBox.shrink(),
-                              ],
                             ),
                           ],
                         ),

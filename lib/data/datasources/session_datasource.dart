@@ -5,6 +5,7 @@ import '../../core/storage/hive_storage.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
 import '../../core/network/api_exception.dart';
+import '../../utils/api_log.dart';
 import '../models/active_day_info.dart';
 import '../models/api_envelope.dart';
 import '../models/day_statistics_info.dart';
@@ -225,6 +226,63 @@ class SessionRemoteDataSource {
     }
 
     return tables;
+  }
+
+  /// Opens (or creates) a table by number and starts a session for the waiter.
+  ///
+  /// Returns the table payload (`data.id` is the `table_id` for order creation).
+  /// On 409/422 the caller receives [ApiException] with [ApiException.responseBody].
+  Future<Map<String, dynamic>> openTableByNumber(
+    Map<String, dynamic> body,
+  ) async {
+    const path = ApiEndpoints.openTableByNumber;
+    logOrderFlow('SessionRemoteDataSource.openTableByNumber CALLED');
+    logOpenTableByNumber(phase: 'sending', request: body);
+
+    try {
+      final response = await _client.post<Map<String, dynamic>>(
+        path,
+        data: body,
+      );
+      logOpenTableByNumber(
+        phase: 'response',
+        request: body,
+        response: response.data,
+        statusCode: response.statusCode,
+      );
+
+      final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+        response.data!,
+        (json) => json as Map<String, dynamic>,
+      );
+
+      if (!envelope.success || envelope.data == null) {
+        throw ApiException(
+          message: envelope.message ?? 'Failed to open table.',
+          statusCode: envelope.status ?? response.statusCode,
+          responseBody: response.data,
+        );
+      }
+
+      logOrderFlow(
+        'openTableByNumber OK tableId=${envelope.data!['id']} '
+        'table_number=${envelope.data!['table_number']}',
+      );
+      return envelope.data!;
+    } on ApiException catch (error) {
+      logOpenTableByNumber(
+        phase: 'error',
+        request: body,
+        response: error.responseBody,
+        statusCode: error.statusCode,
+        error: error.message,
+      );
+      logOrderFlow(
+        'openTableByNumber FAILED: ${error.message}'
+        '${error.statusCode != null ? ' (HTTP ${error.statusCode})' : ''}',
+      );
+      rethrow;
+    }
   }
 
   Future<List<Map<String, dynamic>>> _fetchPaginatedTables() async {

@@ -106,4 +106,51 @@ class MenuMapper {
 
     return selections;
   }
+
+  /// Default menu lines for composed seed products (required categories only).
+  static List<Map<String, dynamic>> defaultMenuSelectionsForProduct(
+    CatalogProductModel product,
+  ) {
+    if (!product.isComposed || product.menuCategories.isEmpty) {
+      return const [];
+    }
+
+    final selections = <Map<String, dynamic>>[];
+    for (final category in product.menuCategories) {
+      if (!category.isRequired && category.minSelections <= 0) continue;
+
+      ProductMenuOptionModel? pick;
+      for (final option in category.products) {
+        if (option.isDefault) {
+          pick = option;
+          break;
+        }
+      }
+      pick ??= category.products.isNotEmpty ? category.products.first : null;
+      if (pick == null) continue;
+
+      selections.add({
+        'menu_category_id': category.id,
+        'selected_product_id': pick.id,
+        'price': pick.supplement,
+      });
+    }
+    return selections;
+  }
+
+  static double menuSelectionsSupplement(
+    List<Map<String, dynamic>> menuSelections,
+  ) {
+    return menuSelections.fold<double>(
+      0,
+      (sum, selection) =>
+          sum +
+          (selection['price'] is num
+              ? (selection['price'] as num).toDouble()
+              : double.tryParse(
+                    selection['price']?.toString().replaceAll(',', '.') ?? '',
+                  ) ??
+                  0),
+    );
+  }
 }

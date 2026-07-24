@@ -6,15 +6,12 @@ import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
 
-/// Post-login preload screen — entered only for an authenticated user
-/// (right after a successful login, or a returning user at cold start).
-/// Never shown before login anymore: unauthenticated flows go straight to
-/// [AppRoutes.login].
+/// Post-login preload screen — shown **only after a fresh login**.
 ///
-/// Loads every open order, the active day and the tables list, with the
-/// progress bar reflecting real completion of that work (not a fixed
-/// animation), then hands off to [AppRoutes.session] — which then paints
-/// instantly with no empty-state flash.
+/// Returning users skip this and open [AppRoutes.session] from the device
+/// gate (cached orders paint first). Unauthenticated flows go to login.
+///
+/// Loads open orders, active day and tables, then hands off to session.
 class ConnectController extends GetxController {
   ConnectController({
     required AuthRepository authRepository,

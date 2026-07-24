@@ -17,6 +17,7 @@ class ApiEndpoints {
   static const generateReceipt = '/api/receipts/generate';
   static const tablesList = '/api/tables/list';
   static const tables = '/api/tables';
+  static const openTableByNumber = '/api/tables/open-by-number';
   static String tableById(int tableId) => '/api/tables/$tableId';
   static String tableSession(int tableId) => '/api/tables/$tableId/session';
 

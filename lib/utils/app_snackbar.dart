@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import 'app_navigation.dart';
 import 'app_theme.dart';
 
 /// App-themed snackbar for light and dark mode.
@@ -27,6 +28,11 @@ class AppSnackbar {
     final titleTrimmed = title.trim();
     final messageTrimmed = message.trim();
     if (titleTrimmed.isEmpty && messageTrimmed.isEmpty) return;
+
+    AppNavigation.forceLogoutIfUnauthenticatedMessage(
+      title: titleTrimmed,
+      message: messageTrimmed,
+    );
 
     if (context != null && context.mounted) {
       ScaffoldMessenger.of(context).hideCurrentSnackBar();

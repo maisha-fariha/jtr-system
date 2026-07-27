@@ -1,11 +1,15 @@
+import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
+import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
 
 class AppNavigation {
   AppNavigation._();
+
+  static bool _forceLogoutInFlight = false;
 
   static Future<void> logout() async {
     if (Get.isRegistered<SessionRepository>()) {
@@ -15,6 +19,49 @@ class AppNavigation {
       await Get.find<AuthRepository>().logout();
     }
     Get.offAllNamed(AppRoutes.login);
+  }
+
+  /// Clears session and returns to login when the API reports unauthenticated.
+  ///
+  /// Safe to call repeatedly — concurrent / duplicate triggers are ignored.
+  static void forceLogoutForUnauthenticated({
+    Duration delay = const Duration(milliseconds: 600),
+  }) {
+    if (_forceLogoutInFlight) return;
+    if (Get.currentRoute == AppRoutes.login) return;
+
+    final hasSession = Get.isRegistered<AuthRepository>() &&
+        Get.find<AuthRepository>().isAuthenticated;
+    if (!hasSession) return;
+
+    _forceLogoutInFlight = true;
+    Future<void>.delayed(delay, () async {
+      try {
+        if (Get.currentRoute == AppRoutes.login) return;
+        _closeOverlays();
+        await logout();
+      } finally {
+        _forceLogoutInFlight = false;
+      }
+    });
+  }
+
+  /// Triggers force logout when [title]/[message] indicate an auth failure.
+  static void forceLogoutIfUnauthenticatedMessage({
+    String? title,
+    String? message,
+  }) {
+    if (ApiException.isUnauthenticatedMessage(title) ||
+        ApiException.isUnauthenticatedMessage(message)) {
+      forceLogoutForUnauthenticated();
+    }
+  }
+
+  /// Schedule logout after the current frame (used from Dio error mapping).
+  static void scheduleForceLogoutForUnauthenticated() {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      forceLogoutForUnauthenticated();
+    });
   }
 
   static void _closeOverlays() {

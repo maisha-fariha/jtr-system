@@ -1,7 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:get/get.dart' hide Response;
 
+import '../../utils/app_navigation.dart';
 import '../config/api_config.dart';
+import 'api_endpoints.dart';
 import 'api_exception.dart';
 import 'lan_connection_message.dart';
 
@@ -134,14 +136,17 @@ class ApiClient extends GetxService {
   ApiException _mapError(DioException error) {
     final response = error.response;
     final body = response?.data;
+    late final ApiException mapped;
     if (body is Map<String, dynamic>) {
       final message = body['message'] as String?;
       if (message != null && message.isNotEmpty) {
-        return ApiException(
+        mapped = ApiException(
           message: message,
           statusCode: response?.statusCode,
           responseBody: body,
         );
+        _maybeForceLogout(mapped, error.requestOptions.path);
+        return mapped;
       }
     }
 
@@ -150,7 +155,7 @@ class ApiClient extends GetxService {
       case DioExceptionType.receiveTimeout:
       case DioExceptionType.sendTimeout:
       case DioExceptionType.connectionError:
-        return ApiException(
+        mapped = ApiException(
           message: ApiConfig.isLocalPosBaseUrl
               ? lanPosConnectionUserMessage(
                   error: error,
@@ -165,7 +170,7 @@ class ApiClient extends GetxService {
       default:
         if (ApiConfig.isLocalPosBaseUrl &&
             (error.message ?? '').toLowerCase().contains('refused')) {
-          return ApiException(
+          mapped = ApiException(
             message: lanPosConnectionUserMessage(
               error: error,
               targetHost: hostFromBaseUrl(ApiConfig.baseUrl),
@@ -173,12 +178,29 @@ class ApiClient extends GetxService {
             statusCode: response?.statusCode,
             responseBody: body,
           );
+        } else {
+          mapped = ApiException(
+            message: error.message ?? 'An unexpected error occurred.',
+            statusCode: response?.statusCode,
+            responseBody: body,
+          );
         }
-        return ApiException(
-          message: error.message ?? 'An unexpected error occurred.',
-          statusCode: response?.statusCode,
-          responseBody: body,
-        );
     }
+
+    _maybeForceLogout(mapped, error.requestOptions.path);
+    return mapped;
+  }
+
+  void _maybeForceLogout(ApiException exception, String requestPath) {
+    if (!exception.isUnauthenticated) return;
+    if (_isAuthLoginPath(requestPath)) return;
+    AppNavigation.scheduleForceLogoutForUnauthenticated();
+  }
+
+  static bool _isAuthLoginPath(String path) {
+    final normalized = path.toLowerCase();
+    return normalized.contains(ApiEndpoints.login) ||
+        normalized.contains(ApiEndpoints.loginUsers) ||
+        normalized.contains(ApiEndpoints.loginRoles);
   }
 }

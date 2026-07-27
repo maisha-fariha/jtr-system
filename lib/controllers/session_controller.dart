@@ -181,7 +181,70 @@ class SessionController extends GetxController {
   Future<void> _prefetchTables() async {
     try {
       await _sessionRepository.getTablesList();
+      _debugLogAssignedTablesOnSessionOpen();
     } catch (_) {}
+  }
+
+  void _debugLogAssignedTablesOnSessionOpen() {
+    final tables = _sessionRepository.cachedTables;
+    final myWaiterId = _currentWaiterId;
+
+    debugPrint(
+      '[Session:OPEN] myWaiterId=$myWaiterId tables=${tables.length}',
+    );
+
+    var assignedCount = 0;
+
+    for (final t in tables) {
+      final tableNoRaw =
+          t['table_number'] ?? t['number'] ?? t['name'] ?? t['id'];
+      final tableNo = tableNoRaw?.toString().trim() ?? '';
+      if (tableNo.isEmpty) continue;
+
+      final activeOrder = t['active_order'];
+      int? activeOrderWaiterId;
+      int? activeOrderUserId;
+      String? activeOrderWaiterName;
+
+      if (activeOrder is Map<String, dynamic>) {
+        activeOrderWaiterId = OrderMapper.waiterIdFromOrderMap(activeOrder);
+        activeOrderUserId = (activeOrder['user_id'] as num?)?.toInt();
+        final waiter = activeOrder['waiter'];
+        if (waiter is Map<String, dynamic>) {
+          final n = waiter['name'];
+          if (n is String && n.isNotEmpty) activeOrderWaiterName = n;
+        }
+      }
+
+      final sessionOwnerId =
+          (t['session_owner_id'] as num?)?.toInt() ??
+          (t['locked_by'] as num?)?.toInt();
+
+      final isLocked = t['is_locked'] == true;
+      final status = t['status'] ?? '—';
+
+      // Only log tables that look assigned (occupied/locked/open session).
+      final hasAssignment = activeOrderWaiterId != null ||
+          activeOrderUserId != null ||
+          (sessionOwnerId != null && sessionOwnerId > 0) ||
+          isLocked ||
+          status == 'open';
+
+      if (!hasAssignment) continue;
+      assignedCount++;
+
+      final id = (t['id'] as num?)?.toInt();
+      debugPrint(
+        '[Session:OPEN] ASSIGNED T$tableNo (rowId=${id ?? '—'}) '
+        'owner(waiterId=${activeOrderWaiterId ?? '—'} '
+        'userId=${activeOrderUserId ?? '—'} '
+        'waiterName=${activeOrderWaiterName ?? '—'}) '
+        'sessionOwner/lockedBy=${sessionOwnerId ?? '—'} '
+        'status=$status is_locked=$isLocked',
+      );
+    }
+
+    debugPrint('[Session:OPEN] assignedTablesCount=$assignedCount');
   }
 
   Future<void> loadDayStatistics({bool forceRefresh = false}) async {
@@ -917,11 +980,15 @@ class SessionController extends GetxController {
 
   void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
+    // Warm tables cache while the waiter types the table number.
+    unawaited(_sessionRepository.getTablesList());
     TableNumberDialog.show(
       context: context,
       integerOnly: true,
       maxDigits: 4,
-      onConfirm: (tableNumber) => _onTableNumberConfirmed(context, tableNumber),
+      onConfirm: (tableNumber) {
+        unawaited(_onTableNumberConfirmed(context, tableNumber));
+      },
     );
   }
 
@@ -949,7 +1016,69 @@ class SessionController extends GetxController {
     );
   }
 
-  void _onTableNumberConfirmed(BuildContext context, String tableNumber) {
+  Future<void> _onTableNumberConfirmed(
+    BuildContext context,
+    String tableNumber,
+  ) async {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return;
+
+    final waiterId = _currentWaiterId;
+    if (waiterId <= 0) {
+      _showSnack('Erreur', 'Utilisateur non connecté. Veuillez vous reconnecter.');
+      return;
+    }
+
+    // Fast path: own order already in session list — no tables API wait.
+    final existingOwn = _findOwnOpenOrderForTable(normalized);
+    if (existingOwn != null) {
+      _reopenOwnOrderWithoutGuestPrompt(existingOwn);
+      return;
+    }
+
+    // Cache-first occupancy check (warmed on session open / New Order click).
+    // Only hit the network when cache is empty.
+    var tables = _sessionRepository.cachedTables;
+    if (tables.isEmpty) {
+      try {
+        tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      } catch (_) {
+        tables = _sessionRepository.cachedTables;
+      }
+    } else {
+      // Keep cache fresh for the next New Order without blocking this one.
+      unawaited(_sessionRepository.getTablesList());
+    }
+
+    if (OrderMapper.shouldShowSkipDialogForCreate(
+      tables,
+      normalized,
+      waiterId: waiterId,
+    )) {
+      if (context.mounted) {
+        await TableOccupiedDialog.show(
+          context: context,
+          userName: _currentUserDisplayName,
+          tableNumber: normalized,
+        );
+      }
+      return;
+    }
+
+    final ownActiveOrderId = OrderMapper.ownReusableActiveOrderId(
+      tables,
+      normalized,
+      waiterId: waiterId,
+    );
+    if (ownActiveOrderId != null && ownActiveOrderId > 0) {
+      _reopenServerOwnedOrderWithoutGuestPrompt(
+        orderId: ownActiveOrderId,
+        tableNumber: normalized,
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
     TableNumberDialog.show(
       context: context,
       title: 'NOMBRE DE COUVERTS',
@@ -1076,6 +1205,65 @@ class SessionController extends GetxController {
       }
     }
     return null;
+  }
+
+  void _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) {
+    logOrderFlow(
+      '_reopenOwnOrderWithoutGuestPrompt '
+      'table=${existing.number} orderId=${existing.id}',
+    );
+
+    // Prefer cached detail for instant paint; table-details loads the rest.
+    var target = existing;
+    if (target.id > 0 && target.products.isEmpty) {
+      final cached = _orderRepository.cachedOrderDetail(target.id);
+      if (cached != null) {
+        target = OrderMapper.fromOrderDetail(cached).copyWith(id: target.id);
+        _upsertOrderInList(target);
+      }
+    }
+
+    openTableDetails(
+      target.number,
+      orderId: target.id > 0 ? target.id : null,
+      deferDetailFetch: target.isLocalOnly,
+      seedOrder: target,
+    );
+  }
+
+  void _reopenServerOwnedOrderWithoutGuestPrompt({
+    required int orderId,
+    required String tableNumber,
+  }) {
+    logOrderFlow(
+      '_reopenServerOwnedOrderWithoutGuestPrompt '
+      'table=$tableNumber orderId=$orderId',
+    );
+
+    // Open immediately with cache/seed; details page fetches if needed.
+    SessionOrder seed;
+    final cached = _orderRepository.cachedOrderDetail(orderId);
+    if (cached != null) {
+      seed = OrderMapper.fromOrderDetail(cached).copyWith(id: orderId);
+    } else {
+      final parsed =
+          OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
+              int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
+              0;
+      seed = OrderMapper.buildSessionPlaceholderOrder(
+        tableNumber: parsed > 0 ? parsed : 1,
+        numberOfGuests: 1,
+      ).copyWith(id: orderId);
+    }
+
+    _clearSuppressedTable(seed.number);
+    _upsertOrderInList(seed);
+    openTableDetails(
+      seed.number,
+      orderId: orderId,
+      deferDetailFetch: false,
+      seedOrder: seed,
+    );
   }
 
   Future<void> _reopenOwnOrderAndUpdateGuests({

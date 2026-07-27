@@ -7,6 +7,7 @@ class ApiEndpoints {
   static const loginUsers = '/api/auth/login-users';
   static const loginRoles = '/api/auth/login-roles';
   static const login = '/api/auth/login';
+  static const permissions = '/api/permissions';
 
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';

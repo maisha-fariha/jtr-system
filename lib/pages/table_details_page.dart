@@ -628,6 +628,8 @@ class _ProductLine extends GetView<TableDetailsController> {
     return Obx(() {
       final isSelected = controller.isOrderLineSelected(productIndex);
       controller.orderUiRevision.value;
+      final canDeleteLine =
+          canModify && controller.canDeleteOrDecreaseLine(productIndex);
       final hasMenuItems = product.hasMenuItems;
       final isMenuExpanded = hasMenuItems &&
           controller.isMenuLineExpanded(productIndex);
@@ -636,23 +638,26 @@ class _ProductLine extends GetView<TableDetailsController> {
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
         enabled: canModify,
-        startActionPane: ActionPane(
-          motion: const ScrollMotion(),
-          extentRatio: 0.14,
-          children: [
-            SlidableAction(
-              onPressed: (_) => controller.cancelOrderLine(productIndex),
-              backgroundColor: AppTheme.background,
-              foregroundColor: const Color(0xFFE74C3C),
-              icon: CupertinoIcons.delete,
-              spacing: 0,
-              padding: EdgeInsets.zero,
-            ),
-          ],
-        ),
+        startActionPane: canDeleteLine
+            ? ActionPane(
+                motion: const ScrollMotion(),
+                extentRatio: 0.14,
+                children: [
+                  SlidableAction(
+                    onPressed: (_) =>
+                        controller.cancelOrderLine(productIndex),
+                    backgroundColor: AppTheme.background,
+                    foregroundColor: const Color(0xFFE74C3C),
+                    icon: CupertinoIcons.delete,
+                    spacing: 0,
+                    padding: EdgeInsets.zero,
+                  ),
+                ],
+              )
+            : null,
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
-          extentRatio: 0.52,
+          extentRatio: canDeleteLine ? 0.52 : 0.39,
           children: [
             _ProductSlidableAction(
               icon: Icons.edit_outlined,
@@ -680,6 +685,7 @@ class _ProductLine extends GetView<TableDetailsController> {
             ),
             _ProductSlidableAction(
               icon: Icons.remove,
+              enabled: canDeleteLine,
               onPressed: () => controller.decrementProduct(productIndex),
             ),
             _ProductSlidableAction(
@@ -825,20 +831,24 @@ class _ProductSlidableAction extends StatelessWidget {
     required this.onPressed,
     this.backgroundColor,
     this.iconColor,
+    this.enabled = true,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
   final Color? backgroundColor;
   final Color? iconColor;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final bgColor = backgroundColor ?? AppTheme.slidableActionBackground;
-    final fgColor = iconColor ?? AppTheme.darkText;
+    final fgColor = enabled
+        ? (iconColor ?? AppTheme.darkText)
+        : AppTheme.darkText.withValues(alpha: 0.25);
 
     return CustomSlidableAction(
-      onPressed: (_) => onPressed(),
+      onPressed: enabled ? (_) => onPressed() : null,
       backgroundColor: Colors.transparent,
       padding: JtrResponsive.getResponsivePadding(context, left: 6),
       child: Container(

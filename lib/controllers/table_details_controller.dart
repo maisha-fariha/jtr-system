@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../core/auth/pos_permissions.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/models/local_draft_line.dart';
@@ -667,9 +668,11 @@ class TableDetailsController extends GetxController {
     final resolved = resolvedOrderId;
     if (resolved != null && resolved > 0) {
       await _refreshOrder();
+      _refreshKitchenSentFlag(order);
       return;
     }
     await _refreshOrder();
+    _refreshKitchenSentFlag(order);
   }
 
   Future<void> _loadCatalog() async {
@@ -1238,6 +1241,45 @@ class TableDetailsController extends GetxController {
   bool get isOrderOffered => _orderOfferedCached;
 
   bool get canModifyOrder => !_orderOfferedCached;
+
+  /// True after kitchen send (this session or reopened synced ticket).
+  bool get orderSentToKitchen => _didCompleteKitchenSend;
+
+  /// `access-edit-table-details` (or superuser) — delete/decrease after send.
+  bool get hasEditTableDetailsAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canEditTableDetailsAfterSend(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// Before send: everyone. After send: managers / access-edit-table-details only.
+  bool canDeleteOrDecreaseLine(int productIndex) {
+    if (!orderSentToKitchen) return true;
+    return hasEditTableDetailsAccess;
+  }
+
+  bool _blockIfCannotDeleteOrDecreaseAfterSend() {
+    if (!orderSentToKitchen) return false;
+    if (hasEditTableDetailsAccess) return false;
+    AppSnackbar.show(
+      'Action non autorisée',
+      'Seul un utilisateur autorisé peut supprimer ou diminuer un article '
+      'après l\'envoi en cuisine.',
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 3),
+      margin: const EdgeInsets.all(16),
+    );
+    return true;
+  }
+
+  void _refreshKitchenSentFlag(SessionOrder? source) {
+    final current = source ?? order;
+    if (current == null) return;
+    if (_layoutHasServerItemIds(current.displayEntries)) {
+      _didCompleteKitchenSend = true;
+    }
+  }
 
   void _refreshOrderOfferedCache({Map<String, dynamic>? detail}) {
     final id = resolvedOrderId;
@@ -2634,6 +2676,9 @@ class TableDetailsController extends GetxController {
     final current = order;
     if (current == null) return;
 
+    final currentQty = int.tryParse(current.products[lineIndex].quantity) ?? 1;
+    if (qty < currentQty && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
+
     if (id == null || id <= 0 || _mutationsAreLocalOnly) {
       if (!_mutationsAreLocalOnly && !_isLocalDraft) return;
       if (qty <= 0) {
@@ -2729,6 +2774,7 @@ class TableDetailsController extends GetxController {
       synced,
       replaceDetail: true,
     );
+    _refreshKitchenSentFlag(synced);
     _reconcileCatalogSelection(source: synced);
 
     final now = DateTime.now();
@@ -2877,6 +2923,8 @@ class TableDetailsController extends GetxController {
         productIndex >= currentOrder.products.length) {
       return;
     }
+
+    if (delta < 0 && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
 
     final line = currentOrder.products[productIndex];
     if (delta < 0) {
@@ -3125,6 +3173,7 @@ class TableDetailsController extends GetxController {
 
   void cancelOrderLine(int productIndex) {
     if (_blockIfOrderOffered()) return;
+    if (_blockIfCannotDeleteOrDecreaseAfterSend()) return;
     unawaited(_cancelOrderLine(productIndex));
   }
 

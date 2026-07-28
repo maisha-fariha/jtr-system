@@ -4,6 +4,7 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
+import '../data/mappers/order_mapper.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -633,7 +634,9 @@ class _OrderRow extends GetView<SessionController> {
 
 List<Widget> _buildExpandedDetailRows(BuildContext context, SessionOrder order) {
   final rows = <Widget>[];
-  final entries = order.displayEntries;
+  final entries = OrderMapper.withoutEmptyDemandeSeparators(
+    order.displayEntries,
+  );
 
   for (var i = 0; i < entries.length; i++) {
     final entry = entries[i];

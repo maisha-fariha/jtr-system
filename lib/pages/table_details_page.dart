@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 
 import '../data/models/catalog/category_tree_node.dart';
 import '../controllers/table_details_controller.dart';
+import '../data/mappers/order_mapper.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -299,7 +300,9 @@ class _OrderSummaryState extends State<_OrderSummary> {
     bool canModify,
   ) {
     final rows = <Widget>[];
-    final entries = order.displayEntries;
+    final entries = OrderMapper.withoutEmptyDemandeSeparators(
+      order.displayEntries,
+    );
     final orderOffered = !canModify;
     var index = 0;
 

@@ -1841,6 +1841,36 @@ class OrderMapper {
         .length;
   }
 
+  /// Drops DEMANDÉE course rows that have no products under them.
+  static List<OrderDisplayEntry> withoutEmptyDemandeSeparators(
+    List<OrderDisplayEntry> entries,
+  ) {
+    if (entries.isEmpty) return entries;
+
+    var removed = false;
+    final result = <OrderDisplayEntry>[];
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.type == OrderDisplayEntryType.demandeSeparator) {
+        var hasProduct = false;
+        for (var j = i + 1; j < entries.length; j++) {
+          if (entries[j].isSectionDivider) break;
+          if (entries[j].type == OrderDisplayEntryType.product) {
+            hasProduct = true;
+            break;
+          }
+        }
+        if (!hasProduct) {
+          removed = true;
+          continue;
+        }
+      }
+      result.add(entry);
+    }
+    if (!removed) return entries;
+    return reindexDisplayEntries(result);
+  }
+
   /// À SUIVRE + DEMANDÉE rows (follow-up course slots on the ticket).
   static int sectionDividerCount(List<OrderDisplayEntry> entries) {
     return entries.where((entry) => entry.isSectionDivider).length;
@@ -2375,6 +2405,7 @@ class OrderMapper {
     }
 
     display = reindexDisplayEntries(display);
+    display = withoutEmptyDemandeSeparators(display);
     final products = [
       for (final entry in display)
         if (entry.type == OrderDisplayEntryType.product &&
@@ -6749,16 +6780,10 @@ class OrderMapper {
       );
     }
 
-    // Keep remaining DEMANDÉE dividers; drop empty trailing À SUIVRE.
-    while (dividerIdx < dividers.length) {
-      final divider = dividers[dividerIdx].divider;
-      if (divider.type == OrderDisplayEntryType.demandeSeparator) {
-        result.add(divider);
-      }
-      dividerIdx++;
-    }
+    // Drop remaining empty trailing dividers (À SUIVRE and empty DEMANDÉE).
+    // Products were already placed; leftover dividers have nothing under them.
 
-    return reindexDisplayEntries(result);
+    return withoutEmptyDemandeSeparators(reindexDisplayEntries(result));
   }
 
   /// Cancels every visible line (used to clear auto-added create defaults).

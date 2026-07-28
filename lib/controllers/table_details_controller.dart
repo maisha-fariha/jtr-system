@@ -735,16 +735,26 @@ class TableDetailsController extends GetxController {
 
   /// Presentation-only: empty-shell lock after delete-all (not create-seed hiding).
   SessionOrder forDisplay(SessionOrder raw) {
-    if (raw.id > 0 &&
+    var order = raw;
+    if (order.id > 0 &&
         Get.isRegistered<OrderRepository>() &&
-        _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
-      final hasLines = raw.products.isNotEmpty || raw.displayEntries.isNotEmpty;
-      if (!hasLines) return raw;
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
+      final hasLines =
+          order.products.isNotEmpty || order.displayEntries.isNotEmpty;
+      if (!hasLines) return order;
       // Optimistic add already wrote lines — do not hide them again.
-      _orderRepository.clearEmptyShellDisplay(raw.id);
-      return raw;
+      _orderRepository.clearEmptyShellDisplay(order.id);
     }
-    return raw;
+
+    // Never show DEMANDÉE course rows with no items under them.
+    final cleaned = OrderMapper.withoutEmptyDemandeSeparators(
+      order.displayEntries,
+    );
+    if (!identical(cleaned, order.displayEntries) &&
+        cleaned.length != order.displayEntries.length) {
+      order = order.copyWith(displayEntries: cleaned);
+    }
+    return order;
   }
 
   SessionOrder? get order {

@@ -4,13 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/auth/pos_permissions.dart';
-import '../core/l10n/pos_messages.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/models/local_draft_line.dart';
 import '../data/models/catalog/catalog_product_model.dart';
 import '../data/models/catalog/category_tree_node.dart';
-import '../data/models/product_stock_limit.dart';
 import '../data/order_optimistic_sync.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
@@ -75,10 +73,6 @@ class TableDetailsController extends GetxController {
 
   /// After a successful kitchen Send, further sends use PUT (not POST create).
   bool _didCompleteKitchenSend = false;
-
-  /// Post-send stock limits: ordered qty at send becomes remaining stock.
-  final Map<int, ProductStockLimit> _productStockLimits = {};
-  final stockUiRevision = 0.obs;
 
   bool get _isLocalDraft {
     if (orderId != null && orderId! > 0) return false;
@@ -646,12 +640,10 @@ class TableDetailsController extends GetxController {
       if (!rawSeed.isLocalOnly &&
           _layoutHasServerItemIds(rawSeed.displayEntries)) {
         _didCompleteKitchenSend = true;
-        _captureStockLimitsFromOrder(rawSeed);
       }
     }
     if (_deferDetailFetch) {
       _didCompleteKitchenSend = false;
-      _productStockLimits.clear();
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
@@ -677,16 +669,10 @@ class TableDetailsController extends GetxController {
     if (resolved != null && resolved > 0) {
       await _refreshOrder();
       _refreshKitchenSentFlag(order);
-      if (orderSentToKitchen) {
-        _ensureStockLimitsCaptured(order);
-      }
       return;
     }
     await _refreshOrder();
     _refreshKitchenSentFlag(order);
-    if (orderSentToKitchen) {
-      _ensureStockLimitsCaptured(order);
-    }
   }
 
   Future<void> _loadCatalog() async {
@@ -708,9 +694,6 @@ class TableDetailsController extends GetxController {
       catalogError.value = 'Impossible de charger le menu.';
     } finally {
       isCatalogLoading.value = false;
-      if (orderSentToKitchen) {
-        _ensureStockLimitsCaptured(order ?? seedOrder);
-      }
     }
   }
 
@@ -1270,111 +1253,6 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  /// `access-stock-visual` (or superuser) — badges + stock limits after send.
-  bool get hasStockVisualAccess {
-    if (!Get.isRegistered<AuthRepository>()) return false;
-    return PosPermissions.canViewStockVisual(
-      Get.find<AuthRepository>().cachedSession?.user,
-    );
-  }
-
-  /// Stock badges and limit checks apply only after kitchen send.
-  bool get stockControlActive => orderSentToKitchen && hasStockVisualAccess;
-
-  ProductStockLimit? productStockLimit(CatalogProductModel product) =>
-      _productStockLimits[product.id];
-
-  /// Remaining stock badge after send (decreases when adding more of the item).
-  int productRemainingStockQty(CatalogProductModel product) {
-    if (!stockControlActive) return 0;
-    final limit = productStockLimit(product);
-    if (limit == null) return 0;
-    return limit.remainingQty(productQuantityInOrder(product));
-  }
-
-  bool shouldShowProductQuantityBadge(CatalogProductModel product) {
-    if (!stockControlActive) return false;
-    return productStockLimit(product) != null;
-  }
-
-  bool isProductStockBlocked(CatalogProductModel product) {
-    if (!stockControlActive) return false;
-    final limit = productStockLimit(product);
-    if (limit == null) return false;
-    return limit.isExhausted(productQuantityInOrder(product));
-  }
-
-  void _captureStockLimitsFromOrder(SessionOrder? source) {
-    final current = source ?? order;
-    if (current == null) return;
-
-    final totalsByProductId = <int, int>{};
-    for (final line in current.products) {
-      final catalog = catalogProductByName(line.name);
-      if (catalog == null || catalog.id <= 0) continue;
-      final qty = int.tryParse(line.quantity) ?? 0;
-      if (qty <= 0) continue;
-      totalsByProductId[catalog.id] =
-          (totalsByProductId[catalog.id] ?? 0) + qty;
-    }
-
-    for (final entry in totalsByProductId.entries) {
-      _productStockLimits[entry.key] = ProductStockLimit(
-        limitQty: entry.value,
-        baselineOrderedQty: entry.value,
-      );
-    }
-    stockUiRevision.value++;
-    orderUiRevision.value++;
-  }
-
-  /// On reopen: capture once if limits are empty (badge = current ordered qty).
-  void _ensureStockLimitsCaptured(SessionOrder? source) {
-    if (!orderSentToKitchen) return;
-    if (_productStockLimits.isNotEmpty) return;
-    _captureStockLimitsFromOrder(source);
-  }
-
-  void _showProductOutOfStock() {
-    AppSnackbar.show(
-      PosMessages.productOutOfStockTitle(),
-      PosMessages.productOutOfStockBody(),
-      snackPosition: SnackPosition.BOTTOM,
-      duration: const Duration(seconds: 3),
-      margin: const EdgeInsets.all(16),
-    );
-  }
-
-  bool _blockIfCannotAddAfterSend() {
-    if (!orderSentToKitchen) return false;
-    if (hasEditTableDetailsAccess) return false;
-    AppSnackbar.show(
-      PosMessages.actionNotPermittedTitle(),
-      PosMessages.actionNotPermittedBody(),
-      snackPosition: SnackPosition.BOTTOM,
-      duration: const Duration(seconds: 3),
-      margin: const EdgeInsets.all(16),
-    );
-    return true;
-  }
-
-  /// Blocks increasing qty when remaining stock is exhausted (grid / swipe / keyboard).
-  bool _blockIfCannotIncreaseStock(
-    CatalogProductModel product, {
-    int addBy = 1,
-  }) {
-    if (!stockControlActive || addBy <= 0) return false;
-    final limit = productStockLimit(product);
-    if (limit == null) return false;
-    final remaining =
-        limit.remainingQty(productQuantityInOrder(product));
-    if (remaining < addBy) {
-      _showProductOutOfStock();
-      return true;
-    }
-    return false;
-  }
-
   /// Before send: everyone. After send: managers / access-edit-table-details only.
   bool canDeleteOrDecreaseLine(int productIndex) {
     if (!orderSentToKitchen) return true;
@@ -1399,11 +1277,7 @@ class TableDetailsController extends GetxController {
     final current = source ?? order;
     if (current == null) return;
     if (_layoutHasServerItemIds(current.displayEntries)) {
-      final wasSent = _didCompleteKitchenSend;
       _didCompleteKitchenSend = true;
-      if (!wasSent) {
-        _ensureStockLimitsCaptured(current);
-      }
     }
   }
 
@@ -1788,7 +1662,6 @@ class TableDetailsController extends GetxController {
           _localDraftLines.clear();
           _deferDetailFetch = false;
           _didCompleteKitchenSend = true;
-          _captureStockLimitsFromOrder(toApply);
         }
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
@@ -1823,7 +1696,6 @@ class TableDetailsController extends GetxController {
           _localDraftLines.clear();
           _deferDetailFetch = false;
           _didCompleteKitchenSend = true;
-          _captureStockLimitsFromOrder(sent);
           final log = _orderRepository.lastKitchenSendLog ??
               _orderRepository.lastCreateOrderLog;
           if (log != null) {
@@ -2273,14 +2145,6 @@ class TableDetailsController extends GetxController {
 
   void onProductTap(CatalogProductModel product) {
     if (_blockIfOrderOffered()) return;
-
-    if (orderSentToKitchen) {
-      if (_blockIfCannotAddAfterSend()) return;
-      if (isProductStockBlocked(product)) {
-        _showProductOutOfStock();
-        return;
-      }
-    }
 
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
@@ -2815,18 +2679,6 @@ class TableDetailsController extends GetxController {
     final currentQty = int.tryParse(current.products[lineIndex].quantity) ?? 1;
     if (qty < currentQty && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
 
-    if (qty > currentQty) {
-      if (_blockIfCannotAddAfterSend()) return;
-      final catalog = catalogProductByName(current.products[lineIndex].name);
-      if (catalog != null &&
-          _blockIfCannotIncreaseStock(
-            catalog,
-            addBy: qty - currentQty,
-          )) {
-        return;
-      }
-    }
-
     if (id == null || id <= 0 || _mutationsAreLocalOnly) {
       if (!_mutationsAreLocalOnly && !_isLocalDraft) return;
       if (qty <= 0) {
@@ -2954,19 +2806,6 @@ class TableDetailsController extends GetxController {
 
   Future<void> incrementProduct(int productIndex) async {
     if (_blockIfOrderOffered()) return;
-    if (_blockIfCannotAddAfterSend()) return;
-
-    final currentOrder = order;
-    if (currentOrder == null ||
-        productIndex < 0 ||
-        productIndex >= currentOrder.products.length) {
-      return;
-    }
-    final catalog = catalogProductByName(currentOrder.products[productIndex].name);
-    if (catalog != null && _blockIfCannotIncreaseStock(catalog, addBy: 1)) {
-      return;
-    }
-
     await _mutateLineQuantity(productIndex, 1);
   }
 
@@ -3088,14 +2927,6 @@ class TableDetailsController extends GetxController {
     if (delta < 0 && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
 
     final line = currentOrder.products[productIndex];
-    if (delta > 0) {
-      if (_blockIfCannotAddAfterSend()) return;
-      final catalog = catalogProductByName(line.name);
-      if (catalog != null &&
-          _blockIfCannotIncreaseStock(catalog, addBy: delta)) {
-        return;
-      }
-    }
     if (delta < 0) {
       final qty = int.tryParse(line.quantity) ?? 1;
       if (qty <= 1) {

@@ -5,7 +5,6 @@ class PosPermissions {
   PosPermissions._();
 
   static const accessEditTableDetails = 'access-edit-table-details';
-  static const accessStockVisual = 'access-stock-visual';
 
   /// Parses permission keys from login user payload (`permissions` list).
   static Set<String> keysFromUser(AuthUserModel? user) {
@@ -33,12 +32,5 @@ class PosPermissions {
 
     final keys = keysFromUser(user);
     return keys.contains(accessEditTableDetails);
-  }
-
-  /// Stock badges + limit enforcement on the menu grid after send.
-  static bool canViewStockVisual(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-    return keysFromUser(user).contains(accessStockVisual);
   }
 }

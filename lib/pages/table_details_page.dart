@@ -1310,7 +1310,6 @@ class _MenuGrid extends GetView<TableDetailsController> {
       }
 
       controller.orderUiRevision.value;
-      controller.stockUiRevision.value;
 
       if (controller.catalogError.value != null &&
           controller.categoryRoots.isEmpty &&
@@ -1399,10 +1398,6 @@ class _MenuGrid extends GetView<TableDetailsController> {
                 source: currentOrder,
               );
               final isSelected = controller.isProductSelected(product);
-              final showQtyBadge =
-                  controller.shouldShowProductQuantityBadge(product);
-              final qtyBadge = controller.productRemainingStockQty(product);
-              final stockBlocked = controller.isProductStockBlocked(product);
               final itemRadius =
                   JtrResponsive.getResponsiveRadius(context, 10);
 
@@ -1434,69 +1429,6 @@ class _MenuGrid extends GetView<TableDetailsController> {
                     ),
                     child: Stack(
                       children: [
-                        if (showQtyBadge)
-                          Positioned(
-                            top: JtrResponsive.getResponsiveSize(context, 8),
-                            left: JtrResponsive.getResponsiveSize(context, 8),
-                            child: Container(
-                              constraints: BoxConstraints(
-                                minWidth: JtrResponsive.getResponsiveSize(
-                                  context,
-                                  22,
-                                ),
-                                minHeight: JtrResponsive.getResponsiveSize(
-                                  context,
-                                  22,
-                                ),
-                              ),
-                              padding: JtrResponsive.getResponsivePadding(
-                                context,
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: stockBlocked
-                                    ? AppTheme.textSecondary
-                                        .withValues(alpha: 0.9)
-                                    : AppTheme.primary,
-                                borderRadius: BorderRadius.circular(
-                                  JtrResponsive.getResponsiveRadius(
-                                    context,
-                                    12,
-                                  ),
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color:
-                                        Colors.black.withValues(alpha: 0.12),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                              ),
-                              alignment: Alignment.center,
-                              child: stockBlocked
-                                  ? Icon(
-                                      Icons.block,
-                                      size: JtrResponsive.getResponsiveSize(
-                                        context,
-                                        14,
-                                      ),
-                                      color: Colors.white,
-                                    )
-                                  : Text(
-                                      '$qtyBadge',
-                                      style: TextStyle(
-                                        fontSize: _categoryPartFontSize(
-                                          context,
-                                          11,
-                                        ),
-                                        fontWeight: FontWeight.w800,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                            ),
-                          ),
                         Positioned(
                           top: JtrResponsive.getResponsiveHeight(context, 0),
                           left: 0,

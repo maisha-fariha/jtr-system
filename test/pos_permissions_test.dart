@@ -42,5 +42,33 @@ void main() {
       );
       expect(PosPermissions.canEditTableDetailsAfterSend(user), isTrue);
     });
+
+    test('superuser can view stock visual', () {
+      const user = AuthUserModel(
+        id: 5,
+        name: 'Admin',
+        isSuperuser: true,
+        permissions: [],
+      );
+      expect(PosPermissions.canViewStockVisual(user), isTrue);
+    });
+
+    test('user with access-stock-visual can view stock', () {
+      const user = AuthUserModel(
+        id: 6,
+        name: 'Stock',
+        permissions: [PosPermissions.accessStockVisual],
+      );
+      expect(PosPermissions.canViewStockVisual(user), isTrue);
+    });
+
+    test('cashier without stock key cannot view stock', () {
+      const user = AuthUserModel(
+        id: 7,
+        name: 'Cashier',
+        permissions: ['access-payment-button'],
+      );
+      expect(PosPermissions.canViewStockVisual(user), isFalse);
+    });
   });
 }

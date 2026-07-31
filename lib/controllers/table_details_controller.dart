@@ -1316,6 +1316,9 @@ class TableDetailsController extends GetxController {
 
   int? stockBadgeForProduct(int productId) => stockVisual.badgeFor(productId);
 
+  bool isProductStockBlocked(int productId) =>
+      stockVisual.isBlocked(productId);
+
   static Color stockBadgeColor(int remaining) {
     if (remaining <= 0) return const Color(0xFFE74C3C);
     if (remaining <= 3) return const Color(0xFFE67E22);

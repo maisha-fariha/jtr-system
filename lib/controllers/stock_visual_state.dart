@@ -56,6 +56,15 @@ class StockVisualState {
     return remaining < 0 ? 0 : remaining;
   }
 
+  /// True when manager blocked the product, or remaining is exhausted.
+  bool isBlocked(int productId) {
+    final limit = stockLimits[productId];
+    if (limit == null || limit.isFreed) return false;
+    if (limit.isBlocked) return true;
+    final remaining = remainingFor(productId);
+    return remaining != null && remaining <= 0;
+  }
+
   bool isTracked(int productId) {
     final limit = stockLimits[productId];
     return limit != null && !limit.isFreed;

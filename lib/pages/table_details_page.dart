@@ -613,6 +613,7 @@ class _StockVisualList extends GetView<TableDetailsController> {
           final remaining =
               controller.stockVisual.remainingFor(limit.productId) ?? 0;
           final badge = remaining < 0 ? 0 : remaining;
+          final blocked = controller.isProductStockBlocked(limit.productId);
           final color = TableDetailsController.stockBadgeColor(badge);
 
           CatalogProductModel? product;
@@ -666,15 +667,26 @@ class _StockVisualList extends GetView<TableDetailsController> {
                         ),
                       ),
                       alignment: Alignment.center,
-                      child: Text(
-                        '$badge',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: color,
-                          fontSize:
-                              JtrResponsive.getResponsiveFontSize(context, 13),
-                        ),
-                      ),
+                      child: blocked
+                          ? Icon(
+                              Icons.block,
+                              size: JtrResponsive.getResponsiveSize(
+                                context,
+                                16,
+                              ),
+                              color: color,
+                            )
+                          : Text(
+                              '$badge',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  13,
+                                ),
+                              ),
+                            ),
                     ),
                     JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
                     Expanded(
@@ -1616,6 +1628,8 @@ class _MenuGrid extends GetView<TableDetailsController> {
               final itemRadius =
                   JtrResponsive.getResponsiveRadius(context, 10);
               final stockBadge = controller.stockBadgeForProduct(product.id);
+              final stockBlocked =
+                  controller.isProductStockBlocked(product.id);
               final stockMode = controller.isStockVisualMode;
 
               return Opacity(
@@ -1672,7 +1686,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
                             child: Container(
                               padding: JtrResponsive.getResponsivePadding(
                                 context,
-                                horizontal: 6,
+                                horizontal: stockBlocked ? 4 : 6,
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
@@ -1683,17 +1697,27 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                   JtrResponsive.getResponsiveRadius(context, 8),
                                 ),
                               ),
-                              child: Text(
-                                '$stockBadge',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: JtrResponsive.getResponsiveFontSize(
-                                    context,
-                                    10,
-                                  ),
-                                ),
-                              ),
+                              child: stockBlocked
+                                  ? Icon(
+                                      Icons.block,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        12,
+                                      ),
+                                      color: Colors.white,
+                                    )
+                                  : Text(
+                                      '$stockBadge',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize:
+                                            JtrResponsive.getResponsiveFontSize(
+                                          context,
+                                          10,
+                                        ),
+                                      ),
+                                    ),
                             ),
                           ),
                         Padding(

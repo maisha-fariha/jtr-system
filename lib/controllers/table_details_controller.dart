@@ -1504,6 +1504,14 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    if (icon == Icons.inventory_2_outlined) {
+      toggleStockVisualMode();
+      activeToolbarIcon.value = isStockVisualMode
+          ? Icons.inventory_2_outlined
+          : Icons.grid_view;
+      return;
+    }
+
     if (icon == Icons.receipt_long_outlined) {
       printTicket(context: context);
       return;
@@ -1531,6 +1539,9 @@ class TableDetailsController extends GetxController {
       if (icon == Icons.payments_outlined) return true;
       if (icon == Icons.send_outlined) return canSendToKitchen;
       return false;
+    }
+    if (icon == Icons.inventory_2_outlined) {
+      return canToggleStockVisual || isStockVisualMode;
     }
     if (icon == Icons.send_outlined) {
       return canSendToKitchen;

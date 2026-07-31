@@ -466,21 +466,17 @@ class _OrderSummaryState extends State<_OrderSummary> {
                   ),
           ),
           const Divider(height: 1, color: Color(0xFFE8E8E8)),
-          Padding(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              left: 20,
-              right: 20,
-              top: 6,
-              bottom: 6,
-            ),
-            child: Row(
-              children: [
-                if (controller.hasStockVisualAccess) ...[
-                  _StockVisualToggleButton(controller: controller),
-                  JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
-                ],
-                if (!stockMode) ...[
+          if (!stockMode)
+            Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                left: 20,
+                right: 20,
+                top: 6,
+                bottom: 6,
+              ),
+              child: Row(
+                children: [
                   Expanded(
                     child: Text(
                       'Total',
@@ -502,70 +498,12 @@ class _OrderSummaryState extends State<_OrderSummary> {
                       color: AppTheme.darkText,
                     ),
                   ),
-                ] else
-                  const Spacer(),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
       );
     });
-  }
-}
-
-class _StockVisualToggleButton extends StatelessWidget {
-  const _StockVisualToggleButton({required this.controller});
-
-  final TableDetailsController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = controller.isStockVisualMode;
-    final enabled = controller.canToggleStockVisual || active;
-    return Material(
-      color: active
-          ? AppTheme.primary.withValues(alpha: 0.15)
-          : AppTheme.lightButton,
-      borderRadius: BorderRadius.circular(
-        JtrResponsive.getResponsiveRadius(context, 8),
-      ),
-      child: InkWell(
-        onTap: enabled ? controller.toggleStockVisualMode : null,
-        borderRadius: BorderRadius.circular(
-          JtrResponsive.getResponsiveRadius(context, 8),
-        ),
-        child: Padding(
-          padding: JtrResponsive.getResponsivePadding(
-            context,
-            horizontal: 8,
-            vertical: 6,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.inventory_2_outlined,
-                size: JtrResponsive.getResponsiveSize(context, 14),
-                color: enabled
-                    ? (active ? AppTheme.primary : AppTheme.darkText)
-                    : AppTheme.textSecondary,
-              ),
-              JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
-              Text(
-                'Stock Visuel',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                  fontWeight: FontWeight.w700,
-                  color: enabled
-                      ? (active ? AppTheme.primary : AppTheme.darkText)
-                      : AppTheme.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -1129,6 +1067,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.menu_book,
     Icons.restaurant,
     Icons.restaurant_menu,
+    Icons.inventory_2_outlined,
     Icons.receipt_long_outlined,
     Icons.payments_outlined,
     Icons.send_outlined,
@@ -1160,21 +1099,29 @@ class _ActionToolbarState extends State<_ActionToolbar> {
         // Subscribe so the category-back icon enables/disables with navigation.
         controller.categoryPath.length;
         controller.selectedCategoryIndex.value;
+        controller.stockVisual.isStockVisualMode.value;
+        controller.showPaymentOptions.value;
 
         return Row(
           mainAxisAlignment:
               isLarge ? MainAxisAlignment.spaceBetween : MainAxisAlignment.start,
           children: [
             for (final icon in _icons)
-              _ToolbarIconButton(
-                icon: icon,
-                label: icon == Icons.restaurant ? 'A' : null,
-                isActive: controller.isToolbarIconActive(icon),
-                isEnabled: controller.isToolbarIconEnabled(icon),
-                onPressed: () =>
-                    controller.onToolbarIconTap(icon, context: toolbarContext),
-                compact: isLarge,
-              ),
+              if (icon != Icons.inventory_2_outlined ||
+                  controller.hasStockVisualAccess)
+                _ToolbarIconButton(
+                  icon: icon,
+                  label: icon == Icons.restaurant ? 'A' : null,
+                  isActive: icon == Icons.inventory_2_outlined
+                      ? controller.isStockVisualMode
+                      : controller.isToolbarIconActive(icon),
+                  isEnabled: controller.isToolbarIconEnabled(icon),
+                  onPressed: () => controller.onToolbarIconTap(
+                    icon,
+                    context: toolbarContext,
+                  ),
+                  compact: isLarge,
+                ),
             _ToolbarIconButton(
               icon: expanded
                   ? Icons.keyboard_arrow_down

@@ -1110,7 +1110,10 @@ class _ActionToolbarState extends State<_ActionToolbar> {
               if (icon != Icons.inventory_2_outlined ||
                   controller.hasStockVisualAccess)
                 _ToolbarIconButton(
-                  icon: icon,
+                  icon: icon == Icons.inventory_2_outlined &&
+                          controller.isStockVisualMode
+                      ? Icons.inventory_2
+                      : icon,
                   label: icon == Icons.restaurant ? 'A' : null,
                   isActive: icon == Icons.inventory_2_outlined
                       ? controller.isStockVisualMode

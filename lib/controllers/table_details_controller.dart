@@ -13,6 +13,7 @@ import '../data/order_optimistic_sync.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/repositories/stock_repository.dart';
 import '../data/mappers/menu_mapper.dart';
 import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
@@ -25,20 +26,34 @@ import '../utils/app_snackbar.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
+import '../widgets/stock_define_dialog.dart';
+import '../widgets/stock_exhausted_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
 import 'session_controller.dart';
+import 'stock_visual_state.dart';
 
 class TableDetailsController extends GetxController {
   TableDetailsController({
     required CatalogRepository catalogRepository,
     required OrderRepository orderRepository,
+    StockRepository? stockRepository,
   })  : _catalogRepository = catalogRepository,
-        _orderRepository = orderRepository;
+        _orderRepository = orderRepository,
+        _stockRepository = stockRepository;
 
   final CatalogRepository _catalogRepository;
   final OrderRepository _orderRepository;
+  final StockRepository? _stockRepository;
+
+  StockRepository? get _stockRepo =>
+      _stockRepository ??
+      (Get.isRegistered<StockRepository>()
+          ? Get.find<StockRepository>()
+          : null);
+
+  late final StockVisualState stockVisual = StockVisualState(_stockRepo);
 
   OrderOptimisticSync get _optimisticSync =>
       _orderRepository.optimisticSyncFor(_optimisticSyncKey);
@@ -652,6 +667,7 @@ class TableDetailsController extends GetxController {
     );
 
     _loadCatalog();
+    unawaited(stockVisual.loadLimits());
     // Seed path: resolve offered flag once without waiting for network.
     if (orderId != null && orderId! > 0) {
       _refreshOrderOfferedCache();
@@ -1037,9 +1053,11 @@ class TableDetailsController extends GetxController {
     );
 
     if (menuResult is MenuSelectionSubmitResult) {
-      _applyMenuSelectionFromToolbar(
-        menuResult,
-        suivreSectionIndex: suivreSectionBeforeNav,
+      unawaited(
+        _applyMenuSelectionFromToolbar(
+          menuResult,
+          suivreSectionIndex: suivreSectionBeforeNav,
+        ),
       );
       orderUiRevision.value++;
       return;
@@ -1049,10 +1067,10 @@ class TableDetailsController extends GetxController {
     orderUiRevision.value++;
   }
 
-  void _applyMenuSelectionFromToolbar(
+  Future<void> _applyMenuSelectionFromToolbar(
     MenuSelectionSubmitResult submit, {
     int? suivreSectionIndex,
-  }) {
+  }) async {
     _prepareForNewAdd();
     _invalidateDeleteAppliesIfNeeded();
 
@@ -1065,6 +1083,9 @@ class TableDetailsController extends GetxController {
       isComposed: true,
       isActive: true,
     );
+
+    final allowed = await _ensureStockAllowsAdd(product);
+    if (!allowed) return;
 
     final layoutHints = _rawSessionOrder?.displayEntries ?? order?.displayEntries;
     final rollbackSnapshot = _rawSessionOrder != null
@@ -1085,6 +1106,7 @@ class TableDetailsController extends GetxController {
       menuSelections: submit.menuSelections,
       comment: submit.comment,
     );
+    stockVisual.consumeLocally(product.id, 1);
     // Local-first: no PUT until Send (same as catalog composed adds).
     if (_mutationsAreLocalOnly || _isLocalDraft) return;
 
@@ -1182,6 +1204,7 @@ class TableDetailsController extends GetxController {
     final show = !showPaymentOptions.value;
     showPaymentOptions.value = show;
     if (show) {
+      stockVisual.isStockVisualMode.value = false;
       isBottomPanelExpanded.value = false;
       activeToolbarIcon.value = Icons.payments_outlined;
       unawaited(_loadPaymentModes());
@@ -1261,6 +1284,43 @@ class TableDetailsController extends GetxController {
     return PosPermissions.canEditTableDetailsAfterSend(
       Get.find<AuthRepository>().cachedSession?.user,
     );
+  }
+
+  /// `access-stock-visual` (or superuser) — manager Stock Visuel UI.
+  bool get hasStockVisualAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canAccessStockVisual(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// Stock Visuel toggle: hidden without permission; disabled when payment open.
+  bool get canToggleStockVisual =>
+      hasStockVisualAccess && !showPaymentOptions.value && !isOrderOffered;
+
+  bool get isStockVisualMode => stockVisual.isStockVisualMode.value;
+
+  void toggleStockVisualMode() {
+    if (!hasStockVisualAccess) return;
+    if (showPaymentOptions.value || isOrderOffered) {
+      stockVisual.isStockVisualMode.value = false;
+      return;
+    }
+    final next = !stockVisual.isStockVisualMode.value;
+    stockVisual.isStockVisualMode.value = next;
+    if (next) {
+      showPaymentOptions.value = false;
+      unawaited(stockVisual.loadLimits());
+    }
+  }
+
+  int? stockBadgeForProduct(int productId) => stockVisual.badgeFor(productId);
+
+  static Color stockBadgeColor(int remaining) {
+    if (remaining <= 0) return const Color(0xFFE74C3C);
+    if (remaining <= 3) return const Color(0xFFE67E22);
+    if (remaining <= 5) return const Color(0xFFF1C40F);
+    return const Color(0xFF27AE60);
   }
 
   /// Before send: everyone. After send: managers / access-edit-table-details only.
@@ -1685,6 +1745,12 @@ class TableDetailsController extends GetxController {
         logOrderFlow(
           'SEND sync running orderId=$sendOrderId lines=${draftLines.length}',
         );
+        final pendingStockDeltas = stockVisual.pendingDeltas();
+        Future<void>? stockDeltasFuture;
+        final repo = _stockRepo;
+        if (repo != null && pendingStockDeltas.isNotEmpty) {
+          stockDeltasFuture = repo.applyDeltas(pendingStockDeltas);
+        }
         try {
           final sent = await _orderRepository.createAndSendLocalDraft(
             tableNumber: orderNumber,
@@ -1706,6 +1772,21 @@ class TableDetailsController extends GetxController {
           _localDraftLines.clear();
           _deferDetailFetch = false;
           _didCompleteKitchenSend = true;
+
+          if (stockDeltasFuture != null) {
+            try {
+              await stockDeltasFuture;
+              stockVisual.clearDeltas();
+            } on ApiException catch (e) {
+              logOrderFlow('SEND apply-deltas failed: ${e.message}');
+            } catch (e) {
+              logOrderFlow('SEND apply-deltas failed: $e');
+            }
+          } else {
+            stockVisual.clearDeltas();
+          }
+          unawaited(stockVisual.loadLimits());
+
           final log = _orderRepository.lastKitchenSendLog ??
               _orderRepository.lastCreateOrderLog;
           if (log != null) {
@@ -2156,6 +2237,12 @@ class TableDetailsController extends GetxController {
   void onProductTap(CatalogProductModel product) {
     if (_blockIfOrderOffered()) return;
 
+    if (isStockVisualMode) {
+      if (!hasStockVisualAccess) return;
+      unawaited(openDefineStockModal(product));
+      return;
+    }
+
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
@@ -2168,7 +2255,96 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    unawaited(_addSimpleProductWithStockGate(product));
+  }
+
+  Future<void> _addSimpleProductWithStockGate(
+    CatalogProductModel product, {
+    int qty = 1,
+  }) async {
+    final allowed = await _ensureStockAllowsAdd(product, qty: qty);
+    if (!allowed) return;
     _queueSimpleProductAdd(product);
+    if (qty > 1) {
+      // Extra units beyond the first queued add.
+      for (var i = 1; i < qty; i++) {
+        _queueSimpleProductAdd(product);
+      }
+    }
+    stockVisual.consumeLocally(product.id, qty);
+  }
+
+  /// Returns false when add must be aborted.
+  Future<bool> _ensureStockAllowsAdd(
+    CatalogProductModel product, {
+    int qty = 1,
+  }) async {
+    if (!stockVisual.isTracked(product.id)) return true;
+    if (stockVisual.canAdd(product.id, qty: qty)) return true;
+
+    final action = await StockExhaustedDialog.show(productName: product.name);
+    switch (action) {
+      case StockExhaustedAction.forbid:
+      case null:
+        return false;
+      case StockExhaustedAction.force:
+        return true;
+      case StockExhaustedAction.freeAndSell:
+        final repo = _stockRepo;
+        if (repo == null) return true;
+        try {
+          await repo.freeProduct(product.id);
+          await stockVisual.loadLimits();
+          return true;
+        } on ApiException catch (e) {
+          AppSnackbar.show('Stock', e.message);
+          return false;
+        } catch (_) {
+          AppSnackbar.show('Stock', 'Impossible de remettre en vente.');
+          return false;
+        }
+    }
+  }
+
+  Future<void> openDefineStockModal(CatalogProductModel product) async {
+    final repo = _stockRepo;
+    if (repo == null || !hasStockVisualAccess) return;
+
+    try {
+      final status = await repo.getProductStatus(product.id);
+      final result = await StockDefineDialog.show(
+        productName: product.name,
+        initialQuantity: status.currentStock,
+      );
+      if (result == null) return;
+
+      switch (result.action) {
+        case StockDefineAction.cancel:
+          return;
+        case StockDefineAction.save:
+          final qty = result.quantity;
+          if (qty == null || qty < 1) return;
+          await repo.setLimit(productId: product.id, dailyLimit: qty);
+          await stockVisual.loadLimits();
+          return;
+        case StockDefineAction.removeTracking:
+          await repo.removeLimit(product.id);
+          await stockVisual.loadLimits();
+          return;
+        case StockDefineAction.block:
+          await repo.blockProduct(product.id);
+          stockVisual.applyBlockedLocally(
+            product.id,
+            productName: product.name,
+          );
+          await stockVisual.loadLimits();
+          return;
+      }
+    } on ApiException catch (e) {
+      AppSnackbar.show('Stock Visuel', e.message);
+    } catch (_) {
+      AppSnackbar.show('Stock Visuel', 'Impossible de définir le stock.');
+    }
   }
 
   void _queueSimpleProductAdd(CatalogProductModel product) {
@@ -2406,6 +2582,9 @@ class TableDetailsController extends GetxController {
 
   Future<void> _handleComposedProductTap(CatalogProductModel product) async {
     try {
+      final allowed = await _ensureStockAllowsAdd(product);
+      if (!allowed) return;
+
       final layoutHints = order?.displayEntries;
       final detail = await _catalogRepository.getProductDetail(product.id);
       final presetMenu = MenuMapper.presetFromProduct(
@@ -2442,6 +2621,7 @@ class TableDetailsController extends GetxController {
         product: detail,
         menuSelections: menuSelections,
       );
+      stockVisual.consumeLocally(product.id, 1);
       if (_mutationsAreLocalOnly) return;
       if (_isLocalDraft) return;
       unawaited(
@@ -2689,6 +2869,23 @@ class TableDetailsController extends GetxController {
     final currentQty = int.tryParse(current.products[lineIndex].quantity) ?? 1;
     if (qty < currentQty && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
 
+    final productId = _productIdForLineIndex(lineIndex, current);
+    if (productId != null && qty > currentQty) {
+      final catalog = catalogProductByName(current.products[lineIndex].name) ??
+          CatalogProductModel(
+            id: productId,
+            name: current.products[lineIndex].name,
+            price: '0',
+            categoryId: 0,
+            categoryName: '',
+            isComposed: false,
+            isActive: true,
+          );
+      final delta = qty - currentQty;
+      final allowed = await _ensureStockAllowsAdd(catalog, qty: delta);
+      if (!allowed) return;
+    }
+
     if (id == null || id <= 0 || _mutationsAreLocalOnly) {
       if (!_mutationsAreLocalOnly && !_isLocalDraft) return;
       if (qty <= 0) {
@@ -2702,6 +2899,11 @@ class TableDetailsController extends GetxController {
       );
       _syncOrderInSession(predicted, orderNumber);
       _setLocalDraftLineQtyAt(lineIndex, qty);
+      _adjustStockDeltaForQtyChange(
+        productId: productId,
+        fromQty: currentQty,
+        toQty: qty,
+      );
       return;
     }
 
@@ -2711,6 +2913,34 @@ class TableDetailsController extends GetxController {
       lineIndex: lineIndex,
       qty: qty,
     );
+    _adjustStockDeltaForQtyChange(
+      productId: productId,
+      fromQty: currentQty,
+      toQty: qty,
+    );
+  }
+
+  void _adjustStockDeltaForQtyChange({
+    required int? productId,
+    required int fromQty,
+    required int toQty,
+  }) {
+    if (productId == null || productId <= 0) return;
+    final diff = toQty - fromQty;
+    if (diff > 0) {
+      stockVisual.consumeLocally(productId, diff);
+    } else if (diff < 0) {
+      stockVisual.restoreLocally(productId, -diff);
+    }
+  }
+
+  int? _productIdForLineIndex(int lineIndex, SessionOrder current) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return null;
+    if (lineIndex < _localDraftLines.length) {
+      final draftId = _localDraftLines[lineIndex].productId;
+      if (draftId > 0) return draftId;
+    }
+    return catalogProductByName(current.products[lineIndex].name)?.id;
   }
 
   void _syncOrderInSession(
@@ -2945,6 +3175,22 @@ class TableDetailsController extends GetxController {
       }
     }
 
+    final productId = _productIdForLineIndex(productIndex, currentOrder);
+    if (delta > 0 && productId != null) {
+      final catalog = catalogProductByName(line.name) ??
+          CatalogProductModel(
+            id: productId,
+            name: line.name,
+            price: '0',
+            categoryId: 0,
+            categoryName: '',
+            isComposed: false,
+            isActive: true,
+          );
+      final allowed = await _ensureStockAllowsAdd(catalog, qty: delta);
+      if (!allowed) return;
+    }
+
     if (_mutationsAreLocalOnly || id == null || id <= 0) {
       if (!_mutationsAreLocalOnly && !_isLocalDraft) {
         AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
@@ -2958,6 +3204,13 @@ class TableDetailsController extends GetxController {
       _syncOrderInSession(predicted, orderNumber);
       final newQty = (int.tryParse(line.quantity) ?? 1) + delta;
       _setLocalDraftLineQtyAt(productIndex, newQty);
+      if (productId != null) {
+        if (delta > 0) {
+          stockVisual.consumeLocally(productId, delta);
+        } else {
+          stockVisual.restoreLocally(productId, -delta);
+        }
+      }
       return;
     }
 
@@ -2967,6 +3220,13 @@ class TableDetailsController extends GetxController {
       lineIndex: productIndex,
       delta: delta,
     );
+    if (productId != null) {
+      if (delta > 0) {
+        stockVisual.consumeLocally(productId, delta);
+      } else {
+        stockVisual.restoreLocally(productId, -delta);
+      }
+    }
   }
 
   void _cancelSuivreSectionLocally(
@@ -2985,6 +3245,16 @@ class TableDetailsController extends GetxController {
     final sortedIndices = lineIndices.toList()
       ..sort((a, b) => b.compareTo(a));
     for (final i in sortedIndices) {
+      if (i >= 0 && i < currentOrder.products.length) {
+        final line = currentOrder.products[i];
+        final productId =
+            _productIdForLineIndex(i, currentOrder) ??
+                catalogProductByName(line.name)?.id;
+        final qty = int.tryParse(line.quantity) ?? 1;
+        if (productId != null && productId > 0) {
+          stockVisual.restoreLocally(productId, qty);
+        }
+      }
       _removeLocalDraftLineAt(i);
     }
 
@@ -3210,6 +3480,9 @@ class TableDetailsController extends GetxController {
 
     final line = currentOrder.products[productIndex];
     final catalog = catalogProductByName(line.name);
+    final restoreProductId =
+        _productIdForLineIndex(productIndex, currentOrder) ?? catalog?.id;
+    final restoreQty = int.tryParse(line.quantity) ?? 1;
     if (catalog != null && selectedProductId.value == catalog.id) {
       selectedProductId.value = null;
     }
@@ -3259,6 +3532,10 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: predicted.displayEntries,
     );
+
+    if (restoreProductId != null && restoreProductId > 0) {
+      stockVisual.restoreLocally(restoreProductId, restoreQty);
+    }
 
     if (_isLocalDraft || _mutationsAreLocalOnly) {
       _removeLocalDraftLineAt(productIndex);
@@ -3344,6 +3621,7 @@ class TableDetailsController extends GetxController {
   @override
   void onClose() {
     _discardPendingSimpleAdds();
+    stockVisual.dispose();
     super.onClose();
   }
 

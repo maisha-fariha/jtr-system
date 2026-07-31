@@ -42,5 +42,17 @@ void main() {
       );
       expect(PosPermissions.canEditTableDetailsAfterSend(user), isTrue);
     });
+
+    test('access-stock-visual grants Stock Visuel UI', () {
+      const user = AuthUserModel(
+        id: 5,
+        name: 'Manager',
+        permissions: [PosPermissions.accessStockVisual],
+      );
+      expect(PosPermissions.canAccessStockVisual(user), isTrue);
+      expect(PosPermissions.canAccessStockVisual(
+        const AuthUserModel(id: 6, name: 'Cashier', permissions: []),
+      ), isFalse);
+    });
   });
 }

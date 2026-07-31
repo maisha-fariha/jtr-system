@@ -24,6 +24,7 @@ import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/device_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../data/repositories/stock_repository.dart';
 import '../pages/table_details_page.dart';
 
 class AppRoutes {
@@ -156,6 +157,7 @@ class AppPages {
           TableDetailsController(
             catalogRepository: Get.find<CatalogRepository>(),
             orderRepository: Get.find<OrderRepository>(),
+            stockRepository: Get.find<StockRepository>(),
           ),
         );
       }),

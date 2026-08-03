@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../core/auth/pos_permissions.dart';
 import '../core/network/api_exception.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/models/local_draft_line.dart';
@@ -12,6 +13,7 @@ import '../data/order_optimistic_sync.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/repositories/stock_repository.dart';
 import '../data/mappers/menu_mapper.dart';
 import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
@@ -24,20 +26,34 @@ import '../utils/app_snackbar.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
+import '../widgets/stock_define_dialog.dart';
+import '../widgets/stock_exhausted_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
 import 'session_controller.dart';
+import 'stock_visual_state.dart';
 
 class TableDetailsController extends GetxController {
   TableDetailsController({
     required CatalogRepository catalogRepository,
     required OrderRepository orderRepository,
+    StockRepository? stockRepository,
   })  : _catalogRepository = catalogRepository,
-        _orderRepository = orderRepository;
+        _orderRepository = orderRepository,
+        _stockRepository = stockRepository;
 
   final CatalogRepository _catalogRepository;
   final OrderRepository _orderRepository;
+  final StockRepository? _stockRepository;
+
+  StockRepository? get _stockRepo =>
+      _stockRepository ??
+      (Get.isRegistered<StockRepository>()
+          ? Get.find<StockRepository>()
+          : null);
+
+  late final StockVisualState stockVisual = StockVisualState(_stockRepo);
 
   OrderOptimisticSync get _optimisticSync =>
       _orderRepository.optimisticSyncFor(_optimisticSyncKey);
@@ -69,6 +85,9 @@ class TableDetailsController extends GetxController {
 
   /// Lines queued locally until Send All POSTs /api/orders (no seed product).
   final List<LocalDraftLine> _localDraftLines = [];
+
+  /// After a successful kitchen Send, further sends use PUT (not POST create).
+  bool _didCompleteKitchenSend = false;
 
   bool get _isLocalDraft {
     if (orderId != null && orderId! > 0) return false;
@@ -264,6 +283,7 @@ class TableDetailsController extends GetxController {
         live: live,
         selectedSuivreSectionIndex: selectedSuivreSection.value,
         preferAdoptingNewServerLines: adoptingNewServerLines,
+        suppressItemIds: suppress,
       );
       if (_liveItemIdsDiffer(live, patched) ||
           OrderMapper.suivreSeparatorCount(live.displayEntries) !=
@@ -335,6 +355,7 @@ class TableDetailsController extends GetxController {
         live: live ?? updated,
         selectedSuivreSectionIndex: selectedSuivreSection.value,
         preferAdoptingNewServerLines: adoptingNewServerLines,
+        suppressItemIds: suppress,
       );
       if (suppress.isNotEmpty) {
         base = OrderMapper.mergeLiveOptimisticDetail(
@@ -630,6 +651,14 @@ class TableDetailsController extends GetxController {
       if ((orderId == null || orderId! <= 0) && rawSeed.isLocalOnly) {
         _deferDetailFetch = true;
       }
+      // Reopened remote ticket with synced lines → later Send uses PUT.
+      if (!rawSeed.isLocalOnly &&
+          _layoutHasServerItemIds(rawSeed.displayEntries)) {
+        _didCompleteKitchenSend = true;
+      }
+    }
+    if (_deferDetailFetch) {
+      _didCompleteKitchenSend = false;
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
@@ -638,20 +667,28 @@ class TableDetailsController extends GetxController {
     );
 
     _loadCatalog();
+    unawaited(stockVisual.loadLimits());
+    // Seed path: resolve offered flag once without waiting for network.
+    if (orderId != null && orderId! > 0) {
+      _refreshOrderOfferedCache();
+    }
     unawaited(_bootstrapOrder());
   }
 
   Future<void> _bootstrapOrder() async {
+    // New local draft (create → details): never resolve a stale remote id.
+    // That GET often returns "The order id not found" (e.g. after offer/retire).
+    if (_deferDetailFetch || _isLocalDraft) return;
+
     await _ensureResolvedOrderId();
     final resolved = resolvedOrderId;
     if (resolved != null && resolved > 0) {
-      _deferDetailFetch = false;
       await _refreshOrder();
+      _refreshKitchenSentFlag(order);
       return;
     }
-    if (_deferDetailFetch && _localDraftLines.isEmpty) return;
-    if (_isLocalDraft) return;
     await _refreshOrder();
+    _refreshKitchenSentFlag(order);
   }
 
   Future<void> _loadCatalog() async {
@@ -714,16 +751,26 @@ class TableDetailsController extends GetxController {
 
   /// Presentation-only: empty-shell lock after delete-all (not create-seed hiding).
   SessionOrder forDisplay(SessionOrder raw) {
-    if (raw.id > 0 &&
+    var order = raw;
+    if (order.id > 0 &&
         Get.isRegistered<OrderRepository>() &&
-        _orderRepository.shouldDisplayAsEmptyCreateShell(raw.id)) {
-      final hasLines = raw.products.isNotEmpty || raw.displayEntries.isNotEmpty;
-      if (!hasLines) return raw;
+        _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
+      final hasLines =
+          order.products.isNotEmpty || order.displayEntries.isNotEmpty;
+      if (!hasLines) return order;
       // Optimistic add already wrote lines — do not hide them again.
-      _orderRepository.clearEmptyShellDisplay(raw.id);
-      return raw;
+      _orderRepository.clearEmptyShellDisplay(order.id);
     }
-    return raw;
+
+    // Never show DEMANDÉE course rows with no items under them.
+    final cleaned = OrderMapper.withoutEmptyDemandeSeparators(
+      order.displayEntries,
+    );
+    if (!identical(cleaned, order.displayEntries) &&
+        cleaned.length != order.displayEntries.length) {
+      order = order.copyWith(displayEntries: cleaned);
+    }
+    return order;
   }
 
   SessionOrder? get order {
@@ -1006,9 +1053,11 @@ class TableDetailsController extends GetxController {
     );
 
     if (menuResult is MenuSelectionSubmitResult) {
-      _applyMenuSelectionFromToolbar(
-        menuResult,
-        suivreSectionIndex: suivreSectionBeforeNav,
+      unawaited(
+        _applyMenuSelectionFromToolbar(
+          menuResult,
+          suivreSectionIndex: suivreSectionBeforeNav,
+        ),
       );
       orderUiRevision.value++;
       return;
@@ -1018,10 +1067,10 @@ class TableDetailsController extends GetxController {
     orderUiRevision.value++;
   }
 
-  void _applyMenuSelectionFromToolbar(
+  Future<void> _applyMenuSelectionFromToolbar(
     MenuSelectionSubmitResult submit, {
     int? suivreSectionIndex,
-  }) {
+  }) async {
     _prepareForNewAdd();
     _invalidateDeleteAppliesIfNeeded();
 
@@ -1034,6 +1083,9 @@ class TableDetailsController extends GetxController {
       isComposed: true,
       isActive: true,
     );
+
+    final allowed = await _ensureStockAllowsAdd(product);
+    if (!allowed) return;
 
     final layoutHints = _rawSessionOrder?.displayEntries ?? order?.displayEntries;
     final rollbackSnapshot = _rawSessionOrder != null
@@ -1049,6 +1101,14 @@ class TableDetailsController extends GetxController {
       comment: submit.comment,
       selectedSuivreSectionIndex: effectiveSuivreSection,
     );
+    _trackLocalDraftAddComposed(
+      product: product,
+      menuSelections: submit.menuSelections,
+      comment: submit.comment,
+    );
+    stockVisual.consumeLocally(product.id, 1);
+    // Local-first: no PUT until Send (same as catalog composed adds).
+    if (_mutationsAreLocalOnly || _isLocalDraft) return;
 
     unawaited(
       _syncAddComposedProductInBackground(
@@ -1144,6 +1204,7 @@ class TableDetailsController extends GetxController {
     final show = !showPaymentOptions.value;
     showPaymentOptions.value = show;
     if (show) {
+      stockVisual.isStockVisualMode.value = false;
       isBottomPanelExpanded.value = false;
       activeToolbarIcon.value = Icons.payments_outlined;
       unawaited(_loadPaymentModes());
@@ -1206,18 +1267,116 @@ class TableDetailsController extends GetxController {
       !paymentModesLoading.value;
 
   /// True when cached API detail has `status: "offered"`.
-  bool get isOrderOffered {
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) return false;
-    final status = _orderRepository
-        .cachedOrderDetail(id)?['status']
-        ?.toString()
-        .trim()
-        .toLowerCase();
-    return status == 'offered';
+  ///
+  /// Kept as a field so ticket-row Obx rebuilds never hit Hive/`jsonDecode`.
+  bool _orderOfferedCached = false;
+
+  bool get isOrderOffered => _orderOfferedCached;
+
+  bool get canModifyOrder => !_orderOfferedCached;
+
+  /// True after kitchen send (this session or reopened synced ticket).
+  bool get orderSentToKitchen => _didCompleteKitchenSend;
+
+  /// `access-edit-table-details` (or superuser) — delete/decrease after send.
+  bool get hasEditTableDetailsAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canEditTableDetailsAfterSend(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
   }
 
-  bool get canModifyOrder => !isOrderOffered;
+  /// `access-stock-visual` (or superuser) — manager Stock Visuel UI.
+  bool get hasStockVisualAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canAccessStockVisual(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// Stock Visuel toggle: hidden without permission; disabled when payment open.
+  bool get canToggleStockVisual =>
+      hasStockVisualAccess && !showPaymentOptions.value && !isOrderOffered;
+
+  bool get isStockVisualMode => stockVisual.isStockVisualMode.value;
+
+  void toggleStockVisualMode() {
+    if (!hasStockVisualAccess) return;
+    if (showPaymentOptions.value || isOrderOffered) {
+      stockVisual.isStockVisualMode.value = false;
+      return;
+    }
+    final next = !stockVisual.isStockVisualMode.value;
+    stockVisual.isStockVisualMode.value = next;
+    if (next) {
+      showPaymentOptions.value = false;
+      unawaited(stockVisual.loadLimits());
+    }
+  }
+
+  int? stockBadgeForProduct(int productId) => stockVisual.badgeFor(productId);
+
+  bool isProductStockBlocked(int productId) =>
+      stockVisual.isBlocked(productId);
+
+  static Color stockBadgeColor(int remaining) {
+    if (remaining <= 0) return const Color(0xFFE74C3C);
+    if (remaining <= 3) return const Color(0xFFE67E22);
+    if (remaining <= 5) return const Color(0xFFF1C40F);
+    return const Color(0xFF27AE60);
+  }
+
+  /// Before send: everyone. After send: managers / access-edit-table-details only.
+  bool canDeleteOrDecreaseLine(int productIndex) {
+    if (!orderSentToKitchen) return true;
+    return hasEditTableDetailsAccess;
+  }
+
+  bool _blockIfCannotDeleteOrDecreaseAfterSend() {
+    if (!orderSentToKitchen) return false;
+    if (hasEditTableDetailsAccess) return false;
+    AppSnackbar.show(
+      'Action non autorisée',
+      'Seul un utilisateur autorisé peut supprimer ou diminuer un article '
+      'après l\'envoi en cuisine.',
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 3),
+      margin: const EdgeInsets.all(16),
+    );
+    return true;
+  }
+
+  void _refreshKitchenSentFlag(SessionOrder? source) {
+    final current = source ?? order;
+    if (current == null) return;
+    if (_layoutHasServerItemIds(current.displayEntries)) {
+      _didCompleteKitchenSend = true;
+    }
+  }
+
+  void _refreshOrderOfferedCache({Map<String, dynamic>? detail}) {
+    final id = resolvedOrderId;
+    var next = false;
+    if (id != null && id > 0) {
+      final raw = detail ?? _orderRepository.cachedOrderDetail(id);
+      final status = raw?['status']?.toString().trim().toLowerCase();
+      next = status == 'offered';
+    }
+    // Local table-offer (no remote status yet): all lines marked offered.
+    if (!next) {
+      final current = order;
+      next = current != null &&
+          current.products.isNotEmpty &&
+          current.products.every((product) => product.isOffered);
+    }
+    if (_orderOfferedCached == next) return;
+    _orderOfferedCached = next;
+    // Toolbar / menu / slidables read this outside a dedicated Rx — bump.
+    orderUiRevision.value++;
+  }
+
+  /// Re-read offered lock after session-level table offer.
+  void refreshOfferedLock() => _refreshOrderOfferedCache();
 
   bool _blockIfOrderOffered() {
     if (!isOrderOffered) return false;
@@ -1345,6 +1504,14 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    if (icon == Icons.inventory_2_outlined) {
+      toggleStockVisualMode();
+      activeToolbarIcon.value = isStockVisualMode
+          ? Icons.inventory_2_outlined
+          : Icons.grid_view;
+      return;
+    }
+
     if (icon == Icons.receipt_long_outlined) {
       printTicket(context: context);
       return;
@@ -1372,6 +1539,9 @@ class TableDetailsController extends GetxController {
       if (icon == Icons.payments_outlined) return true;
       if (icon == Icons.send_outlined) return canSendToKitchen;
       return false;
+    }
+    if (icon == Icons.inventory_2_outlined) {
+      return canToggleStockVisual || isStockVisualMode;
     }
     if (icon == Icons.send_outlined) {
       return canSendToKitchen;
@@ -1479,10 +1649,25 @@ class TableDetailsController extends GetxController {
       layout: layout,
       source: live,
     );
+    final layoutProductCount = layout
+        .where((e) => e.type == OrderDisplayEntryType.product)
+        .length;
     if (draftLines.isEmpty) {
       AppSnackbar.show(
         'Envoi impossible',
-        'Ajoutez au moins un article avant l\'envoi.',
+        live.products.isEmpty
+            ? 'Ajoutez au moins un article avant l\'envoi.'
+            : 'Impossible de préparer tous les articles pour l\'envoi. Réessayez.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+    if (draftLines.length < layoutProductCount) {
+      AppSnackbar.show(
+        'Envoi impossible',
+        'Le ticket n\'est pas complet pour l\'envoi '
+        '(${draftLines.length}/$layoutProductCount). Réessayez.',
         snackPosition: SnackPosition.BOTTOM,
         margin: const EdgeInsets.all(16),
       );
@@ -1500,11 +1685,17 @@ class TableDetailsController extends GetxController {
     final guests = int.tryParse(live.couverts) ?? 1;
 
     final sendOrderId = orderId ?? live.id;
+    // First Send: no kitchen sync yet and no server item ids → one POST.
+    // Later Send (edit/add on existing order) → exactly one PUT.
+    final isFirstKitchenCreate = !_didCompleteKitchenSend &&
+        !_layoutHasServerItemIds(layout) &&
+        (live.isLocalOnly || sendOrderId <= 0 || _deferDetailFetch);
     logOrderFlow(
       'UI SEND tap table=$orderNumber orderId=$sendOrderId '
-      'products=${live.products.length} draftLines=${draftLines.length}',
+      'products=${live.products.length} draftLines=${draftLines.length} '
+      'firstCreate=$isFirstKitchenCreate didSend=$_didCompleteKitchenSend',
     );
-    if (sendOrderId > 0) {
+    if (sendOrderId > 0 && !isFirstKitchenCreate) {
       unawaited(
         _orderRepository.persistSuivreLayoutHints(sendOrderId, layout),
       );
@@ -1525,15 +1716,36 @@ class TableDetailsController extends GetxController {
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
       apply: (updated) {
+        // Prefer the session ticket *now* (may be thinner after a quick
+        // re-enter + delete). Never force the closed-over pre-Send snapshot
+        // back onto the UI — that makes deleted lines flash back.
+        SessionOrder? liveNow;
+        if (Get.isRegistered<SessionController>()) {
+          liveNow = Get.find<SessionController>().findOrder(
+            orderNumber: orderNumber,
+            orderId: updated.id > 0 ? updated.id : orderId,
+          );
+        }
+        liveNow ??= _rawSessionOrder;
+        final baseLive = liveNow ?? snapshot;
+        final orderKey = updated.id > 0
+            ? updated.id
+            : (baseLive.id > 0 ? baseLive.id : 0);
+        final suppress = orderKey > 0
+            ? _orderRepository.suppressedItemIdsFor(orderKey)
+            : const <int>{};
+
         final toApply = OrderMapper.patchServerItemIdsOntoLive(
-          live: snapshot,
+          live: baseLive,
           server: updated,
+          suppressItemIds: suppress,
         );
         if (toApply.id > 0) {
           orderId = toApply.id;
           seedOrder = toApply;
           _localDraftLines.clear();
           _deferDetailFetch = false;
+          _didCompleteKitchenSend = true;
         }
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
@@ -1547,6 +1759,12 @@ class TableDetailsController extends GetxController {
         logOrderFlow(
           'SEND sync running orderId=$sendOrderId lines=${draftLines.length}',
         );
+        final pendingStockDeltas = stockVisual.pendingDeltas();
+        Future<void>? stockDeltasFuture;
+        final repo = _stockRepo;
+        if (repo != null && pendingStockDeltas.isNotEmpty) {
+          stockDeltasFuture = repo.applyDeltas(pendingStockDeltas);
+        }
         try {
           final sent = await _orderRepository.createAndSendLocalDraft(
             tableNumber: orderNumber,
@@ -1556,13 +1774,33 @@ class TableDetailsController extends GetxController {
             salesZoneId: salesZoneId,
             waiterName: waiterName,
             previousDisplayEntries: layoutBeforeSend,
-            existingOrderId: sendOrderId > 0 ? sendOrderId : null,
+            // Only pass id for 2nd+ Send (order already has API lines).
+            existingOrderId: (!isFirstKitchenCreate && sendOrderId > 0)
+                ? sendOrderId
+                : null,
             localTicketBeforeSend: snapshot,
+            isFirstKitchenCreate: isFirstKitchenCreate,
           );
           orderId = sent.id;
           seedOrder = sent;
           _localDraftLines.clear();
           _deferDetailFetch = false;
+          _didCompleteKitchenSend = true;
+
+          if (stockDeltasFuture != null) {
+            try {
+              await stockDeltasFuture;
+              stockVisual.clearDeltas();
+            } on ApiException catch (e) {
+              logOrderFlow('SEND apply-deltas failed: ${e.message}');
+            } catch (e) {
+              logOrderFlow('SEND apply-deltas failed: $e');
+            }
+          } else {
+            stockVisual.clearDeltas();
+          }
+          unawaited(stockVisual.loadLimits());
+
           final log = _orderRepository.lastKitchenSendLog ??
               _orderRepository.lastCreateOrderLog;
           if (log != null) {
@@ -1866,6 +2104,21 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    // Empty À SUIVRE (no products under the divider) cannot be demanded.
+    if (currentOrder != null &&
+        OrderMapper.productEntriesUnderSection(
+          currentOrder.displayEntries,
+          sectionIndex,
+        ).isEmpty) {
+      AppSnackbar.show(
+        'Articles requis',
+        'Ajoutez au moins un article sous ce À SUIVRE avant de demander.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
     final courseNumber = currentOrder == null
         ? null
         : OrderMapper.resolveCourseNumberForSuivreSection(
@@ -1998,6 +2251,12 @@ class TableDetailsController extends GetxController {
   void onProductTap(CatalogProductModel product) {
     if (_blockIfOrderOffered()) return;
 
+    if (isStockVisualMode) {
+      if (!hasStockVisualAccess) return;
+      unawaited(openDefineStockModal(product));
+      return;
+    }
+
     logOrderFlow(
       'onProductTap product=${product.id} ${product.name} table=$orderNumber',
     );
@@ -2010,7 +2269,96 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    unawaited(_addSimpleProductWithStockGate(product));
+  }
+
+  Future<void> _addSimpleProductWithStockGate(
+    CatalogProductModel product, {
+    int qty = 1,
+  }) async {
+    final allowed = await _ensureStockAllowsAdd(product, qty: qty);
+    if (!allowed) return;
     _queueSimpleProductAdd(product);
+    if (qty > 1) {
+      // Extra units beyond the first queued add.
+      for (var i = 1; i < qty; i++) {
+        _queueSimpleProductAdd(product);
+      }
+    }
+    stockVisual.consumeLocally(product.id, qty);
+  }
+
+  /// Returns false when add must be aborted.
+  Future<bool> _ensureStockAllowsAdd(
+    CatalogProductModel product, {
+    int qty = 1,
+  }) async {
+    if (!stockVisual.isTracked(product.id)) return true;
+    if (stockVisual.canAdd(product.id, qty: qty)) return true;
+
+    final action = await StockExhaustedDialog.show(productName: product.name);
+    switch (action) {
+      case StockExhaustedAction.forbid:
+      case null:
+        return false;
+      case StockExhaustedAction.force:
+        return true;
+      case StockExhaustedAction.freeAndSell:
+        final repo = _stockRepo;
+        if (repo == null) return true;
+        try {
+          await repo.freeProduct(product.id);
+          await stockVisual.loadLimits();
+          return true;
+        } on ApiException catch (e) {
+          AppSnackbar.show('Stock', e.message);
+          return false;
+        } catch (_) {
+          AppSnackbar.show('Stock', 'Impossible de remettre en vente.');
+          return false;
+        }
+    }
+  }
+
+  Future<void> openDefineStockModal(CatalogProductModel product) async {
+    final repo = _stockRepo;
+    if (repo == null || !hasStockVisualAccess) return;
+
+    try {
+      final status = await repo.getProductStatus(product.id);
+      final result = await StockDefineDialog.show(
+        productName: product.name,
+        initialQuantity: status.currentStock,
+      );
+      if (result == null) return;
+
+      switch (result.action) {
+        case StockDefineAction.cancel:
+          return;
+        case StockDefineAction.save:
+          final qty = result.quantity;
+          if (qty == null || qty < 1) return;
+          await repo.setLimit(productId: product.id, dailyLimit: qty);
+          await stockVisual.loadLimits();
+          return;
+        case StockDefineAction.removeTracking:
+          await repo.removeLimit(product.id);
+          await stockVisual.loadLimits();
+          return;
+        case StockDefineAction.block:
+          await repo.blockProduct(product.id);
+          stockVisual.applyBlockedLocally(
+            product.id,
+            productName: product.name,
+          );
+          await stockVisual.loadLimits();
+          return;
+      }
+    } on ApiException catch (e) {
+      AppSnackbar.show('Stock Visuel', e.message);
+    } catch (_) {
+      AppSnackbar.show('Stock Visuel', 'Impossible de définir le stock.');
+    }
   }
 
   void _queueSimpleProductAdd(CatalogProductModel product) {
@@ -2248,6 +2596,9 @@ class TableDetailsController extends GetxController {
 
   Future<void> _handleComposedProductTap(CatalogProductModel product) async {
     try {
+      final allowed = await _ensureStockAllowsAdd(product);
+      if (!allowed) return;
+
       final layoutHints = order?.displayEntries;
       final detail = await _catalogRepository.getProductDetail(product.id);
       final presetMenu = MenuMapper.presetFromProduct(
@@ -2284,6 +2635,7 @@ class TableDetailsController extends GetxController {
         product: detail,
         menuSelections: menuSelections,
       );
+      stockVisual.consumeLocally(product.id, 1);
       if (_mutationsAreLocalOnly) return;
       if (_isLocalDraft) return;
       unawaited(
@@ -2528,6 +2880,26 @@ class TableDetailsController extends GetxController {
     final current = order;
     if (current == null) return;
 
+    final currentQty = int.tryParse(current.products[lineIndex].quantity) ?? 1;
+    if (qty < currentQty && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
+
+    final productId = _productIdForLineIndex(lineIndex, current);
+    if (productId != null && qty > currentQty) {
+      final catalog = catalogProductByName(current.products[lineIndex].name) ??
+          CatalogProductModel(
+            id: productId,
+            name: current.products[lineIndex].name,
+            price: '0',
+            categoryId: 0,
+            categoryName: '',
+            isComposed: false,
+            isActive: true,
+          );
+      final delta = qty - currentQty;
+      final allowed = await _ensureStockAllowsAdd(catalog, qty: delta);
+      if (!allowed) return;
+    }
+
     if (id == null || id <= 0 || _mutationsAreLocalOnly) {
       if (!_mutationsAreLocalOnly && !_isLocalDraft) return;
       if (qty <= 0) {
@@ -2541,6 +2913,11 @@ class TableDetailsController extends GetxController {
       );
       _syncOrderInSession(predicted, orderNumber);
       _setLocalDraftLineQtyAt(lineIndex, qty);
+      _adjustStockDeltaForQtyChange(
+        productId: productId,
+        fromQty: currentQty,
+        toQty: qty,
+      );
       return;
     }
 
@@ -2550,6 +2927,34 @@ class TableDetailsController extends GetxController {
       lineIndex: lineIndex,
       qty: qty,
     );
+    _adjustStockDeltaForQtyChange(
+      productId: productId,
+      fromQty: currentQty,
+      toQty: qty,
+    );
+  }
+
+  void _adjustStockDeltaForQtyChange({
+    required int? productId,
+    required int fromQty,
+    required int toQty,
+  }) {
+    if (productId == null || productId <= 0) return;
+    final diff = toQty - fromQty;
+    if (diff > 0) {
+      stockVisual.consumeLocally(productId, diff);
+    } else if (diff < 0) {
+      stockVisual.restoreLocally(productId, -diff);
+    }
+  }
+
+  int? _productIdForLineIndex(int lineIndex, SessionOrder current) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return null;
+    if (lineIndex < _localDraftLines.length) {
+      final draftId = _localDraftLines[lineIndex].productId;
+      if (draftId > 0) return draftId;
+    }
+    return catalogProductByName(current.products[lineIndex].name)?.id;
   }
 
   void _syncOrderInSession(
@@ -2559,6 +2964,12 @@ class TableDetailsController extends GetxController {
     bool throttleUiRevision = false,
   }) {
     if (!Get.isRegistered<SessionController>()) return;
+
+    // Refresh offered flag once per sync (not per ticket-row Obx rebuild).
+    if (updated.id > 0) {
+      orderId ??= updated.id;
+      _refreshOrderOfferedCache();
+    }
 
     var displayEntries = displayEntriesOverride ?? updated.displayEntries;
     final synced = updated.copyWith(
@@ -2617,6 +3028,7 @@ class TableDetailsController extends GetxController {
       synced,
       replaceDetail: true,
     );
+    _refreshKitchenSentFlag(synced);
     _reconcileCatalogSelection(source: synced);
 
     final now = DateTime.now();
@@ -2656,6 +3068,53 @@ class TableDetailsController extends GetxController {
     await _mutateLineQuantity(productIndex, -1);
   }
 
+  void _applyLocalProductOffer(SessionOrder currentOrder, int productIndex) {
+    final updatedProducts = [...currentOrder.products];
+    updatedProducts[productIndex] =
+        updatedProducts[productIndex].copyWith(isOffered: true);
+    final updatedEntries = [
+      for (final entry in currentOrder.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == productIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(isOffered: true),
+            lineIndex: productIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    _syncOrderInSession(
+      currentOrder.copyWith(
+        products: updatedProducts,
+        displayEntries: updatedEntries,
+      ),
+      orderNumber,
+      displayEntriesOverride: updatedEntries,
+    );
+    AppSnackbar.show(
+      'Offert',
+      '${currentOrder.products[productIndex].name} a été offert.',
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  bool _isOrderIdNotFoundError(Object error) {
+    if (error is! ApiException) return false;
+    final msg = error.message.toLowerCase();
+    return error.statusCode == 404 ||
+        msg.contains('order id not found') ||
+        msg.contains('the order id not found') ||
+        msg.contains('commande introuvable') ||
+        (msg.contains('order') && msg.contains('not found')) ||
+        (msg.contains('order') && msg.contains('introuvable'));
+  }
+
   Future<void> offerProduct(int productIndex) async {
     if (_blockIfOrderOffered()) return;
 
@@ -2666,46 +3125,18 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (_mutationsAreLocalOnly) {
-      final updatedProducts = [...currentOrder.products];
-      updatedProducts[productIndex] =
-          updatedProducts[productIndex].copyWith(isOffered: true);
-      final updatedEntries = [
-        for (final entry in currentOrder.displayEntries)
-          if (entry.type == OrderDisplayEntryType.product &&
-              entry.lineIndex == productIndex &&
-              entry.product != null)
-            OrderDisplayEntry.product(
-              product: entry.product!.copyWith(isOffered: true),
-              lineIndex: productIndex,
-              sectionIndex: entry.sectionIndex ?? 0,
-              courseNumber: entry.courseNumber,
-              itemId: entry.itemId,
-            )
-          else
-            entry,
-      ];
-      _syncOrderInSession(
-        currentOrder.copyWith(
-          products: updatedProducts,
-          displayEntries: updatedEntries,
-        ),
-        orderNumber,
-        displayEntriesOverride: updatedEntries,
-      );
-      AppSnackbar.show(
-        'Offert',
-        '${currentOrder.products[productIndex].name} a été offert.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
-      );
+    // New / local-first tickets: offer stays on-device (no remote id yet).
+    if (_mutationsAreLocalOnly ||
+        _isLocalDraft ||
+        currentOrder.isLocalOnly) {
+      _applyLocalProductOffer(currentOrder, productIndex);
       return;
     }
 
     final id = resolvedOrderId;
     if (id == null || id <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
+      // Creating a new order → details: never toast "order id not found".
+      _applyLocalProductOffer(currentOrder, productIndex);
       return;
     }
 
@@ -2725,6 +3156,11 @@ class TableDetailsController extends GetxController {
       );
     } on ApiException catch (e) {
       debugPrint(_orderRepository.lastAddItemLog);
+      // Offer on a fresh/retired id: keep local offer, hide not-found noise.
+      if (_isOrderIdNotFoundError(e)) {
+        _applyLocalProductOffer(currentOrder, productIndex);
+        return;
+      }
       ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
       AppSnackbar.show('Erreur', 'Impossible d\'offrir l\'article.');
@@ -2742,6 +3178,8 @@ class TableDetailsController extends GetxController {
       return;
     }
 
+    if (delta < 0 && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
+
     final line = currentOrder.products[productIndex];
     if (delta < 0) {
       final qty = int.tryParse(line.quantity) ?? 1;
@@ -2749,6 +3187,22 @@ class TableDetailsController extends GetxController {
         cancelOrderLine(productIndex);
         return;
       }
+    }
+
+    final productId = _productIdForLineIndex(productIndex, currentOrder);
+    if (delta > 0 && productId != null) {
+      final catalog = catalogProductByName(line.name) ??
+          CatalogProductModel(
+            id: productId,
+            name: line.name,
+            price: '0',
+            categoryId: 0,
+            categoryName: '',
+            isComposed: false,
+            isActive: true,
+          );
+      final allowed = await _ensureStockAllowsAdd(catalog, qty: delta);
+      if (!allowed) return;
     }
 
     if (_mutationsAreLocalOnly || id == null || id <= 0) {
@@ -2764,6 +3218,13 @@ class TableDetailsController extends GetxController {
       _syncOrderInSession(predicted, orderNumber);
       final newQty = (int.tryParse(line.quantity) ?? 1) + delta;
       _setLocalDraftLineQtyAt(productIndex, newQty);
+      if (productId != null) {
+        if (delta > 0) {
+          stockVisual.consumeLocally(productId, delta);
+        } else {
+          stockVisual.restoreLocally(productId, -delta);
+        }
+      }
       return;
     }
 
@@ -2773,6 +3234,13 @@ class TableDetailsController extends GetxController {
       lineIndex: productIndex,
       delta: delta,
     );
+    if (productId != null) {
+      if (delta > 0) {
+        stockVisual.consumeLocally(productId, delta);
+      } else {
+        stockVisual.restoreLocally(productId, -delta);
+      }
+    }
   }
 
   void _cancelSuivreSectionLocally(
@@ -2791,6 +3259,16 @@ class TableDetailsController extends GetxController {
     final sortedIndices = lineIndices.toList()
       ..sort((a, b) => b.compareTo(a));
     for (final i in sortedIndices) {
+      if (i >= 0 && i < currentOrder.products.length) {
+        final line = currentOrder.products[i];
+        final productId =
+            _productIdForLineIndex(i, currentOrder) ??
+                catalogProductByName(line.name)?.id;
+        final qty = int.tryParse(line.quantity) ?? 1;
+        if (productId != null && productId > 0) {
+          stockVisual.restoreLocally(productId, qty);
+        }
+      }
       _removeLocalDraftLineAt(i);
     }
 
@@ -2989,6 +3467,7 @@ class TableDetailsController extends GetxController {
 
   void cancelOrderLine(int productIndex) {
     if (_blockIfOrderOffered()) return;
+    if (_blockIfCannotDeleteOrDecreaseAfterSend()) return;
     unawaited(_cancelOrderLine(productIndex));
   }
 
@@ -3015,6 +3494,9 @@ class TableDetailsController extends GetxController {
 
     final line = currentOrder.products[productIndex];
     final catalog = catalogProductByName(line.name);
+    final restoreProductId =
+        _productIdForLineIndex(productIndex, currentOrder) ?? catalog?.id;
+    final restoreQty = int.tryParse(line.quantity) ?? 1;
     if (catalog != null && selectedProductId.value == catalog.id) {
       selectedProductId.value = null;
     }
@@ -3064,6 +3546,10 @@ class TableDetailsController extends GetxController {
       orderNumber,
       displayEntriesOverride: predicted.displayEntries,
     );
+
+    if (restoreProductId != null && restoreProductId > 0) {
+      stockVisual.restoreLocally(restoreProductId, restoreQty);
+    }
 
     if (_isLocalDraft || _mutationsAreLocalOnly) {
       _removeLocalDraftLineAt(productIndex);
@@ -3149,6 +3635,7 @@ class TableDetailsController extends GetxController {
   @override
   void onClose() {
     _discardPendingSimpleAdds();
+    stockVisual.dispose();
     super.onClose();
   }
 
@@ -3442,6 +3929,15 @@ class TableDetailsController extends GetxController {
     _localDraftLines[index] = _localDraftLines[index].copyWith(qty: qty);
   }
 
+  /// True when any product line already has a server item id (2nd+ Send).
+  bool _layoutHasServerItemIds(List<OrderDisplayEntry> layout) {
+    for (final entry in layout) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      if ((entry.itemId ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
   List<LocalDraftLine> _buildDraftLinesForSend({
     List<OrderDisplayEntry>? layout,
     SessionOrder? source,
@@ -3454,36 +3950,87 @@ class TableDetailsController extends GetxController {
     );
 
     final rebuilt = <LocalDraftLine>[];
-    for (var i = 0; i < current.products.length; i++) {
-      final line = current.products[i];
+    final usedDraftIndexes = <int>{};
+    var course = 1;
+
+    // Walk display order so multi-suivre courses stay correct on POST/PUT.
+    for (final entry in effectiveLayout) {
+      if (entry.isSectionDivider) {
+        final above = entry.courseNumber;
+        if (above != null && above > 0) {
+          course = above + 1;
+        } else {
+          final section = entry.sectionIndex ?? 0;
+          course = section > 0 ? section + 1 : 2;
+        }
+        continue;
+      }
+      if (entry.type != OrderDisplayEntryType.product) continue;
+
+      final lineIndex = entry.lineIndex;
+      final line = entry.product ??
+          ((lineIndex != null &&
+                  lineIndex >= 0 &&
+                  lineIndex < current.products.length)
+              ? current.products[lineIndex]
+              : null);
+      if (line == null) continue;
+
       final catalog = catalogProductByName(line.name);
-      if (catalog == null) continue;
-
-      final qty = int.tryParse(line.quantity) ?? 1;
-      final lineTotal = _parseFormattedLineTotal(line.price);
-
+      // After first Send, `_localDraftLines` only holds *new* adds (not 1:1
+      // with lineIndex). Attach drafts only to unsynced rows (itemId 0).
       LocalDraftLine? tracked;
-      if (i < _localDraftLines.length &&
-          _localDraftLines[i].productId == catalog.id) {
-        tracked = _localDraftLines[i];
-      } else {
-        for (final draft in _localDraftLines) {
-          if (draft.productId == catalog.id) {
-            tracked = draft;
+      final serverItemId = entry.itemId ?? 0;
+      if (serverItemId <= 0 && catalog != null) {
+        // Prefer a draft that still carries menu_selections for platters.
+        final preferMenus =
+            line.menuItems.isNotEmpty || (catalog.isComposed);
+        for (var pass = 0; pass < 2 && tracked == null; pass++) {
+          for (var d = 0; d < _localDraftLines.length; d++) {
+            if (usedDraftIndexes.contains(d)) continue;
+            final candidate = _localDraftLines[d];
+            if (candidate.productId != catalog.id) continue;
+            if (pass == 0 && preferMenus && candidate.menuSelections.isEmpty) {
+              continue;
+            }
+            tracked = candidate;
+            usedDraftIndexes.add(d);
             break;
           }
         }
       }
+      if (tracked == null &&
+          serverItemId <= 0 &&
+          lineIndex != null &&
+          lineIndex >= 0 &&
+          lineIndex < _localDraftLines.length &&
+          !usedDraftIndexes.contains(lineIndex)) {
+        final atIndex = _localDraftLines[lineIndex];
+        if (catalog == null || atIndex.productId == catalog.id) {
+          tracked = atIndex;
+          usedDraftIndexes.add(lineIndex);
+        }
+      }
+
+      final productId = catalog?.id ?? tracked?.productId ?? 0;
+      if (productId <= 0) {
+        logOrderFlow(
+          'SEND abort — cannot resolve productId for "${line.name}"',
+        );
+        return const [];
+      }
+
+      final qty = int.tryParse(line.quantity) ?? 1;
+      final lineTotal = _parseFormattedLineTotal(line.price);
 
       rebuilt.add(
         LocalDraftLine(
-          productId: catalog.id,
-          unitPrice: qty > 0 ? lineTotal / qty : catalog.unitPrice,
+          productId: productId,
+          unitPrice: qty > 0
+              ? lineTotal / qty
+              : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0),
           qty: qty,
-          courseNumber: OrderMapper.resolveCourseNumberForLineIndexInLayout(
-            effectiveLayout,
-            i,
-          ),
+          courseNumber: course > 0 ? course : 1,
           menuSelections: tracked?.menuSelections ?? const [],
           comment: line.message?.trim().isNotEmpty == true
               ? line.message!.trim()

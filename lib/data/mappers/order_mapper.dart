@@ -1090,30 +1090,52 @@ class OrderMapper {
     return layout.last.type == OrderDisplayEntryType.suivreSeparator;
   }
 
-  /// First open À SUIVRE on the ticket (session "Demander la suite").
+  /// True when any open À SUIVRE has no products under it.
+  static bool hasEmptyPendingSuivreSection(List<OrderDisplayEntry> entries) {
+    for (final entry in entries) {
+      if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+      final sectionIndex = entry.sectionIndex ?? 0;
+      if (sectionIndex <= 0) continue;
+      if (productEntriesUnderSection(entries, sectionIndex).isEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// First open À SUIVRE on the ticket that has at least one product under it.
   static int? firstPendingSuivreSectionIndex(List<OrderDisplayEntry> entries) {
     for (final entry in entries) {
       if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
       final sectionIndex = entry.sectionIndex ?? 0;
-      if (sectionIndex > 0) return sectionIndex;
+      if (sectionIndex <= 0) continue;
+      if (productEntriesUnderSection(entries, sectionIndex).isEmpty) continue;
+      return sectionIndex;
     }
     return null;
   }
 
   /// Exactly one course id — the next suite to demand (session screen).
   ///
-  /// Uses the first pending À SUIVRE in waiter layout order, never every
-  /// unrequested course on the ticket.
+  /// Uses the first pending À SUIVRE **with items** in waiter layout order.
+  /// Never falls back to an arbitrary unrequested course when the next
+  /// À SUIVRE is empty (that used to let empty suites fire course 1).
   static List<int> extractSingleNextCourseIdForDemande(
     Map<String, dynamic> data, {
     List<OrderDisplayEntry>? layout,
   }) {
     final layoutHints = coalesceLayoutHints(layout);
     if (layoutHints != null) {
+      var sawEmptyPendingSuivre = false;
       for (final entry in layoutHints) {
         if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
         final sectionIndex = entry.sectionIndex ?? 0;
         if (sectionIndex <= 0) continue;
+
+        if (productEntriesUnderSection(layoutHints, sectionIndex).isEmpty) {
+          sawEmptyPendingSuivre = true;
+          continue;
+        }
 
         final fromLayout = extractRequestableCourseIdsForSuivreLayout(
           data,
@@ -1134,6 +1156,8 @@ class OrderMapper {
         );
         if (fromNumber.isNotEmpty) return [fromNumber.first];
       }
+      // Do not request a random course when the waiter left an empty À SUIVRE.
+      if (sawEmptyPendingSuivre) return const [];
     }
 
     final fallback = extractRequestableCourseIds(data);
@@ -1817,6 +1841,36 @@ class OrderMapper {
         .length;
   }
 
+  /// Drops DEMANDÉE course rows that have no products under them.
+  static List<OrderDisplayEntry> withoutEmptyDemandeSeparators(
+    List<OrderDisplayEntry> entries,
+  ) {
+    if (entries.isEmpty) return entries;
+
+    var removed = false;
+    final result = <OrderDisplayEntry>[];
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.type == OrderDisplayEntryType.demandeSeparator) {
+        var hasProduct = false;
+        for (var j = i + 1; j < entries.length; j++) {
+          if (entries[j].isSectionDivider) break;
+          if (entries[j].type == OrderDisplayEntryType.product) {
+            hasProduct = true;
+            break;
+          }
+        }
+        if (!hasProduct) {
+          removed = true;
+          continue;
+        }
+      }
+      result.add(entry);
+    }
+    if (!removed) return entries;
+    return reindexDisplayEntries(result);
+  }
+
   /// À SUIVRE + DEMANDÉE rows (follow-up course slots on the ticket).
   static int sectionDividerCount(List<OrderDisplayEntry> entries) {
     return entries.where((entry) => entry.isSectionDivider).length;
@@ -2351,6 +2405,7 @@ class OrderMapper {
     }
 
     display = reindexDisplayEntries(display);
+    display = withoutEmptyDemandeSeparators(display);
     final products = [
       for (final entry in display)
         if (entry.type == OrderDisplayEntryType.product &&
@@ -2644,6 +2699,7 @@ class OrderMapper {
     required SessionOrder live,
     int? selectedSuivreSectionIndex,
     bool preferAdoptingNewServerLines = false,
+    Set<int> suppressItemIds = const {},
   }) {
     final liveHydrated = ensureSessionDisplayHydrated(live);
     final serverHydrated = ensureSessionDisplayHydrated(server);
@@ -2662,16 +2718,27 @@ class OrderMapper {
         live: liveHydrated,
         preferAdoptingNewServerLines: preferAdoptingNewServerLines,
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+        suppressItemIds: suppressItemIds,
       );
     }
 
     var patched = patchServerItemIdsOntoLive(
       live: liveHydrated,
       server: serverHydrated,
+      suppressItemIds: suppressItemIds,
     );
+    final serverDisplayForAppend = suppressItemIds.isEmpty
+        ? serverHydrated.displayEntries
+        : [
+            for (final entry in serverHydrated.displayEntries)
+              if (entry.type != OrderDisplayEntryType.product ||
+                  (entry.itemId ?? 0) <= 0 ||
+                  !suppressItemIds.contains(entry.itemId))
+                entry,
+          ];
     var display = appendUnmatchedServerProducts(
       liveDisplay: patched.displayEntries,
-      serverDisplay: serverHydrated.displayEntries,
+      serverDisplay: serverDisplayForAppend,
       selectedSuivreSectionIndex: selectedSuivreSectionIndex,
     );
     display = preferLivePendingSuivre(
@@ -2689,19 +2756,17 @@ class OrderMapper {
             entry.product != null)
           entry.product!,
     ];
-
-    final mergedTotal = products.length == serverHydrated.products.length
-        ? serverHydrated.total
-        : (products.isEmpty
-            ? formatPrice('0')
-            : _sumFormattedPrices(products));
-
-    return serverHydrated.copyWith(
-      products: products,
+    final merged = serverHydrated.copyWith(
+      products: products.isNotEmpty ? products : liveHydrated.products,
       displayEntries: display,
-      itemCount: products.length,
-      total: mergedTotal,
+      itemCount: products.isNotEmpty
+          ? products.length
+          : liveHydrated.itemCount,
+      total: products.isNotEmpty ? liveHydrated.total : serverHydrated.total,
     );
+    return suppressItemIds.isEmpty
+        ? merged
+        : _stripSuppressedItems(merged, suppressItemIds);
   }
 
   /// Never drop pending À SUIVRE rows the waiter opened locally when a stale
@@ -4036,7 +4101,11 @@ class OrderMapper {
     return false;
   }
 
-  /// PUT sync for 2nd+ Send: cancel removed lines, update kept, append new.
+  /// PUT the waiter's full local ticket onto an existing order (2nd+ Send).
+  ///
+  /// [lines] must be in display-walk order (same as layout product rows).
+  /// Do **not** alignPendingSuivreLayoutOntoCourses here — duplicate product
+  /// names can strip the last À SUIVRE (missing items after reinstall).
   static Map<String, dynamic> applyLocalDraftSendOntoExistingOrder({
     required Map<String, dynamic> orderDetail,
     required List<LocalDraftLine> lines,
@@ -4051,19 +4120,30 @@ class OrderMapper {
     );
     cancelItemIdsOnDetail(working, cancelIds);
 
-    final productEntries = layoutHints
-        .where((entry) => entry.type == OrderDisplayEntryType.product)
-        .toList()
-      ..sort(
-        (a, b) => (a.lineIndex ?? 0).compareTo(b.lineIndex ?? 0),
-      );
+    // Display order — matches how Send builds [lines]. Never sort+index by
+    // lineIndex (that skips newly added rows when indexes are sparse).
+    final productEntries = [
+      for (final entry in layoutHints)
+        if (entry.type == OrderDisplayEntryType.product) entry,
+    ];
 
     final seatNumber = resolveDefaultSeatNumber(working);
 
-    for (final entry in productEntries) {
-      final lineIndex = entry.lineIndex ?? -1;
-      if (lineIndex < 0 || lineIndex >= lines.length) continue;
-      final draft = lines[lineIndex];
+    for (final draft in lines) {
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      _ensureCourseShellExists(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+      );
+    }
+
+    final draftCount = lines.length < productEntries.length
+        ? lines.length
+        : productEntries.length;
+    for (var entryPos = 0; entryPos < draftCount; entryPos++) {
+      final entry = productEntries[entryPos];
+      final draft = lines[entryPos];
       final itemId = entry.itemId ?? 0;
 
       if (itemId > 0) {
@@ -4088,48 +4168,56 @@ class OrderMapper {
         courseNumber: courseNumber,
       );
 
-      final newItem = _buildNewItemPayload(
-        seatNumber: seatNumber,
-        courseId: courseId,
-        productId: draft.productId,
-        qty: draft.qty < 1 ? 1 : draft.qty,
-        subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
-        status: itemStatus,
-        comment: draft.comment,
-        menuSelections: draft.menuSelections,
-        isStillMenuMissing: false,
-        forCreate: false,
-      );
-
       _appendItemToSeatOrders(
         working,
         seatNumber: seatNumber,
         courseNumber: courseNumber,
-        newItem: newItem,
+        newItem: _buildNewItemPayload(
+          seatNumber: seatNumber,
+          courseId: courseId,
+          productId: draft.productId,
+          qty: draft.qty < 1 ? 1 : draft.qty,
+          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          status: itemStatus,
+          comment: draft.comment,
+          menuSelections: draft.menuSelections,
+          isStillMenuMissing: false,
+          forCreate: false,
+        ),
       );
     }
 
-    // Safety: cancel anything still visible that is not on the waiter ticket.
-    cancelItemIdsOnDetail(
-      working,
-      itemIdsToCancelForLocalSend(
-        serverDetail: working,
-        layoutHints: layoutHints,
-        extraCancelItemIds: extraCancelItemIds,
-      ),
-    );
-
-    if (layoutHints.isNotEmpty &&
-        (layoutHasProductsUnderPendingSuivre(layoutHints) ||
-            layoutHasTrailingPendingSuivre(layoutHints) ||
-            suivreSeparatorCount(layoutHints) > 0)) {
-      final aligned = alignPendingSuivreLayoutOntoCourses(
+    for (var i = productEntries.length; i < lines.length; i++) {
+      final draft = lines[i];
+      final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      _ensureCourseShellExists(
         working,
-        layout: layoutHints,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
       );
-      if (aligned.changed) {
-        working['seat_orders'] = aligned.detail['seat_orders'];
-      }
+      final course = findCourseInOrderDetail(working, courseNumber);
+      final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
+      _appendItemToSeatOrders(
+        working,
+        seatNumber: seatNumber,
+        courseNumber: courseNumber,
+        newItem: _buildNewItemPayload(
+          seatNumber: seatNumber,
+          courseId: courseId,
+          productId: draft.productId,
+          qty: draft.qty < 1 ? 1 : draft.qty,
+          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          status: _resolveAppendItemStatus(
+            working,
+            seatNumber: seatNumber,
+            courseNumber: courseNumber,
+          ),
+          comment: draft.comment,
+          menuSelections: draft.menuSelections,
+          isStillMenuMissing: false,
+          forCreate: false,
+        ),
+      );
     }
 
     final payload = buildOrderUpdatePayload(working, keepOpenWhenEmpty: true);
@@ -5509,6 +5597,11 @@ class OrderMapper {
       final match = movable.removeAt(idx);
       final id = (match.item['id'] as num?)?.toInt() ?? 0;
       if (id > 0) cancelOrderLineByItemId(working, id);
+      final menuSelections = match.item['menu_selections'] is List
+          ? (match.item['menu_selections'] as List)
+              .whereType<Map<String, dynamic>>()
+              .toList()
+          : const <Map<String, dynamic>>[];
       final newItem = _buildNewItemPayload(
         seatNumber: seatNumber,
         courseId: targetCourseId > 0 ? targetCourseId : 0,
@@ -5517,6 +5610,8 @@ class OrderMapper {
         subTotal: _parseMoney(match.item['sub_total']),
         status: 'to_be_continued',
         comment: match.item['comment'] as String? ?? '',
+        menuSelections: menuSelections,
+        isStillMenuMissing: match.item['is_still_menu_missing'] == true,
         forCreate: false,
       );
       final sourceProduct = match.item['product'];
@@ -5553,6 +5648,7 @@ class OrderMapper {
       final qty = int.tryParse(entry.product?.quantity ?? '1') ?? 1;
       final unit = resolveUnitPrice?.call(name) ??
           _parseMoney(entry.product?.price);
+      final sourceMenus = _menuSelectionsForProductInOrder(working, productId);
       final newItem = _buildNewItemPayload(
         seatNumber: seatNumber,
         courseId: targetCourseId > 0 ? targetCourseId : 0,
@@ -5561,6 +5657,7 @@ class OrderMapper {
         subTotal: unit * qty,
         status: 'to_be_continued',
         comment: entry.product?.message ?? '',
+        menuSelections: sourceMenus,
         forCreate: false,
       );
       if (name.isNotEmpty) {
@@ -5611,6 +5708,26 @@ class OrderMapper {
       seat['courses'] = list;
       return;
     }
+  }
+
+  /// Menu lines for [productId] if any visible item already has them (Demande
+  /// recreate must not drop platter children).
+  static List<Map<String, dynamic>> _menuSelectionsForProductInOrder(
+    Map<String, dynamic> detail,
+    int productId,
+  ) {
+    if (productId <= 0) return const [];
+    final seatNumber = resolveDefaultSeatNumber(detail);
+    for (final row in _visibleItemsWithCourseNumbers(
+      detail,
+      seatNumber: seatNumber,
+    )) {
+      if (_itemProductId(row.item) != productId) continue;
+      final menus = row.item['menu_selections'];
+      if (menus is! List || menus.isEmpty) continue;
+      return menus.whereType<Map<String, dynamic>>().toList();
+    }
+    return const [];
   }
 
   /// Find a product id by name anywhere on the order (including cancelled).
@@ -5680,7 +5797,7 @@ class OrderMapper {
     }
 
     if (_visibleItemCountInCourse(course) <= 0) {
-      return 'Ce service ne contient aucun article à envoyer en cuisine.';
+      return 'Ajoutez au moins un article sous ce À SUIVRE avant de demander.';
     }
 
     if (_courseNeedsKitchenSend(course)) {
@@ -6663,16 +6780,10 @@ class OrderMapper {
       );
     }
 
-    // Keep remaining DEMANDÉE dividers; drop empty trailing À SUIVRE.
-    while (dividerIdx < dividers.length) {
-      final divider = dividers[dividerIdx].divider;
-      if (divider.type == OrderDisplayEntryType.demandeSeparator) {
-        result.add(divider);
-      }
-      dividerIdx++;
-    }
+    // Drop remaining empty trailing dividers (À SUIVRE and empty DEMANDÉE).
+    // Products were already placed; leftover dividers have nothing under them.
 
-    return reindexDisplayEntries(result);
+    return withoutEmptyDemandeSeparators(reindexDisplayEntries(result));
   }
 
   /// Cancels every visible line (used to clear auto-added create defaults).

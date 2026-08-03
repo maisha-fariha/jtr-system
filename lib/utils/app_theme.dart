@@ -69,6 +69,7 @@ class AppTheme {
   static const Color toolbarStatistics = Color(0xFF6D4C41);
   static const Color toolbarLogout = Color(0xFF2EC4B6);
   static const Color toolbarMessage = Color(0xFF8E24AA);
+  static const Color toolbarStock = Color(0xFFEF6C00);
 
   static Color toolbarIconColor(
     IconData icon, {
@@ -86,6 +87,7 @@ class AppTheme {
       Icons.menu_book => toolbarMenu,
       Icons.restaurant => toolbarSuivre,
       Icons.restaurant_menu => toolbarMenu,
+      Icons.inventory_2_outlined || Icons.inventory_2 => toolbarStock,
       Icons.receipt_long_outlined => toolbarTicket,
       Icons.payments_outlined => toolbarPayment,
       Icons.send_outlined => toolbarKitchen,

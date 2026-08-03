@@ -4,8 +4,9 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../data/models/catalog/category_tree_node.dart';
-import '../controllers/session_controller.dart';
+import '../data/models/catalog/catalog_product_model.dart';
 import '../controllers/table_details_controller.dart';
+import '../data/mappers/order_mapper.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -27,9 +28,6 @@ class TableDetailsPage extends GetView<TableDetailsController> {
         backgroundColor: AppTheme.background,
         body: SafeArea(
           child: Obx(() {
-          if (Get.isRegistered<SessionController>()) {
-            Get.find<SessionController>().orders.length;
-          }
           controller.orderUiRevision.value;
 
           final order = controller.order;
@@ -297,9 +295,16 @@ class _OrderSummaryState extends State<_OrderSummary> {
         color: AppTheme.textSecondary,
       );
 
-  List<Widget> _buildVisibleRows(BuildContext context, SessionOrder order) {
+  List<Widget> _buildVisibleRows(
+    BuildContext context,
+    SessionOrder order,
+    bool canModify,
+  ) {
     final rows = <Widget>[];
-    final entries = order.displayEntries;
+    final entries = OrderMapper.withoutEmptyDemandeSeparators(
+      order.displayEntries,
+    );
+    final orderOffered = !canModify;
     var index = 0;
 
     while (index < entries.length) {
@@ -317,6 +322,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
             isDemande: isDemande,
             demandeTimeLabel: entry.demandeTimeLabel,
             isCollapsed: collapsed,
+            canModify: canModify,
             onSelect: isDemande
                 ? null
                 : () => controller.selectSuivreSection(sectionIndex),
@@ -339,6 +345,8 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 orderNumber: order.number,
                 productIndex: productEntry.lineIndex!,
                 product: productEntry.product!,
+                canModify: canModify,
+                orderOffered: orderOffered,
                 groupTag: _productSlidableGroupTag,
               ),
             );
@@ -358,6 +366,8 @@ class _OrderSummaryState extends State<_OrderSummary> {
           orderNumber: order.number,
           productIndex: productEntry.lineIndex!,
           product: productEntry.product!,
+          canModify: canModify,
+          orderOffered: orderOffered,
           groupTag: _productSlidableGroupTag,
         ),
       );
@@ -370,20 +380,18 @@ class _OrderSummaryState extends State<_OrderSummary> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (Get.isRegistered<SessionController>()) {
-        Get.find<SessionController>().orders.length;
-      }
       controller.orderUiRevision.value;
       controller.suivreUiRevision.value;
       controller.selectedSuivreSection.value;
+      controller.stockVisual.isStockVisualMode.value;
+      controller.stockVisual.stockUiRevision.value;
 
       final resolvedOrder = _resolveOrder();
       if (resolvedOrder == null) {
         return const SizedBox.shrink();
       }
 
-      final rows = _buildVisibleRows(context, resolvedOrder);
-      _scrollToLatestItemIfNeeded(resolvedOrder);
+      final stockMode = controller.isStockVisualMode;
 
       return Column(
         children: [
@@ -400,75 +408,87 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 Expanded(
                   flex: 1,
                   child: Text(
-                    'QTÉ',
+                    stockMode ? 'STOCK' : 'QTÉ',
                     style: _headerStyle(context),
                   ),
                 ),
                 Expanded(
                   flex: 5,
-                  child: Text('ARTICLE', style: _headerStyle(context)),
-                ),
-                Expanded(
-                  flex: 2,
                   child: Text(
-                    'PRIX',
-                    textAlign: TextAlign.right,
+                    stockMode ? 'PRODUIT' : 'ARTICLE',
                     style: _headerStyle(context),
                   ),
                 ),
+                if (!stockMode)
+                  Expanded(
+                    flex: 2,
+                    child: Text(
+                      'PRIX',
+                      textAlign: TextAlign.right,
+                      style: _headerStyle(context),
+                    ),
+                  ),
               ],
             ),
           ),
           Expanded(
-            child: SlidableAutoCloseBehavior(
-              child: ListView.separated(
-                controller: _scrollController,
-                key: ValueKey(resolvedOrder.id),
-                padding: JtrResponsive.getResponsivePadding(
-                  context,
-                  horizontal: 20,
-                  bottom: 12,
-                ),
-                itemCount: rows.length,
-                separatorBuilder: (_, _) =>
-                    JtrResponsive.getResponsiveSpacing(context, 4),
-                itemBuilder: (context, index) {
-                  final row = rows[index];
-                  if (index != rows.length - 1) return row;
-                  return KeyedSubtree(
-                    key: _lastRowKey,
-                    child: row,
-                  );
-                },
-              ),
-            ),
+            child: stockMode
+                ? const _StockVisualList()
+                : Builder(
+                    builder: (context) {
+                      final canModify = controller.canModifyOrder;
+                      final rows =
+                          _buildVisibleRows(context, resolvedOrder, canModify);
+                      _scrollToLatestItemIfNeeded(resolvedOrder);
+                      return SlidableAutoCloseBehavior(
+                        child: ListView.separated(
+                          controller: _scrollController,
+                          key: ValueKey(resolvedOrder.id),
+                          padding: JtrResponsive.getResponsivePadding(
+                            context,
+                            horizontal: 20,
+                            bottom: 12,
+                          ),
+                          itemCount: rows.length,
+                          separatorBuilder: (_, _) =>
+                              JtrResponsive.getResponsiveSpacing(context, 4),
+                          itemBuilder: (context, index) {
+                            final row = rows[index];
+                            if (index != rows.length - 1) return row;
+                            return KeyedSubtree(
+                              key: _lastRowKey,
+                              child: row,
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
           ),
           const Divider(height: 1, color: Color(0xFFE8E8E8)),
-          Padding(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              left: 20,
-              right: 20,
-              top: 6,
-              bottom: 6,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  flex: 6,
-                  child: Text(
-                    'Total',
-                    style: TextStyle(
-                      fontSize:
-                          JtrResponsive.getResponsiveFontSize(context, 14),
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.darkText,
+          if (!stockMode)
+            Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                left: 20,
+                right: 20,
+                top: 6,
+                bottom: 6,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Total',
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 14),
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.darkText,
+                      ),
                     ),
                   ),
-                ),
-                Expanded(
-                  flex: 2,
-                  child: Text(
+                  Text(
                     resolvedOrder.total,
                     textAlign: TextAlign.right,
                     style: TextStyle(
@@ -478,11 +498,159 @@ class _OrderSummaryState extends State<_OrderSummary> {
                       color: AppTheme.darkText,
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
         ],
+      );
+    });
+  }
+}
+
+class _StockVisualList extends GetView<TableDetailsController> {
+  const _StockVisualList();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      controller.stockVisual.stockUiRevision.value;
+      controller.stockVisual.isLoadingLimits.value;
+      final limits = controller.stockVisual.trackedLimitsSorted();
+
+      if (controller.stockVisual.isLoadingLimits.value && limits.isEmpty) {
+        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+      }
+
+      if (limits.isEmpty) {
+        return Center(
+          child: Text(
+            'Aucun produit suivi',
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        );
+      }
+
+      final nameById = <int, String>{
+        for (final p in controller.products) p.id: p.name,
+      };
+
+      return ListView.separated(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          horizontal: 20,
+          bottom: 12,
+        ),
+        itemCount: limits.length,
+        separatorBuilder: (_, _) =>
+            JtrResponsive.getResponsiveSpacing(context, 4),
+        itemBuilder: (context, index) {
+          final limit = limits[index];
+          final name = limit.productName?.trim().isNotEmpty == true
+              ? limit.productName!
+              : (nameById[limit.productId] ?? 'Produit #${limit.productId}');
+          final remaining =
+              controller.stockVisual.remainingFor(limit.productId) ?? 0;
+          final badge = remaining < 0 ? 0 : remaining;
+          final blocked = controller.isProductStockBlocked(limit.productId);
+          final color = TableDetailsController.stockBadgeColor(badge);
+
+          CatalogProductModel? product;
+          for (final p in controller.products) {
+            if (p.id == limit.productId) {
+              product = p;
+              break;
+            }
+          }
+          product ??= CatalogProductModel(
+            id: limit.productId,
+            name: name,
+            price: '0',
+            categoryId: 0,
+            categoryName: '',
+            isComposed: false,
+            isActive: true,
+          );
+
+          return Material(
+            color: AppTheme.lightButton.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 10),
+            ),
+            child: InkWell(
+              onTap: () => controller.openDefineStockModal(product!),
+              borderRadius: BorderRadius.circular(
+                JtrResponsive.getResponsiveRadius(context, 10),
+              ),
+              child: Padding(
+                padding: JtrResponsive.getResponsivePadding(
+                  context,
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      constraints: BoxConstraints(
+                        minWidth: JtrResponsive.getResponsiveSize(context, 36),
+                      ),
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(
+                          JtrResponsive.getResponsiveRadius(context, 8),
+                        ),
+                      ),
+                      alignment: Alignment.center,
+                      child: blocked
+                          ? Icon(
+                              Icons.block,
+                              size: JtrResponsive.getResponsiveSize(
+                                context,
+                                16,
+                              ),
+                              color: color,
+                            )
+                          : Text(
+                              '$badge',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: color,
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  13,
+                                ),
+                              ),
+                            ),
+                    ),
+                    JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize:
+                              JtrResponsive.getResponsiveFontSize(context, 13),
+                          color: AppTheme.darkText,
+                        ),
+                      ),
+                    ),
+                    Icon(
+                      Icons.edit_outlined,
+                      size: JtrResponsive.getResponsiveSize(context, 16),
+                      color: AppTheme.textSecondary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       );
     });
   }
@@ -495,6 +663,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
     required this.sectionIndex,
     required this.isDemande,
     required this.isCollapsed,
+    required this.canModify,
     required this.onToggleCollapse,
     required this.groupTag,
     this.demandeTimeLabel,
@@ -505,6 +674,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
   final bool isDemande;
   final String? demandeTimeLabel;
   final bool isCollapsed;
+  final bool canModify;
   final VoidCallback? onSelect;
   final VoidCallback onToggleCollapse;
   final String groupTag;
@@ -578,7 +748,7 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
         groupTag: groupTag,
-        enabled: controller.canModifyOrder,
+        enabled: canModify,
         startActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: 0.14,
@@ -604,12 +774,16 @@ class _ProductLine extends GetView<TableDetailsController> {
     required this.orderNumber,
     required this.productIndex,
     required this.product,
+    required this.canModify,
+    required this.orderOffered,
     required this.groupTag,
   });
 
   final String orderNumber;
   final int productIndex;
   final OrderProduct product;
+  final bool canModify;
+  final bool orderOffered;
   final String groupTag;
 
   @override
@@ -617,6 +791,8 @@ class _ProductLine extends GetView<TableDetailsController> {
     return Obx(() {
       final isSelected = controller.isOrderLineSelected(productIndex);
       controller.orderUiRevision.value;
+      final canDeleteLine =
+          canModify && controller.canDeleteOrDecreaseLine(productIndex);
       final hasMenuItems = product.hasMenuItems;
       final isMenuExpanded = hasMenuItems &&
           controller.isMenuLineExpanded(productIndex);
@@ -624,24 +800,27 @@ class _ProductLine extends GetView<TableDetailsController> {
       return Slidable(
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
-        enabled: controller.canModifyOrder,
-        startActionPane: ActionPane(
-          motion: const ScrollMotion(),
-          extentRatio: 0.14,
-          children: [
-            SlidableAction(
-              onPressed: (_) => controller.cancelOrderLine(productIndex),
-              backgroundColor: AppTheme.background,
-              foregroundColor: const Color(0xFFE74C3C),
-              icon: CupertinoIcons.delete,
-              spacing: 0,
-              padding: EdgeInsets.zero,
-            ),
-          ],
-        ),
+        enabled: canModify,
+        startActionPane: canDeleteLine
+            ? ActionPane(
+                motion: const ScrollMotion(),
+                extentRatio: 0.14,
+                children: [
+                  SlidableAction(
+                    onPressed: (_) =>
+                        controller.cancelOrderLine(productIndex),
+                    backgroundColor: AppTheme.background,
+                    foregroundColor: const Color(0xFFE74C3C),
+                    icon: CupertinoIcons.delete,
+                    spacing: 0,
+                    padding: EdgeInsets.zero,
+                  ),
+                ],
+              )
+            : null,
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
-          extentRatio: 0.52,
+          extentRatio: canDeleteLine ? 0.52 : 0.39,
           children: [
             _ProductSlidableAction(
               icon: Icons.edit_outlined,
@@ -659,16 +838,17 @@ class _ProductLine extends GetView<TableDetailsController> {
             ),
             _ProductSlidableAction(
               icon: Icons.card_giftcard_outlined,
-              backgroundColor: product.isOffered || controller.isOrderOffered
+              backgroundColor: product.isOffered || orderOffered
                   ? AppTheme.lightButton
                   : null,
-              iconColor: product.isOffered || controller.isOrderOffered
+              iconColor: product.isOffered || orderOffered
                   ? AppTheme.primary
                   : null,
               onPressed: () => controller.offerProduct(productIndex),
             ),
             _ProductSlidableAction(
               icon: Icons.remove,
+              enabled: canDeleteLine,
               onPressed: () => controller.decrementProduct(productIndex),
             ),
             _ProductSlidableAction(
@@ -777,9 +957,8 @@ class _ProductLine extends GetView<TableDetailsController> {
                               fontWeight: FontWeight.w500,
                               color: AppTheme.textSecondary,
                               letterSpacing: 0.3,
+                              height: 1.35,
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ],
@@ -814,20 +993,24 @@ class _ProductSlidableAction extends StatelessWidget {
     required this.onPressed,
     this.backgroundColor,
     this.iconColor,
+    this.enabled = true,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
   final Color? backgroundColor;
   final Color? iconColor;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final bgColor = backgroundColor ?? AppTheme.slidableActionBackground;
-    final fgColor = iconColor ?? AppTheme.darkText;
+    final fgColor = enabled
+        ? (iconColor ?? AppTheme.darkText)
+        : AppTheme.darkText.withValues(alpha: 0.25);
 
     return CustomSlidableAction(
-      onPressed: (_) => onPressed(),
+      onPressed: enabled ? (_) => onPressed() : null,
       backgroundColor: Colors.transparent,
       padding: JtrResponsive.getResponsivePadding(context, left: 6),
       child: Container(
@@ -884,6 +1067,7 @@ class _ActionToolbarState extends State<_ActionToolbar> {
     Icons.menu_book,
     Icons.restaurant,
     Icons.restaurant_menu,
+    Icons.inventory_2_outlined,
     Icons.receipt_long_outlined,
     Icons.payments_outlined,
     Icons.send_outlined,
@@ -915,21 +1099,32 @@ class _ActionToolbarState extends State<_ActionToolbar> {
         // Subscribe so the category-back icon enables/disables with navigation.
         controller.categoryPath.length;
         controller.selectedCategoryIndex.value;
+        controller.stockVisual.isStockVisualMode.value;
+        controller.showPaymentOptions.value;
 
         return Row(
           mainAxisAlignment:
               isLarge ? MainAxisAlignment.spaceBetween : MainAxisAlignment.start,
           children: [
             for (final icon in _icons)
-              _ToolbarIconButton(
-                icon: icon,
-                label: icon == Icons.restaurant ? 'A' : null,
-                isActive: controller.isToolbarIconActive(icon),
-                isEnabled: controller.isToolbarIconEnabled(icon),
-                onPressed: () =>
-                    controller.onToolbarIconTap(icon, context: toolbarContext),
-                compact: isLarge,
-              ),
+              if (icon != Icons.inventory_2_outlined ||
+                  controller.hasStockVisualAccess)
+                _ToolbarIconButton(
+                  icon: icon == Icons.inventory_2_outlined &&
+                          controller.isStockVisualMode
+                      ? Icons.inventory_2
+                      : icon,
+                  label: icon == Icons.restaurant ? 'A' : null,
+                  isActive: icon == Icons.inventory_2_outlined
+                      ? controller.isStockVisualMode
+                      : controller.isToolbarIconActive(icon),
+                  isEnabled: controller.isToolbarIconEnabled(icon),
+                  onPressed: () => controller.onToolbarIconTap(
+                    icon,
+                    context: toolbarContext,
+                  ),
+                  compact: isLarge,
+                ),
             _ToolbarIconButton(
               icon: expanded
                   ? Icons.keyboard_arrow_down
@@ -1290,6 +1485,8 @@ class _MenuGrid extends GetView<TableDetailsController> {
       }
 
       controller.orderUiRevision.value;
+      controller.stockVisual.stockUiRevision.value;
+      controller.stockVisual.isStockVisualMode.value;
 
       if (controller.catalogError.value != null &&
           controller.categoryRoots.isEmpty &&
@@ -1324,6 +1521,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
       }
 
       final currentOrder = controller.order;
+      final orderOffered = controller.isOrderOffered;
 
       final isCompact = JtrResponsive.isCompactSquare(context);
       final isLarge = JtrResponsive.isLargeDevice(context);
@@ -1379,80 +1577,115 @@ class _MenuGrid extends GetView<TableDetailsController> {
               final isSelected = controller.isProductSelected(product);
               final itemRadius =
                   JtrResponsive.getResponsiveRadius(context, 10);
+              final stockBadge = controller.stockBadgeForProduct(product.id);
+              final stockBlocked =
+                  controller.isProductStockBlocked(product.id);
+              final stockMode = controller.isStockVisualMode;
 
-              return GestureDetector(
-                onTap: () => controller.onProductTap(product),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 150),
-                  decoration: BoxDecoration(
-                    color: _menuGridItemBackground(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
+              return Opacity(
+                opacity: orderOffered ? 0.45 : 1,
+                child: GestureDetector(
+                  onTap: orderOffered
+                      ? null
+                      : () => controller.onProductTap(product),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    decoration: BoxDecoration(
+                      color: _menuGridItemBackground(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      gradient: _menuGridItemGradient(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      borderRadius: BorderRadius.circular(itemRadius),
+                      border: _menuGridItemBorder(
+                        isInOrder: isInOrder,
+                        isSelected: isSelected,
+                      ),
+                      boxShadow: orderOffered
+                          ? null
+                          : _menuGridItemShadow(isSelected),
                     ),
-                    gradient: _menuGridItemGradient(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
-                    ),
-                    borderRadius: BorderRadius.circular(itemRadius),
-                    border: _menuGridItemBorder(
-                      isInOrder: isInOrder,
-                      isSelected: isSelected,
-                    ),
-                    boxShadow: _menuGridItemShadow(isSelected),
-                  ),
-                  child: Stack(
-                    children: [
-                      Positioned(
-                        top: JtrResponsive.getResponsiveHeight(context, 0),
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          height: JtrResponsive.getResponsiveHeight(context, 4),
-                          decoration: BoxDecoration(
-                            color: isSelected
-                                ? AppTheme.primary.withValues(alpha: 0.95)
-                                : (isInOrder
-                                    ? AppTheme.primary.withValues(alpha: 0.65)
-                                    : Colors.transparent),
-                            borderRadius: BorderRadius.vertical(
-                              top: Radius.circular(itemRadius),
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          top: JtrResponsive.getResponsiveHeight(context, 0),
+                          left: 0,
+                          right: 0,
+                          child: Container(
+                            height:
+                                JtrResponsive.getResponsiveHeight(context, 4),
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? AppTheme.primary.withValues(alpha: 0.95)
+                                  : (isInOrder
+                                      ? AppTheme.primary.withValues(alpha: 0.65)
+                                      : Colors.transparent),
+                              borderRadius: BorderRadius.vertical(
+                                top: Radius.circular(itemRadius),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      Padding(
-                        padding: JtrResponsive.getResponsivePadding(
-                          context,
-                          left: 10,
-                          right: 10,
-                          top: 12,
-                          bottom: 10,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.end,
-                              children: [
-                                if (product.isComposed)
-                                  Container(
-                                    padding: JtrResponsive.getResponsivePadding(
-                                      context,
-                                      horizontal: 6,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppTheme.lightButton.withValues(
-                                        alpha: 0.7,
+                        if (stockBadge != null)
+                          Positioned(
+                            top: JtrResponsive.getResponsiveHeight(context, 6),
+                            left: JtrResponsive.getResponsiveWidth(context, 6),
+                            child: Container(
+                              padding: JtrResponsive.getResponsivePadding(
+                                context,
+                                horizontal: stockBlocked ? 4 : 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: TableDetailsController.stockBadgeColor(
+                                  stockBadge,
+                                ),
+                                borderRadius: BorderRadius.circular(
+                                  JtrResponsive.getResponsiveRadius(context, 8),
+                                ),
+                              ),
+                              child: stockBlocked
+                                  ? Icon(
+                                      Icons.block,
+                                      size: JtrResponsive.getResponsiveSize(
+                                        context,
+                                        12,
                                       ),
-                                      borderRadius: BorderRadius.circular(
-                                        JtrResponsive.getResponsiveRadius(
+                                      color: Colors.white,
+                                    )
+                                  : Text(
+                                      '$stockBadge',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize:
+                                            JtrResponsive.getResponsiveFontSize(
                                           context,
-                                          8,
+                                          10,
                                         ),
                                       ),
                                     ),
-                                    child: Icon(
+                            ),
+                          ),
+                        Padding(
+                          padding: JtrResponsive.getResponsivePadding(
+                            context,
+                            left: 10,
+                            right: 10,
+                            top: 12,
+                            bottom: 10,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                  if (stockMode)
+                                    Icon(
                                       Icons.tune,
                                       size: JtrResponsive.getResponsiveSize(
                                         context,
@@ -1461,32 +1694,78 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                       color: AppTheme.primary.withValues(
                                         alpha: 0.85,
                                       ),
+                                    )
+                                  else if (product.isComposed)
+                                    Container(
+                                      padding:
+                                          JtrResponsive.getResponsivePadding(
+                                        context,
+                                        horizontal: 6,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.lightButton.withValues(
+                                          alpha: 0.7,
+                                        ),
+                                        borderRadius: BorderRadius.circular(
+                                          JtrResponsive.getResponsiveRadius(
+                                            context,
+                                            8,
+                                          ),
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        Icons.tune,
+                                        size: JtrResponsive.getResponsiveSize(
+                                          context,
+                                          12,
+                                        ),
+                                        color: AppTheme.primary.withValues(
+                                          alpha: 0.85,
+                                        ),
+                                      ),
                                     ),
-                                  ),
-                              ],
-                            ),
-                            Expanded(
-                              child: Center(
-                                child: Text(
-                                  product.name,
-                                  textAlign: TextAlign.center,
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: _categoryPartFontSize(context, 11),
-                                    fontWeight: FontWeight.w700,
-                                    color: AppTheme.darkText.withValues(
-                                      alpha: isInOrder ? 0.78 : 0.92,
+                                ],
+                              ),
+                              Expanded(
+                                child: Center(
+                                  child: Text(
+                                    product.name,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize:
+                                          _categoryPartFontSize(context, 11),
+                                      fontWeight: FontWeight.w700,
+                                      color: AppTheme.darkText.withValues(
+                                        alpha: orderOffered
+                                            ? 0.45
+                                            : (isInOrder ? 0.78 : 0.92),
+                                      ),
+                                      height: 1.28,
                                     ),
-                                    height: 1.28,
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                              if (stockMode)
+                                Text(
+                                  'Définir le stock',
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize:
+                                        _categoryPartFontSize(context, 9),
+                                    fontWeight: FontWeight.w600,
+                                    color: AppTheme.primary,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               );

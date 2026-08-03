@@ -19,6 +19,8 @@ import '../data/datasources/session_datasource.dart';
 import '../data/repositories/session_repository.dart';
 import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
+import '../data/datasources/stock_remote_datasource.dart';
+import '../data/repositories/stock_repository.dart';
 
 class AppBinding extends Bindings {
   @override
@@ -92,6 +94,17 @@ class AppBinding extends Bindings {
       () => CatalogRepository(
         remote: Get.find<CatalogRemoteDataSource>(),
         local: Get.find<CatalogLocalDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<StockRemoteDataSource>(
+      () => StockRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<StockRepository>(
+      () => StockRepository(
+        remote: Get.find<StockRemoteDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

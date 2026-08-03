@@ -2326,7 +2326,10 @@ class OrderMapper {
       if (source.product == null && entry.product == null) continue;
       result.add(
         OrderDisplayEntry.product(
-          product: match?.product ?? entry.product!,
+          product: _productKeepingLiveMenuLabels(
+            live: entry.product!,
+            server: match?.product,
+          ),
           lineIndex: lineIndex++,
           sectionIndex: entry.sectionIndex ?? 0,
           courseNumber: match?.courseNumber ?? entry.courseNumber,
@@ -2624,7 +2627,10 @@ class OrderMapper {
       final match = takeMatch(entry);
       display.add(
         OrderDisplayEntry.product(
-          product: match?.product ?? entry.product!,
+          product: _productKeepingLiveMenuLabels(
+            live: entry.product!,
+            server: match?.product,
+          ),
           lineIndex: lineIndex++,
           sectionIndex: entry.sectionIndex ?? 0,
           courseNumber: match?.courseNumber ?? entry.courseNumber,
@@ -8020,9 +8026,11 @@ class OrderMapper {
   static List<String> menuSelectionLabelsFromItem(Map<String, dynamic> item) {
     final menus = item['menu_selections'];
     if (menus is! List || menus.isEmpty) return const [];
-    return menuSelectionLabelsFromMaps(
-      menus.whereType<Map<String, dynamic>>().toList(),
-    );
+    // API often returns Map (not Map<String,dynamic>) — cast so labels survive.
+    return menuSelectionLabelsFromMaps([
+      for (final m in menus)
+        if (m is Map) Map<String, dynamic>.from(m),
+    ]);
   }
 
   static String? _menuSelectionLabel(Map<String, dynamic> selection) {
@@ -8035,7 +8043,7 @@ class OrderMapper {
 
     for (final nestedKey in ['selected_product', 'product']) {
       final nested = selection[nestedKey];
-      if (nested is Map<String, dynamic>) {
+      if (nested is Map) {
         final name = nested['name'];
         if (name is String && name.trim().isNotEmpty) {
           return name.trim().toUpperCase();
@@ -8043,7 +8051,25 @@ class OrderMapper {
       }
     }
 
+    final category = selection['menu_category_name'];
+    if (category is String && category.trim().isNotEmpty) {
+      return category.trim().toUpperCase();
+    }
+
     return null;
+  }
+
+  /// After Send, GET often returns menu_selections as ids only — keep the
+  /// waiter's CHOIX labels from the live ticket when the server has none.
+  static OrderProduct _productKeepingLiveMenuLabels({
+    required OrderProduct live,
+    OrderProduct? server,
+  }) {
+    if (server == null) return live;
+    if (server.menuItems.isEmpty && live.menuItems.isNotEmpty) {
+      return server.copyWith(menuItems: List<String>.from(live.menuItems));
+    }
+    return server;
   }
 
   static OrderProduct orderProductFromItem(Map<String, dynamic> item) {

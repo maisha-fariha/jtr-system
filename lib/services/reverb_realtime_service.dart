@@ -17,7 +17,7 @@ import '../utils/app_snackbar.dart';
 /// Laravel Reverb (Pusher protocol) client for table locks + force logout.
 ///
 /// Clients never publish business data — REST only; this service only listens.
-class ReverbRealtimeService extends GetxService {
+class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
   ReverbRealtimeService({
     required RealtimeRemoteDataSource remote,
     required AuthRepository authRepository,
@@ -53,6 +53,28 @@ class ReverbRealtimeService extends GetxService {
 
   final isConnected = false.obs;
   final tablesLockRevision = 0.obs;
+
+  @override
+  void onInit() {
+    super.onInit();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void onClose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(stop());
+    super.onClose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // After max reconnect failures we stop permanently — resume retries once.
+    if (!_authRepository.isAuthenticated) return;
+    if (_starting || _stopping || isConnected.value || _client != null) return;
+    unawaited(start());
+  }
 
   /// Start (or restart) after login / cold-start restore.
   ///
@@ -374,11 +396,7 @@ class ReverbRealtimeService extends GetxService {
     _log(
       'TableSessionStarted table=${wire.tableId} locked_by=${wire.lockedBy}',
     );
-    unawaited(_sessionRepository.applyTableSessionWireEvent(wire));
-    tablesLockRevision.value++;
-    if (wire.floorId != null && wire.floorId! > 0) {
-      unawaited(subscribeFloor(wire.floorId!));
-    }
+    unawaited(_applyTableWireEvent(wire, subscribeFloorIfNeeded: true));
   }
 
   void _onTableSessionEnded(ChannelReadEvent event) {
@@ -390,8 +408,21 @@ class ReverbRealtimeService extends GetxService {
     final wire = TableSessionWireEvent.fromJson(payload);
     if (wire.tableId <= 0) return;
     _log('TableSessionEnded table=${wire.tableId}');
-    unawaited(_sessionRepository.applyTableSessionWireEvent(wire));
+    unawaited(_applyTableWireEvent(wire));
+  }
+
+  /// Persist lock patch first, then bump revision so readers see fresh cache.
+  Future<void> _applyTableWireEvent(
+    TableSessionWireEvent wire, {
+    bool subscribeFloorIfNeeded = false,
+  }) async {
+    await _sessionRepository.applyTableSessionWireEvent(wire);
     tablesLockRevision.value++;
+    if (subscribeFloorIfNeeded &&
+        wire.floorId != null &&
+        wire.floorId! > 0) {
+      await subscribeFloor(wire.floorId!);
+    }
   }
 
   void _onForceLogout(ChannelReadEvent event) {
@@ -454,11 +485,5 @@ class ReverbRealtimeService extends GetxService {
     // ignore: avoid_print
     print(line);
     debugPrint(line);
-  }
-
-  @override
-  void onClose() {
-    unawaited(stop());
-    super.onClose();
   }
 }

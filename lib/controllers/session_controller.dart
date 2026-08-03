@@ -98,6 +98,11 @@ class SessionController extends GetxController {
   /// Bumped when the session list should jump to the top (e.g. after Send).
   final listScrollSignal = 0.obs;
 
+  /// Mirrors Reverb table-lock revisions so occupancy checks see fresh cache.
+  final tablesLockRevision = 0.obs;
+
+  Worker? _tablesLockWorker;
+
   /// When deleting an order we optimistically remove it from [orders],
   /// but a subsequent forced refresh may temporarily still return the
   /// deleted row (backend eventual consistency).
@@ -108,6 +113,7 @@ class SessionController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    _bindTablesLockRevision();
     final args = Get.arguments;
     final justPreloaded = args is Map && args['preloaded'] == true;
 
@@ -148,6 +154,22 @@ class SessionController extends GetxController {
     }
   }
 
+  void _bindTablesLockRevision() {
+    if (!Get.isRegistered<ReverbRealtimeService>()) return;
+    final reverb = Get.find<ReverbRealtimeService>();
+    tablesLockRevision.value = reverb.tablesLockRevision.value;
+    _tablesLockWorker = ever<int>(reverb.tablesLockRevision, (rev) {
+      tablesLockRevision.value = rev;
+    });
+  }
+
+  @override
+  void onClose() {
+    _tablesLockWorker?.dispose();
+    _tablesLockWorker = null;
+    super.onClose();
+  }
+
   /// Warm product cache + create seed so the first POST /api/orders is not
   /// blocked on a full paginated products download.
   Future<void> _prefetchCreateCatalog() async {
@@ -177,6 +199,15 @@ class SessionController extends GetxController {
       activeDay.value =
           _sessionRepository.cachedActiveDay ?? ActiveDayInfo.fallback();
     }
+    _subscribeActiveFloorChannel();
+  }
+
+  /// Docs: subscribe `private-tables.floor.{id}` while on that floor/zone.
+  void _subscribeActiveFloorChannel() {
+    final floorId = activeDay.value.salesZoneId;
+    if (floorId == null || floorId <= 0) return;
+    if (!Get.isRegistered<ReverbRealtimeService>()) return;
+    unawaited(Get.find<ReverbRealtimeService>().subscribeFloor(floorId));
   }
 
   Future<void> _prefetchTables() async {
@@ -1138,6 +1169,9 @@ class SessionController extends GetxController {
 
     // Cache-first occupancy check (warmed on session open / New Order click).
     // Only hit the network when cache is empty.
+    // Touch lock revision so any concurrent WS patch is already committed
+    // (revision bumps only after Hive apply).
+    tablesLockRevision.value;
     var tables = _sessionRepository.cachedTables;
     if (tables.isEmpty) {
       try {
@@ -1428,6 +1462,9 @@ class SessionController extends GetxController {
   bool isTableOccupied(String tableNumber) {
     final normalized = tableNumber.trim();
     if (normalized.isEmpty) return false;
+
+    // Depend on Reverb lock revision when called from Obx.
+    tablesLockRevision.value;
 
     // Own list order is reopened via nouvelle commande — not "occupied" for this waiter.
     if (_findOwnOpenOrderForTable(normalized) != null) return false;

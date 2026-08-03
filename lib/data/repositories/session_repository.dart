@@ -29,6 +29,10 @@ class SessionRepository {
   /// Already-mapped rows from the last connect preload (avoids empty flash).
   List<SessionOrder>? _preloadedSessionOrders;
 
+  /// Bumped when a Reverb table-lock event is applied to the tables cache.
+  /// Used so an in-flight REST tables refresh does not wipe fresher WS locks.
+  int _tablesWireEpoch = 0;
+
   ActiveDayInfo? get cachedActiveDay => _local.readActiveDay();
   DayStatisticsInfo? get cachedDayStatistics => _local.readDayStatistics();
   List<Map<String, dynamic>> get cachedTables => _local.readTablesList();
@@ -148,7 +152,17 @@ class SessionRepository {
   Future<void> _refreshTablesInBackground() async {
     try {
       if (!await _connectivity.isOnline) return;
+      final epochBefore = _tablesWireEpoch;
       final tables = await _remote.fetchTablesList();
+      if (_tablesWireEpoch != epochBefore) {
+        // A wire lock landed during this fetch — keep those lock fields.
+        final merged = _mergeTableLockFieldsFromCache(
+          remoteTables: tables,
+          cacheTables: _local.readTablesList(),
+        );
+        await _local.saveTablesList(merged);
+        return;
+      }
       await _local.saveTablesList(tables);
     } catch (_) {}
   }
@@ -162,23 +176,9 @@ class SessionRepository {
     final patch = event.toTablePatch();
     var found = false;
 
-    int? rowTableId(Map<String, dynamic> row) {
-      final direct = row['id'];
-      if (direct is num) return direct.toInt();
-      final parsed = int.tryParse(direct?.toString() ?? '');
-      if (parsed != null) return parsed;
-      final nested = row['table'];
-      if (nested is Map) {
-        final nestedId = nested['id'];
-        if (nestedId is num) return nestedId.toInt();
-        return int.tryParse(nestedId?.toString() ?? '');
-      }
-      return null;
-    }
-
     for (var i = 0; i < current.length; i++) {
       final row = current[i];
-      if (rowTableId(row) != event.tableId) continue;
+      if (_rowTableId(row) != event.tableId) continue;
       found = true;
       final sessionPatch = <String, dynamic>{
         'locked_by': event.lockedBy,
@@ -212,6 +212,70 @@ class SessionRepository {
     }
 
     await _local.saveTablesList(current);
+    _tablesWireEpoch++;
+  }
+
+  static int? _rowTableId(Map<String, dynamic> row) {
+    final direct = row['id'];
+    if (direct is num) return direct.toInt();
+    final parsed = int.tryParse(direct?.toString() ?? '');
+    if (parsed != null) return parsed;
+    final nested = row['table'];
+    if (nested is Map) {
+      final nestedId = nested['id'];
+      if (nestedId is num) return nestedId.toInt();
+      return int.tryParse(nestedId?.toString() ?? '');
+    }
+    return null;
+  }
+
+  /// Overlay lock/session fields from [cacheTables] onto [remoteTables] by id.
+  static List<Map<String, dynamic>> _mergeTableLockFieldsFromCache({
+    required List<Map<String, dynamic>> remoteTables,
+    required List<Map<String, dynamic>> cacheTables,
+  }) {
+    if (cacheTables.isEmpty) return remoteTables;
+
+    final byId = <int, Map<String, dynamic>>{};
+    for (final row in cacheTables) {
+      final id = _rowTableId(row);
+      if (id != null && id > 0) byId[id] = row;
+    }
+    if (byId.isEmpty) return remoteTables;
+
+    const lockKeys = <String>{
+      'locked_by',
+      'locked_at',
+      'is_locked',
+      'status',
+      'session_waiter_name',
+      'session_owner_id',
+      'session',
+    };
+
+    return remoteTables.map((remote) {
+      final id = _rowTableId(remote);
+      if (id == null) return remote;
+      final cached = byId[id];
+      if (cached == null) return remote;
+
+      final merged = Map<String, dynamic>.from(remote);
+      for (final key in lockKeys) {
+        if (cached.containsKey(key)) merged[key] = cached[key];
+      }
+      if (remote['table'] is Map && cached['table'] is Map) {
+        final remoteNested = Map<String, dynamic>.from(remote['table'] as Map);
+        final cachedNested = Map<String, dynamic>.from(cached['table'] as Map);
+        for (final key in lockKeys) {
+          if (key == 'session') continue;
+          if (cachedNested.containsKey(key)) {
+            remoteNested[key] = cachedNested[key];
+          }
+        }
+        merged['table'] = remoteNested;
+      }
+      return merged;
+    }).toList();
   }
 
   Future<void> clearOpenOrdersCache() async {

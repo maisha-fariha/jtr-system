@@ -27,24 +27,37 @@ class ApiClient extends GetxService {
         onRequest: (options, handler) {
           options.headers['Accept'] = 'application/json';
           options.headers['Content-Type'] = 'application/json';
-          options.headers['X-Tenant-Schema'] = ApiConfig.tenantSchema;
 
-          final deviceId = ApiConfig.deviceId;
-          final deviceToken = ApiConfig.deviceToken;
-          if (deviceId != null && deviceId.isNotEmpty) {
-            options.headers['X-Device-Id'] = deviceId;
+          final skipDevice = options.extra['skipDevice'] == true;
+          final skipAuth = options.extra['skipAuth'] == true;
+
+          if (!skipDevice) {
+            options.headers['X-Tenant-Schema'] = ApiConfig.tenantSchema;
+            final deviceId = ApiConfig.deviceId;
+            final deviceToken = ApiConfig.deviceToken;
+            if (deviceId != null && deviceId.isNotEmpty) {
+              options.headers['X-Device-Id'] = deviceId;
+            } else {
+              options.headers.remove('X-Device-Id');
+            }
+            if (deviceToken != null && deviceToken.isNotEmpty) {
+              options.headers['X-Device-Token'] = deviceToken;
+            } else {
+              options.headers.remove('X-Device-Token');
+            }
           } else {
+            options.headers.remove('X-Tenant-Schema');
             options.headers.remove('X-Device-Id');
-          }
-          if (deviceToken != null && deviceToken.isNotEmpty) {
-            options.headers['X-Device-Token'] = deviceToken;
-          } else {
             options.headers.remove('X-Device-Token');
           }
 
-          final token = _authToken;
-          if (token != null && token.isNotEmpty) {
-            options.headers['Authorization'] = 'Bearer $token';
+          if (!skipAuth) {
+            final token = _authToken;
+            if (token != null && token.isNotEmpty) {
+              options.headers['Authorization'] = 'Bearer $token';
+            } else {
+              options.headers.remove('Authorization');
+            }
           } else {
             options.headers.remove('Authorization');
           }
@@ -58,6 +71,8 @@ class ApiClient extends GetxService {
   String? _authToken;
 
   Dio get dio => _dio;
+
+  String? get authToken => _authToken;
 
   void setAuthToken(String? token) {
     _authToken = token;

@@ -5,6 +5,7 @@ import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
+import '../services/reverb_realtime_service.dart';
 
 class AppNavigation {
   AppNavigation._();
@@ -12,6 +13,14 @@ class AppNavigation {
   static bool _forceLogoutInFlight = false;
 
   static Future<void> logout() async {
+    // Never block login navigation on a broken WebSocket disconnect.
+    if (Get.isRegistered<ReverbRealtimeService>()) {
+      try {
+        await Get.find<ReverbRealtimeService>()
+            .stop()
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
     if (Get.isRegistered<SessionRepository>()) {
       await Get.find<SessionRepository>().clearOpenOrdersCache();
     }

@@ -4,6 +4,10 @@ class ApiEndpoints {
   static const deviceSession = '/api/devices/session';
   static const deviceActivate = '/api/devices/activate';
 
+  /// Reverb config (no auth / no device headers per mobile guide).
+  static const posBootstrap = '/api/pos/bootstrap';
+  static const broadcastingAuth = '/api/broadcasting/auth';
+
   static const loginUsers = '/api/auth/login-users';
   static const loginRoles = '/api/auth/login-roles';
   static const login = '/api/auth/login';

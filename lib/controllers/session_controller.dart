@@ -10,6 +10,7 @@ import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../services/reverb_realtime_service.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/order_optimistic_sync.dart';
 import '../data/models/active_day_info.dart';
@@ -182,6 +183,9 @@ class SessionController extends GetxController {
     try {
       await _sessionRepository.getTablesList();
       _debugLogAssignedTablesOnSessionOpen();
+      if (Get.isRegistered<ReverbRealtimeService>()) {
+        Get.find<ReverbRealtimeService>().resyncSubscriptions();
+      }
     } catch (_) {}
   }
 
@@ -1592,6 +1596,10 @@ class SessionController extends GetxController {
           userOrId: userOrId,
           passcode: passcode,
         );
+        // force_login issues a new Sanctum token — refresh Reverb auth.
+        if (Get.isRegistered<ReverbRealtimeService>()) {
+          unawaited(Get.find<ReverbRealtimeService>().start());
+        }
 
         // Open step 2 after step 1 closes (same old two-dialog flow).
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1700,6 +1708,10 @@ class SessionController extends GetxController {
           userOrId: userOrId,
           passcode: passcode,
         );
+        // force_login issues a new Sanctum token — refresh Reverb auth.
+        if (Get.isRegistered<ReverbRealtimeService>()) {
+          unawaited(Get.find<ReverbRealtimeService>().start());
+        }
         await applyOffer(orderNumber);
       },
     );

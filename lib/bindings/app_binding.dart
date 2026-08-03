@@ -21,6 +21,8 @@ import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
 import '../data/datasources/stock_remote_datasource.dart';
 import '../data/repositories/stock_repository.dart';
+import '../data/datasources/realtime_remote_datasource.dart';
+import '../services/reverb_realtime_service.dart';
 
 class AppBinding extends Bindings {
   @override
@@ -128,5 +130,21 @@ class AppBinding extends Bindings {
       ),
       fenix: true,
     );
+    Get.lazyPut<RealtimeRemoteDataSource>(
+      () => RealtimeRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    // Permanent: survives route churn; start/stop are explicit and non-blocking.
+    if (!Get.isRegistered<ReverbRealtimeService>()) {
+      Get.put(
+        ReverbRealtimeService(
+          remote: Get.find<RealtimeRemoteDataSource>(),
+          authRepository: Get.find<AuthRepository>(),
+          sessionRepository: Get.find<SessionRepository>(),
+          apiClient: Get.find<ApiClient>(),
+        ),
+        permanent: true,
+      );
+    }
   }
 }

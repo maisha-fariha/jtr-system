@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
+import '../services/reverb_realtime_service.dart';
 
 /// Post-login preload screen — shown **only after a fresh login**.
 ///
@@ -90,6 +91,9 @@ class ConnectController extends GetxController {
       await _sessionRepository
           .getTablesList(forceRefresh: true)
           .timeout(_syncTimeout);
+      if (Get.isRegistered<ReverbRealtimeService>()) {
+        Get.find<ReverbRealtimeService>().resyncSubscriptions();
+      }
       _setProgress(_tablesEnd);
     } catch (error) {
       syncError.value = error.toString();

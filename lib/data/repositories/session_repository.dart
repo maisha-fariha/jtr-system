@@ -7,6 +7,7 @@ import '../datasources/session_datasource.dart';
 import '../mappers/order_mapper.dart';
 import '../models/active_day_info.dart';
 import '../models/day_statistics_info.dart';
+import '../models/realtime/pos_bootstrap_config.dart';
 
 class SessionRepository {
   SessionRepository({
@@ -150,6 +151,67 @@ class SessionRepository {
       final tables = await _remote.fetchTablesList();
       await _local.saveTablesList(tables);
     } catch (_) {}
+  }
+
+  /// Apply live Reverb `TableSessionStarted` / `TableSessionEnded` onto the
+  /// tables cache so occupancy / lock checks stay fresh without a full refetch.
+  Future<void> applyTableSessionWireEvent(TableSessionWireEvent event) async {
+    if (event.tableId <= 0) return;
+
+    final current = List<Map<String, dynamic>>.from(_local.readTablesList());
+    final patch = event.toTablePatch();
+    var found = false;
+
+    int? rowTableId(Map<String, dynamic> row) {
+      final direct = row['id'];
+      if (direct is num) return direct.toInt();
+      final parsed = int.tryParse(direct?.toString() ?? '');
+      if (parsed != null) return parsed;
+      final nested = row['table'];
+      if (nested is Map) {
+        final nestedId = nested['id'];
+        if (nestedId is num) return nestedId.toInt();
+        return int.tryParse(nestedId?.toString() ?? '');
+      }
+      return null;
+    }
+
+    for (var i = 0; i < current.length; i++) {
+      final row = current[i];
+      if (rowTableId(row) != event.tableId) continue;
+      found = true;
+      final sessionPatch = <String, dynamic>{
+        'locked_by': event.lockedBy,
+        'locked_at': event.lockedAt,
+        'is_locked': event.isLocked,
+        'session_waiter_name': event.sessionWaiterName,
+        'session_owner_id': event.lockedBy,
+        if (event.status != null) 'status': event.status,
+      };
+      current[i] = {
+        ...row,
+        ...patch,
+        if (row['session'] is Map)
+          'session': {
+            ...Map<String, dynamic>.from(row['session'] as Map),
+            ...sessionPatch,
+          },
+        if (row['table'] is Map)
+          'table': {
+            ...Map<String, dynamic>.from(row['table'] as Map),
+            ...patch,
+          },
+      };
+      break;
+    }
+
+    if (!found) {
+      // Do not invent incomplete rows (id ≠ table number). Cache stays as-is;
+      // next REST tables refresh will reconcile. Avoids occupancy false positives.
+      return;
+    }
+
+    await _local.saveTablesList(current);
   }
 
   Future<void> clearOpenOrdersCache() async {

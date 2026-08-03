@@ -8,6 +8,7 @@ import 'core/storage/hive_storage.dart';
 import 'data/repositories/auth_repository.dart';
 import 'data/repositories/device_repository.dart';
 import 'routes/app_pages.dart';
+import 'services/reverb_realtime_service.dart';
 import 'utils/app_theme.dart';
 import 'utils/responsive.dart';
 
@@ -17,7 +18,12 @@ Future<void> main() async {
   await Get.find<HiveStorage>().init();
   // Restore device headers before any API call (login session restore too).
   await Get.find<DeviceRepository>().restoreRuntimeFromStorage();
-  await Get.find<AuthRepository>().restoreSessionOnAppStart();
+  final restored = await Get.find<AuthRepository>().restoreSessionOnAppStart();
+  if (restored) {
+    // Fire-and-forget: bootstrap + WS after device + Sanctum are restored.
+    // ignore: unawaited_futures
+    Get.find<ReverbRealtimeService>().start();
+  }
   runApp(const JtrSystemApp());
 }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -7,6 +9,7 @@ import '../data/repositories/session_repository.dart';
 import '../controllers/session_controller.dart';
 import '../models/user_suggestion.dart';
 import '../routes/app_pages.dart';
+import '../services/reverb_realtime_service.dart';
 import '../widgets/user_identifiant_field_controller.dart';
 import '../utils/app_snackbar.dart';
 
@@ -120,6 +123,10 @@ class LoginController extends GetxController {
       // Drop any previous session controller so the next open is a fresh paint.
       if (Get.isRegistered<SessionController>()) {
         Get.delete<SessionController>(force: true);
+      }
+      // Connect Reverb after Sanctum + device headers are ready.
+      if (Get.isRegistered<ReverbRealtimeService>()) {
+        unawaited(Get.find<ReverbRealtimeService>().start());
       }
       // Auth succeeded — reuse the existing "Chargement base de données"
       // screen to preload session data before the session page mounts.

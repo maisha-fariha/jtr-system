@@ -11,8 +11,11 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
+
+import '../../services/reverb_realtime_service.dart';
 
 class DeviceRepository {
   DeviceRepository({
@@ -306,6 +309,13 @@ class DeviceRepository {
   }
 
   Future<void> clearDeviceCredentials() async {
+    if (Get.isRegistered<ReverbRealtimeService>()) {
+      try {
+        await Get.find<ReverbRealtimeService>()
+            .stop()
+            .timeout(const Duration(seconds: 2));
+      } catch (_) {}
+    }
     await _secureStorage.clearCredentials();
     ApiConfig.clearDeviceCredentials();
     ApiConfig.resetToDefaults();

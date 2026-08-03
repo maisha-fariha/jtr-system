@@ -70,7 +70,9 @@ class SessionPage extends GetView<SessionController> {
                       color: AppTheme.primary,
                       onRefresh: () => controller.loadSessionOrders(
                         forceRefresh: true,
-                        replaceExistingList: false,
+                        // Full replace + table-key dedupe: avoids draft+server
+                        // duplicates after Send → quick swipe refresh.
+                        replaceExistingList: true,
                       ),
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(),
@@ -101,7 +103,9 @@ class SessionPage extends GetView<SessionController> {
                     color: AppTheme.primary,
                     onRefresh: () => controller.loadSessionOrders(
                       forceRefresh: true,
-                      replaceExistingList: false,
+                      // Full replace + table-key dedupe: avoids draft+server
+                      // duplicates after Send → quick swipe refresh.
+                      replaceExistingList: true,
                     ),
                     child: const _SessionOrdersList(),
                   );

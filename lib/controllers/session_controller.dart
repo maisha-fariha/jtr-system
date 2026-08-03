@@ -422,9 +422,23 @@ class SessionController extends GetxController {
         for (final order in orders)
           if (order.id > 0) order.id: order,
       };
-      orders.assignAll([
+      // Keep unsent local drafts (id <= 0) that the API list does not include yet.
+      final localDrafts = <SessionOrder>[
+        for (final order in orders)
+          if (order.id <= 0 && !_isOrderSuppressed(order.number)) order,
+      ];
+      final serverRows = [
         for (final order in filtered)
           _preferDetailedOrder(order, previousById[order.id]),
+      ];
+      // Drop local drafts whose table already appears on the server list.
+      final serverTables = <String>{
+        for (final order in serverRows) normalizeTableKey(order.number),
+      };
+      orders.assignAll([
+        ...serverRows,
+        for (final draft in localDrafts)
+          if (!serverTables.contains(normalizeTableKey(draft.number))) draft,
       ]);
     } else {
       _mergeSessionOrdersStable(filtered);
@@ -445,6 +459,7 @@ class SessionController extends GetxController {
         _upsertOrderInList(empty);
       }
     }
+    _dedupeOrdersByTableKeyInPlace();
     orders.refresh();
 
     if (clearSuppressedMatches && _suppressedTableNumbers.isNotEmpty) {
@@ -461,12 +476,16 @@ class SessionController extends GetxController {
   }
 
   /// Updates existing rows in place and appends only new ids (no reshuffle).
+  ///
+  /// Local drafts use `id <= 0` (e.g. `-tableId`). When the server order for
+  /// the same table arrives, replace that draft — never keep both rows.
   void _mergeSessionOrdersStable(List<SessionOrder> incoming) {
     final incomingById = <int, SessionOrder>{
       for (final order in incoming)
         if (order.id > 0) order.id: order,
     };
 
+    // 1) Refresh rows that already have a real server id.
     for (var i = 0; i < orders.length; i++) {
       final current = orders[i];
       if (current.id <= 0) continue;
@@ -475,15 +494,79 @@ class SessionController extends GetxController {
       orders[i] = _preferDetailedOrder(updated, current);
     }
 
+    // 2) Adopt server rows that are new by id — folding any same-table draft.
     final existingIds = <int>{
       for (final order in orders)
         if (order.id > 0) order.id,
     };
     for (final order in incoming) {
       if (order.id <= 0 || existingIds.contains(order.id)) continue;
-      orders.add(order);
+
+      final draftIdx = orders.indexWhere(
+        (item) =>
+            item.id <= 0 && _tableKeysMatch(item.number, order.number),
+      );
+      if (draftIdx >= 0) {
+        orders[draftIdx] = _preferDetailedOrder(order, orders[draftIdx]);
+      } else {
+        // Same table may already have another positive id (rare race) — replace.
+        final sameTableIdx = orders.indexWhere(
+          (item) => _tableKeysMatch(item.number, order.number),
+        );
+        if (sameTableIdx >= 0) {
+          orders[sameTableIdx] =
+              _preferDetailedOrder(order, orders[sameTableIdx]);
+        } else {
+          orders.add(order);
+        }
+      }
       existingIds.add(order.id);
     }
+  }
+
+  /// One visible row per table — prefer real server id, then richer detail.
+  void _dedupeOrdersByTableKeyInPlace() {
+    final bestByTable = <String, SessionOrder>{};
+    final orderOfKeys = <String>[];
+
+    for (final order in orders) {
+      final key = normalizeTableKey(order.number);
+      if (key.isEmpty) continue;
+      final existing = bestByTable[key];
+      if (existing == null) {
+        bestByTable[key] = order;
+        orderOfKeys.add(key);
+        continue;
+      }
+      bestByTable[key] = _shouldPreferOrderOver(order, existing)
+          ? order
+          : existing;
+    }
+
+    if (bestByTable.length == orders.length) return;
+
+    orders.assignAll([
+      for (final key in orderOfKeys) bestByTable[key]!,
+    ]);
+  }
+
+  bool _shouldPreferOrderOver(SessionOrder candidate, SessionOrder current) {
+    // Real server id beats local draft (-tableId).
+    if (candidate.id > 0 && current.id <= 0) return true;
+    if (candidate.id <= 0 && current.id > 0) return false;
+    final candidateLines = candidate.products.length;
+    final currentLines = current.products.length;
+    if (candidateLines != currentLines) return candidateLines > currentLines;
+    final candidateDisplay = candidate.displayEntries.length;
+    final currentDisplay = current.displayEntries.length;
+    if (candidateDisplay != currentDisplay) {
+      return candidateDisplay > currentDisplay;
+    }
+    // Prefer the higher (newer) server id when both are remote.
+    if (candidate.id > 0 && current.id > 0 && candidate.id != current.id) {
+      return candidate.id > current.id;
+    }
+    return false;
   }
 
   /// Session list summaries omit products; never wipe lines / totals already loaded.
@@ -778,6 +861,7 @@ class SessionController extends GetxController {
       );
       if (byNumber >= 0) {
         orders[byNumber] = merged(safeOrder, orders[byNumber]);
+        _removeOtherRowsForTable(safeOrder.number, keepIndex: byNumber);
         orders.refresh();
         return;
       }
@@ -789,6 +873,8 @@ class SessionController extends GetxController {
     final idx = orders.indexWhere((item) => item.id == safeOrder.id);
     if (idx >= 0) {
       orders[idx] = merged(safeOrder, orders[idx]);
+      // Drop any other same-table row (stale local draft after Send).
+      _removeOtherRowsForTable(safeOrder.number, keepIndex: idx);
       orders.refresh();
       return;
     }
@@ -798,12 +884,22 @@ class SessionController extends GetxController {
     );
     if (byNumber >= 0) {
       orders[byNumber] = merged(safeOrder, orders[byNumber]);
+      _removeOtherRowsForTable(safeOrder.number, keepIndex: byNumber);
       orders.refresh();
       return;
     }
 
     orders.insert(0, safeOrder);
     orders.refresh();
+  }
+
+  void _removeOtherRowsForTable(String tableNumber, {required int keepIndex}) {
+    for (var i = orders.length - 1; i >= 0; i--) {
+      if (i == keepIndex) continue;
+      if (_tableKeysMatch(orders[i].number, tableNumber)) {
+        orders.removeAt(i);
+      }
+    }
   }
 
   /// Table-details mutations must not be overwritten by [_preferDetailedOrder]

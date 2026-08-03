@@ -133,12 +133,9 @@ class AuthRepository {
     return session;
   }
 
-  /// Re-authenticates for a sensitive action (e.g. table cancel).
-  ///
-  /// Keeps the new session token — restoring the previous token after
-  /// `force_login` leaves the app with an invalidated token and later APIs
-  /// fail with "Unauthenticated".
-  Future<void> verifyCredentials({
+  /// Validates credentials for delete/offer. Returns the token for one-shot use.
+  /// Does not replace the logged-in waiter session.
+  Future<AuthSessionModel> verifyCredentials({
     required String userOrId,
     required String passcode,
   }) async {
@@ -149,18 +146,15 @@ class AuthRepository {
       );
     }
 
-    final session = await _remote.login(
+    return _remote.login(
       LoginRequest(
         type: 'passcode',
         userOrId: userOrId,
         passcode: passcode,
         forceLogin: true,
       ),
+      skipAuth: true,
     );
-
-    await _local.saveSession(session);
-    _apiClient.setAuthToken(session.token);
-    logAuthToken(session.token, source: 'verify_credentials');
   }
 
   /// Restores the saved auth token into [ApiClient] after a cold start.

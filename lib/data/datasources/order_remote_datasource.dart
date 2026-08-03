@@ -13,6 +13,13 @@ class OrderRemoteDataSource {
   /// Last request/response log from a mutating order call (for on-screen debug).
   String? lastApiLog;
 
+  /// Runs [action] with a temporary Bearer (authorize-for-delete only).
+  Future<T> withAuthTokenOverride<T>(
+    String token,
+    Future<T> Function() action,
+  ) =>
+      _client.withAuthTokenOverride(token, action);
+
   Future<Map<String, dynamic>> fetchOrderDetail(int orderId) async {
     final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.orderById(orderId),

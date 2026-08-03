@@ -1688,14 +1688,10 @@ class SessionController extends GetxController {
         required String userOrId,
         required String passcode,
       }) async {
-        await _authRepository.verifyCredentials(
+        final authorizer = await _authRepository.verifyCredentials(
           userOrId: userOrId,
           passcode: passcode,
         );
-        // force_login issues a new Sanctum token — refresh Reverb auth.
-        if (Get.isRegistered<ReverbRealtimeService>()) {
-          unawaited(Get.find<ReverbRealtimeService>().start());
-        }
 
         // Open step 2 after step 1 closes (same old two-dialog flow).
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1711,6 +1707,7 @@ class SessionController extends GetxController {
                 orderNumber,
                 cancelToWhom: toWhom,
                 cancelNote: note,
+                authorizerToken: authorizer.token,
               );
             },
           );
@@ -1723,6 +1720,7 @@ class SessionController extends GetxController {
     String orderNumber, {
     String? cancelToWhom,
     String? cancelNote,
+    String? authorizerToken,
   }) async {
     final order = findOrder(orderNumber: orderNumber);
     if (order == null) return;
@@ -1734,7 +1732,10 @@ class SessionController extends GetxController {
         final tableId = -order.id;
         if (tableId > 0) {
           try {
-            await _orderRepository.endTableSession(tableId);
+            await _orderRepository.endTableSession(
+              tableId,
+              authorizerToken: authorizerToken,
+            );
           } on ApiException {
             // Order is local-only; still remove from the list even if release fails.
           }
@@ -1745,6 +1746,7 @@ class SessionController extends GetxController {
           tableNumber: order.number,
           cancelToWhom: cancelToWhom,
           cancelNote: cancelNote,
+          authorizerToken: authorizerToken,
         );
       }
 
@@ -1804,10 +1806,6 @@ class SessionController extends GetxController {
           userOrId: userOrId,
           passcode: passcode,
         );
-        // force_login issues a new Sanctum token — refresh Reverb auth.
-        if (Get.isRegistered<ReverbRealtimeService>()) {
-          unawaited(Get.find<ReverbRealtimeService>().start());
-        }
         await applyOffer(orderNumber);
       },
     );

@@ -1,3 +1,5 @@
+import 'package:dio/dio.dart';
+
 import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
 import '../../core/network/api_exception.dart';
@@ -52,10 +54,16 @@ class AuthRemoteDataSource {
         .toList();
   }
 
-  Future<AuthSessionModel> login(LoginRequest request) async {
+  Future<AuthSessionModel> login(
+    LoginRequest request, {
+    bool skipAuth = false,
+  }) async {
     final response = await _client.post<Map<String, dynamic>>(
       ApiEndpoints.login,
       data: request.toJson(),
+      options: skipAuth
+          ? Options(extra: const {'skipAuth': true})
+          : null,
     );
 
     final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(

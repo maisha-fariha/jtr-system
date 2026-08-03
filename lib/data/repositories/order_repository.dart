@@ -318,6 +318,7 @@ class OrderRepository {
     String? tableNumber,
     String? cancelToWhom,
     String? cancelNote,
+    String? authorizerToken,
   }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
@@ -325,75 +326,93 @@ class OrderRepository {
       );
     }
 
-    final tableId = await _resolveTableIdForClose(
-      orderId: orderId,
-      tableNumber: tableNumber,
-    );
+    Future<void> runClose() async {
+      final tableId = await _resolveTableIdForClose(
+        orderId: orderId,
+        tableNumber: tableNumber,
+      );
 
-    if (orderId > 0) {
-      final toWhom = cancelToWhom?.trim();
-      final note = cancelNote?.trim();
-      final hasCancelMetadata = (toWhom != null && toWhom.isNotEmpty) ||
-          (note != null && note.isNotEmpty);
+      if (orderId > 0) {
+        final toWhom = cancelToWhom?.trim();
+        final note = cancelNote?.trim();
+        final hasCancelMetadata = (toWhom != null && toWhom.isNotEmpty) ||
+            (note != null && note.isNotEmpty);
 
-      if (hasCancelMetadata) {
-        logOrderFlow(
-          'CLOSE order=$orderId'
-          '${toWhom != null && toWhom.isNotEmpty ? ' toWhom="$toWhom"' : ''}'
-          '${note != null && note.isNotEmpty ? ' note="$note"' : ''}',
-        );
+        if (hasCancelMetadata) {
+          logOrderFlow(
+            'CLOSE order=$orderId'
+            '${toWhom != null && toWhom.isNotEmpty ? ' toWhom="$toWhom"' : ''}'
+            '${note != null && note.isNotEmpty ? ' note="$note"' : ''}',
+          );
 
-        try {
-          final detail = await _remote.fetchOrderDetail(orderId);
-          if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
-            final cancelReason = OrderMapper.buildCancelReason(
-              note: note ?? '',
-              reportedTo: toWhom ?? '',
-            );
-            final payload = OrderMapper.cancelAllVisibleItems(
-              detail,
-              cancelReason: cancelReason,
-            );
-            final apiLog = StringBuffer(
-              '── Table delete: cancel all items before close ──\n',
-            );
-            await _putOrderUpdate(
-              orderId: orderId,
-              payload: payload,
-              apiLog: apiLog,
-            );
+          try {
+            final detail = await _remote.fetchOrderDetail(orderId);
+            if (!OrderMapper.orderDetailHasNoVisibleItems(detail)) {
+              final cancelReason = OrderMapper.buildCancelReason(
+                note: note ?? '',
+                reportedTo: toWhom ?? '',
+              );
+              final payload = OrderMapper.cancelAllVisibleItems(
+                detail,
+                cancelReason: cancelReason,
+              );
+              final apiLog = StringBuffer(
+                '── Table delete: cancel all items before close ──\n',
+              );
+              await _putOrderUpdate(
+                orderId: orderId,
+                payload: payload,
+                apiLog: apiLog,
+              );
+            }
+          } on ApiException {
+            rethrow;
           }
+        }
+
+        await _remote.closeOrder(orderId);
+        await _local.removeOrderDetail(orderId);
+        await _sessionLocal.removeOpenOrderFromList(orderId);
+      }
+
+      // Session release is best-effort: the order is already closed. Backend may
+      // return "not allowed to release this table" even when delete succeeded.
+      if (tableId != null && tableId > 0) {
+        try {
+          await _remote.endTableSession(tableId);
         } on ApiException {
-          rethrow;
+          if (orderId <= 0) rethrow;
+        } catch (_) {
+          if (orderId <= 0) rethrow;
         }
       }
-
-      await _remote.closeOrder(orderId);
-      await _local.removeOrderDetail(orderId);
-      await _sessionLocal.removeOpenOrderFromList(orderId);
     }
 
-    // Session release is best-effort: the order is already closed. Backend may
-    // return "not allowed to release this table" even when delete succeeded.
-    if (tableId != null && tableId > 0) {
-      try {
-        await _remote.endTableSession(tableId);
-      } on ApiException {
-        if (orderId <= 0) rethrow;
-      } catch (_) {
-        if (orderId <= 0) rethrow;
-      }
+    final token = authorizerToken?.trim();
+    if (token != null && token.isNotEmpty) {
+      await _remote.withAuthTokenOverride(token, runClose);
+    } else {
+      await runClose();
     }
   }
 
-  Future<void> endTableSession(int tableId) async {
+  Future<void> endTableSession(
+    int tableId, {
+    String? authorizerToken,
+  }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
         message: 'Annulation impossible hors ligne. Vérifiez votre réseau.',
       );
     }
 
-    await _remote.endTableSession(tableId);
+    Future<void> run() => _remote.endTableSession(tableId);
+    final token = authorizerToken?.trim();
+    if (token != null && token.isNotEmpty) {
+      await _remote.withAuthTokenOverride(token, run);
+    } else {
+      await run();
+    }
   }
 
   /// Ends a leftover table lock/session with no active order (best-effort).

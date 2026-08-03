@@ -78,6 +78,20 @@ class ApiClient extends GetxService {
     _authToken = token;
   }
 
+  /// Runs [action] with a temporary Bearer token, then restores the previous one.
+  Future<T> withAuthTokenOverride<T>(
+    String token,
+    Future<T> Function() action,
+  ) async {
+    final previous = _authToken;
+    _authToken = token;
+    try {
+      return await action();
+    } finally {
+      _authToken = previous;
+    }
+  }
+
   /// Sync Dio base URL / default tenant after restore or successful activation.
   void applyRuntimeConfig() {
     _dio.options.baseUrl = ApiConfig.baseUrl;

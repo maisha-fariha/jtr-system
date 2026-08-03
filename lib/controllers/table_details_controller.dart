@@ -89,6 +89,11 @@ class TableDetailsController extends GetxController {
   /// After a successful kitchen Send, further sends use PUT (not POST create).
   bool _didCompleteKitchenSend = false;
 
+  /// Lines present at last kitchen sync / remote open — waiters without
+  /// `access-edit-table-details` cannot delete/decrease these. Newly added
+  /// local lines (before next Send) are not in this set and stay removable.
+  final Set<String> _sentKitchenLineKeys = <String>{};
+
   bool get _isLocalDraft {
     if (orderId != null && orderId! > 0) return false;
     final current = _rawSessionOrder ?? seedOrder;
@@ -651,14 +656,18 @@ class TableDetailsController extends GetxController {
       if ((orderId == null || orderId! <= 0) && rawSeed.isLocalOnly) {
         _deferDetailFetch = true;
       }
-      // Reopened remote ticket with synced lines → later Send uses PUT.
-      if (!rawSeed.isLocalOnly &&
-          _layoutHasServerItemIds(rawSeed.displayEntries)) {
+      // Remote ticket already exists on the server (prior Send) → later Send
+      // uses PUT. Lock existing lines; newly added local lines stay removable.
+      if (!rawSeed.isLocalOnly) {
         _didCompleteKitchenSend = true;
+        _rememberSentKitchenLines(
+          OrderMapper.ensureSessionDisplayHydrated(rawSeed),
+        );
       }
     }
     if (_deferDetailFetch) {
       _didCompleteKitchenSend = false;
+      _sentKitchenLineKeys.clear();
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
@@ -1275,8 +1284,19 @@ class TableDetailsController extends GetxController {
 
   bool get canModifyOrder => !_orderOfferedCached;
 
-  /// True after kitchen send (this session or reopened synced ticket).
-  bool get orderSentToKitchen => _didCompleteKitchenSend;
+  /// True after kitchen send (this session or a reopened remote ticket).
+  ///
+  /// Remote orders (`id > 0`) count as sent even when display lines lack
+  /// server item ids — otherwise waiters without permission still see an
+  /// enabled decrease button on API tickets.
+  bool get orderSentToKitchen {
+    if (_didCompleteKitchenSend) return true;
+    if (_deferDetailFetch || _isLocalDraft) return false;
+    final current = _rawSessionOrder ?? seedOrder;
+    if (current != null && !current.isLocalOnly) return true;
+    if ((orderId ?? 0) > 0) return true;
+    return false;
+  }
 
   /// `access-edit-table-details` (or superuser) — delete/decrease after send.
   bool get hasEditTableDetailsAccess {
@@ -1326,15 +1346,16 @@ class TableDetailsController extends GetxController {
     return const Color(0xFF27AE60);
   }
 
-  /// Before send: everyone. After send: managers / access-edit-table-details only.
+  /// Before send: everyone.
+  /// After send: synced kitchen lines need permission; new local lines do not.
   bool canDeleteOrDecreaseLine(int productIndex) {
+    if (hasEditTableDetailsAccess) return true;
     if (!orderSentToKitchen) return true;
-    return hasEditTableDetailsAccess;
+    return !_isSentKitchenLine(productIndex);
   }
 
-  bool _blockIfCannotDeleteOrDecreaseAfterSend() {
-    if (!orderSentToKitchen) return false;
-    if (hasEditTableDetailsAccess) return false;
+  bool _blockIfCannotDeleteOrDecreaseAfterSend(int productIndex) {
+    if (canDeleteOrDecreaseLine(productIndex)) return false;
     AppSnackbar.show(
       'Action non autorisée',
       'Seul un utilisateur autorisé peut supprimer ou diminuer un article '
@@ -1346,11 +1367,78 @@ class TableDetailsController extends GetxController {
     return true;
   }
 
+  void _rememberSentKitchenLines(SessionOrder ticket) {
+    final hydrated = OrderMapper.ensureSessionDisplayHydrated(ticket);
+    _sentKitchenLineKeys
+      ..clear()
+      ..addAll(_kitchenLineKeysFor(hydrated));
+    // Seed sometimes has products but empty/partial display — lock by index.
+    if (_sentKitchenLineKeys.isEmpty && hydrated.products.isNotEmpty) {
+      for (var i = 0; i < hydrated.products.length; i++) {
+        final name = hydrated.products[i].name.trim().toUpperCase();
+        _sentKitchenLineKeys.add('local:$i:$name');
+      }
+    }
+  }
+
+  Iterable<String> _kitchenLineKeysFor(SessionOrder ticket) sync* {
+    for (final entry in ticket.displayEntries) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      final key = _kitchenLineKey(entry);
+      if (key != null) yield key;
+    }
+  }
+
+  String? _kitchenLineKey(OrderDisplayEntry entry) {
+    if (entry.type != OrderDisplayEntryType.product) return null;
+    final id = entry.itemId ?? 0;
+    if (id > 0) return 'id:$id';
+    final name = entry.product?.name.trim().toUpperCase() ?? '';
+    final line = entry.lineIndex ?? -1;
+    if (name.isEmpty && line < 0) return null;
+    // Index + name: distinguishes a new local "COCA" from a prior sent "COCA".
+    return 'local:$line:$name';
+  }
+
+  bool _isSentKitchenLine(int productIndex) {
+    final current = order;
+    if (current == null) return false;
+    OrderDisplayEntry? entry;
+    for (final e in current.displayEntries) {
+      if (e.type == OrderDisplayEntryType.product &&
+          e.lineIndex == productIndex) {
+        entry = e;
+        break;
+      }
+    }
+    if (entry == null) return false;
+    final id = entry.itemId ?? 0;
+    if (id > 0) return true;
+    final key = _kitchenLineKey(entry);
+    if (key == null) return false;
+    return _sentKitchenLineKeys.contains(key);
+  }
+
   void _refreshKitchenSentFlag(SessionOrder? source) {
     final current = source ?? order;
     if (current == null) return;
-    if (_layoutHasServerItemIds(current.displayEntries)) {
+    final wasSent = _didCompleteKitchenSend;
+    if (!current.isLocalOnly ||
+        _layoutHasServerItemIds(current.displayEntries)) {
       _didCompleteKitchenSend = true;
+      // Refresh locks for synced ids; keep prior local keys so we don't unlock
+      // remote lines that still lack itemIds, and don't lock brand-new adds.
+      for (final key in _kitchenLineKeysFor(current)) {
+        if (key.startsWith('id:')) {
+          _sentKitchenLineKeys.add(key);
+        }
+      }
+      if (_sentKitchenLineKeys.isEmpty) {
+        _rememberSentKitchenLines(current);
+      }
+    }
+    if (!wasSent && _didCompleteKitchenSend) {
+      orderUiRevision.value++;
     }
   }
 
@@ -1746,6 +1834,8 @@ class TableDetailsController extends GetxController {
           _localDraftLines.clear();
           _deferDetailFetch = false;
           _didCompleteKitchenSend = true;
+          _rememberSentKitchenLines(toApply);
+          orderUiRevision.value++;
         }
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
@@ -1786,6 +1876,7 @@ class TableDetailsController extends GetxController {
           _localDraftLines.clear();
           _deferDetailFetch = false;
           _didCompleteKitchenSend = true;
+          _rememberSentKitchenLines(sent);
 
           if (stockDeltasFuture != null) {
             try {
@@ -2881,7 +2972,10 @@ class TableDetailsController extends GetxController {
     if (current == null) return;
 
     final currentQty = int.tryParse(current.products[lineIndex].quantity) ?? 1;
-    if (qty < currentQty && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
+    if (qty < currentQty &&
+        _blockIfCannotDeleteOrDecreaseAfterSend(lineIndex)) {
+      return;
+    }
 
     final productId = _productIdForLineIndex(lineIndex, current);
     if (productId != null && qty > currentQty) {
@@ -3178,7 +3272,10 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (delta < 0 && _blockIfCannotDeleteOrDecreaseAfterSend()) return;
+    if (delta < 0 &&
+        _blockIfCannotDeleteOrDecreaseAfterSend(productIndex)) {
+      return;
+    }
 
     final line = currentOrder.products[productIndex];
     if (delta < 0) {
@@ -3467,7 +3564,7 @@ class TableDetailsController extends GetxController {
 
   void cancelOrderLine(int productIndex) {
     if (_blockIfOrderOffered()) return;
-    if (_blockIfCannotDeleteOrDecreaseAfterSend()) return;
+    if (_blockIfCannotDeleteOrDecreaseAfterSend(productIndex)) return;
     unawaited(_cancelOrderLine(productIndex));
   }
 

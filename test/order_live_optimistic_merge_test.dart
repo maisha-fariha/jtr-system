@@ -1471,6 +1471,59 @@ void main() {
     );
   });
 
+  test(
+    'patchServerItemIdsOntoLive keeps menu CHOIX labels when server omits them',
+    () {
+      final live = _order(
+        display: [
+          const OrderDisplayEntry.demande(
+            sectionIndex: 1,
+            courseNumber: 1,
+            demandeTimeLabel: '18:53:00',
+          ),
+          OrderDisplayEntry.product(
+            product: const OrderProduct(
+              quantity: '1',
+              name: 'BOULE DE GLACE',
+              price: '20,00 €',
+              menuItems: ['VANILLE', 'CHOCOLAT'],
+            ),
+            lineIndex: 0,
+            sectionIndex: 1,
+            itemId: 0,
+          ),
+        ],
+      );
+      final server = _order(
+        display: [
+          OrderDisplayEntry.product(
+            product: const OrderProduct(
+              quantity: '1',
+              name: 'BOULE DE GLACE',
+              price: '20,00 €',
+              // GET after Send often returns ids-only menu_selections.
+              menuItems: [],
+            ),
+            lineIndex: 0,
+            itemId: 55,
+          ),
+        ],
+      );
+
+      final patched = OrderMapper.patchServerItemIdsOntoLive(
+        live: live,
+        server: server,
+      );
+
+      expect(OrderMapper.demandeSeparatorCount(patched.displayEntries), 1);
+      final menu = patched.displayEntries
+          .where((e) => e.type == OrderDisplayEntryType.product)
+          .single;
+      expect(menu.itemId, 55);
+      expect(menu.product?.menuItems, ['VANILLE', 'CHOCOLAT']);
+    },
+  );
+
   test('stabilizeLiveLayoutWithServer keeps live order', () {
     final live = [
       _product(0, 'A', itemId: 1),

@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../core/network/api_exception.dart';
+import '../data/models/device_activation_models.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/device_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../controllers/session_controller.dart';
 import '../models/user_suggestion.dart';
@@ -113,10 +115,42 @@ class LoginController extends GetxController {
 
     isLoading.value = true;
     try {
-      await _authRepository.login(
+      // Block on login screen — never enter Connect/Session when deactivated.
+      final deviceBlock = await _deviceDeactivationMessage();
+      if (deviceBlock != null) {
+        _showLoginError(deviceBlock.title, deviceBlock.message);
+        return;
+      }
+
+      final userBlock = _inactiveUserMessage(user.id);
+      if (userBlock != null) {
+        _showLoginError('Compte désactivé', userBlock);
+        return;
+      }
+
+      final session = await _authRepository.login(
         userOrId: user.id,
         passcode: passcode,
       );
+
+      // API may still return a token for a deactivated user — reject here.
+      if (session.user.isActive == false) {
+        await _authRepository.logout();
+        _showLoginError(
+          'Compte désactivé',
+          'Cet utilisateur a été désactivé. Connexion impossible.',
+        );
+        return;
+      }
+
+      // Re-check device after login (headers/token now fully set).
+      final deviceBlockAfter = await _deviceDeactivationMessage();
+      if (deviceBlockAfter != null) {
+        await _authRepository.logout();
+        _showLoginError(deviceBlockAfter.title, deviceBlockAfter.message);
+        return;
+      }
+
       if (Get.isRegistered<SessionRepository>()) {
         await Get.find<SessionRepository>().clearOpenOrdersCache();
       }
@@ -132,15 +166,114 @@ class LoginController extends GetxController {
       // screen to preload session data before the session page mounts.
       Get.offNamed(AppRoutes.connect);
     } on ApiException catch (error) {
-      AppSnackbar.show(
-        'Connexion échouée',
-        error.message,
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-      );
+      final deactivated = _deactivationMessageFromApi(error.message);
+      if (deactivated != null) {
+        // Ensure no partial session stays after a rejected login.
+        try {
+          await _authRepository.logout();
+        } catch (_) {}
+        _showLoginError(deactivated.title, deactivated.message);
+        return;
+      }
+      _showLoginError('Connexion échouée', error.message);
     } finally {
       isLoading.value = false;
     }
+  }
+
+  void _showLoginError(String title, String message) {
+    AppSnackbar.show(
+      title,
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      margin: const EdgeInsets.all(16),
+    );
+  }
+
+  /// Device/poste deactivated or license blocked — stay on login.
+  Future<({String title, String message})?> _deviceDeactivationMessage() async {
+    if (!Get.isRegistered<DeviceRepository>()) return null;
+    try {
+      final outcome =
+          await Get.find<DeviceRepository>().resolveStartupGate();
+      switch (outcome) {
+        case DeviceGateOutcome.deactivated:
+          return (
+            title: 'Poste désactivé',
+            message:
+                'Ce poste a été désactivé depuis le dashboard. Connexion impossible.',
+          );
+        case DeviceGateOutcome.licenseBlocked:
+          return (
+            title: 'Licence invalide',
+            message:
+                'La licence de cet établissement est expirée ou invalide. Connexion impossible.',
+          );
+        case DeviceGateOutcome.needsActivation:
+          return (
+            title: 'Poste non activé',
+            message:
+                'Ce poste n\'est plus activé. Veuillez réactiver le dispositif.',
+          );
+        case DeviceGateOutcome.active:
+          return null;
+      }
+    } catch (_) {
+      // Network blip: do not block login solely on gate failure.
+      return null;
+    }
+  }
+
+  /// User marked inactive in the login-users list.
+  String? _inactiveUserMessage(String userId) {
+    final id = int.tryParse(userId);
+    for (final u in _authRepository.cachedUsers) {
+      final matches = (id != null && u.id == id) ||
+          u.id.toString() == userId ||
+          (u.username != null &&
+              u.username!.toLowerCase() == userId.toLowerCase());
+      if (!matches) continue;
+      if (u.isActive == false) {
+        return 'Cet utilisateur a été désactivé. Connexion impossible.';
+      }
+      return null;
+    }
+    return null;
+  }
+
+  ({String title, String message})? _deactivationMessageFromApi(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('deactivated') ||
+        lower.contains('désactivé') ||
+        lower.contains('desactive') ||
+        lower.contains('disabled')) {
+      if (lower.contains('device') ||
+          lower.contains('poste') ||
+          lower.contains('terminal')) {
+        return (
+          title: 'Poste désactivé',
+          message:
+              'Ce poste a été désactivé depuis le dashboard. Connexion impossible.',
+        );
+      }
+      return (
+        title: 'Compte désactivé',
+        message: raw.trim().isNotEmpty
+            ? raw.trim()
+            : 'Cet utilisateur a été désactivé. Connexion impossible.',
+      );
+    }
+    if (lower.contains('license') ||
+        lower.contains('licence') ||
+        lower.contains('expired')) {
+      return (
+        title: 'Licence invalide',
+        message: raw.trim().isNotEmpty
+            ? raw.trim()
+            : 'La licence de cet établissement est invalide. Connexion impossible.',
+      );
+    }
+    return null;
   }
 
   UserSuggestion? _resolveUserFromText() {

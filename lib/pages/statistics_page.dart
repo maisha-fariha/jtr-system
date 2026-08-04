@@ -129,40 +129,9 @@ class StatisticsPage extends GetView<SessionController> {
                   ],
                 ),
                 JtrResponsive.getResponsiveSpacing(context, 28),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: () => controller.openPaidOrders(),
-                    icon: Icon(
-                      Icons.payments_outlined,
-                      size: JtrResponsive.getResponsiveSize(context, 20),
-                      color: AppTheme.primary,
-                    ),
-                    label: Text(
-                      'COMMANDES PAYÉES',
-                      style: TextStyle(
-                        fontSize:
-                            JtrResponsive.getResponsiveFontSize(context, 13),
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6,
-                        color: AppTheme.primary,
-                      ),
-                    ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.primary,
-                      side: const BorderSide(color: AppTheme.primary),
-                      padding: JtrResponsive.getResponsivePadding(
-                        context,
-                        horizontal: 16,
-                        vertical: 14,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          JtrResponsive.getResponsiveRadius(context, 12),
-                        ),
-                      ),
-                    ),
-                  ),
+                _PaidOrdersButton(
+                  isLoading: controller.isLoadingPaidOrders.value,
+                  onPressed: controller.openPaidOrders,
                 ),
                 JtrResponsive.getResponsiveSpacing(context, 28),
                 const _SectionTitle(text: 'DÉTAIL PAR TABLE'),
@@ -195,6 +164,101 @@ class StatisticsPage extends GetView<SessionController> {
               .replaceAll(',', '.'),
         ) ??
         0;
+  }
+}
+
+// ─── Paid orders CTA ───────────────────────────────────────────────────────────
+
+class _PaidOrdersButton extends StatelessWidget {
+  const _PaidOrdersButton({
+    required this.isLoading,
+    required this.onPressed,
+  });
+
+  final bool isLoading;
+  final Future<void> Function() onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = JtrResponsive.getResponsiveRadius(context, 14);
+    final height = JtrResponsive.getResponsiveHeight(context, 52);
+    final iconSize = JtrResponsive.getResponsiveSize(context, 22);
+    final loaderSize = JtrResponsive.getResponsiveSize(context, 22);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: isLoading ? null : () => onPressed(),
+        borderRadius: BorderRadius.circular(radius),
+        child: Ink(
+          width: double.infinity,
+          height: height,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: [
+                AppTheme.primary,
+                Color.lerp(AppTheme.primary, const Color(0xFFE74C3C), 0.28) ??
+                    AppTheme.primary,
+              ],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.primary.withValues(alpha: 0.35),
+                blurRadius: JtrResponsive.getResponsiveSize(context, 12),
+                offset: Offset(
+                  0,
+                  JtrResponsive.getResponsiveHeight(context, 4),
+                ),
+              ),
+            ],
+          ),
+          child: Center(
+            child: isLoading
+                ? SizedBox(
+                    width: loaderSize,
+                    height: loaderSize,
+                    child: const CircularProgressIndicator(
+                      strokeWidth: 2.4,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.payments_rounded,
+                        color: Colors.white,
+                        size: iconSize,
+                      ),
+                      JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
+                      Text(
+                        'COMMANDES PAYÉES',
+                        style: TextStyle(
+                          fontSize: JtrResponsive.getResponsiveFontSize(
+                            context,
+                            14,
+                          ),
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.8,
+                          color: Colors.white,
+                        ),
+                      ),
+                      JtrResponsive.getResponsiveHorizontalSpacing(context, 6),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: Colors.white.withValues(alpha: 0.9),
+                        size: iconSize,
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

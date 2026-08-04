@@ -351,7 +351,9 @@ class SessionController extends GetxController {
   }
 
   Future<void> openPaidOrders() async {
+    if (isLoadingPaidOrders.value) return;
     await loadPaidOrders(forceRefresh: true);
+    if (Get.currentRoute == AppRoutes.paidOrders) return;
     await Get.toNamed(AppRoutes.paidOrders);
   }
 

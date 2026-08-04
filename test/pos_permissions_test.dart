@@ -54,5 +54,56 @@ void main() {
         const AuthUserModel(id: 6, name: 'Cashier', permissions: []),
       ), isFalse);
     });
+
+    test('manager / cashier can view all open orders via real API keys', () {
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(
+            id: 1,
+            name: 'C',
+            permissions: [PosPermissions.accessPaymentButton],
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(
+            id: 2,
+            name: 'M',
+            permissions: [PosPermissions.accessEditTableDetails],
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(
+            id: 3,
+            name: 'M',
+            permissions: [PosPermissions.accessCloseDay],
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(id: 4, name: 'M', role: 'Manager'),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(id: 5, name: 'W', role: 'Serveur'),
+        ),
+        isFalse,
+      );
+      expect(
+        PosPermissions.canViewAllOpenOrders(
+          const AuthUserModel(id: 6, name: 'W', permissions: []),
+        ),
+        isFalse,
+      );
+    });
   });
 }

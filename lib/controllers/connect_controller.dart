@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:get/get.dart';
 
+import '../core/auth/pos_permissions.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
@@ -56,7 +57,11 @@ class ConnectController extends GetxController {
       return;
     }
 
-    final waiterId = _authRepository.cachedSession?.user.id ?? 0;
+    final user = _authRepository.cachedSession?.user;
+    // Managers / cashiers see every waiter's open orders; waiters stay filtered.
+    final int? waiterId = PosPermissions.canViewAllOpenOrders(user)
+        ? null
+        : (user?.id);
 
     _setProgress(0);
     _beginPhase(floor: 0, ceiling: 0.08);

@@ -16,6 +16,7 @@ import '../data/order_optimistic_sync.dart';
 import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
 import '../core/network/api_exception.dart';
+import '../core/auth/pos_permissions.dart';
 import '../controllers/login_controller.dart';
 import '../controllers/table_details_controller.dart';
 import '../utils/api_log.dart';
@@ -185,7 +186,7 @@ class SessionController extends GetxController {
   void _hydrateOrdersFromCache() {
     try {
       final cached = _sessionRepository.getCachedSessionOrders(
-        waiterId: _currentWaiterId,
+        waiterId: _ordersListWaiterFilter,
       );
       if (cached.isNotEmpty) {
         orders.assignAll(cached);
@@ -333,17 +334,17 @@ class SessionController extends GetxController {
     try {
       final rows = await _sessionRepository.getPaidOrders(
         forceRefresh: forceRefresh,
-        waiterId: _currentWaiterId,
+        waiterId: _ordersListWaiterFilter,
       );
       paidOrders.assignAll(rows);
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
       paidOrders.assignAll(
-        _sessionRepository.getCachedPaidOrders(waiterId: _currentWaiterId),
+        _sessionRepository.getCachedPaidOrders(waiterId: _ordersListWaiterFilter),
       );
     } catch (_) {
       paidOrders.assignAll(
-        _sessionRepository.getCachedPaidOrders(waiterId: _currentWaiterId),
+        _sessionRepository.getCachedPaidOrders(waiterId: _ordersListWaiterFilter),
       );
     } finally {
       isLoadingPaidOrders.value = false;
@@ -376,7 +377,7 @@ class SessionController extends GetxController {
       // the full network fetch returns (no spinner if rows already visible).
       if (!forceRefresh) {
         final cached = _sessionRepository.getCachedSessionOrders(
-          waiterId: _currentWaiterId,
+          waiterId: _ordersListWaiterFilter,
         );
         if (cached.isNotEmpty) {
           _applySessionOrderSummaries(
@@ -400,11 +401,11 @@ class SessionController extends GetxController {
       // fully loaded, instead of appearing row-by-row.
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
-              waiterId: _currentWaiterId,
+              waiterId: _ordersListWaiterFilter,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
-              waiterId: _currentWaiterId,
+              waiterId: _ordersListWaiterFilter,
             );
 
       _applySessionOrderSummaries(
@@ -438,7 +439,7 @@ class SessionController extends GetxController {
     try {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
-        waiterId: _currentWaiterId,
+        waiterId: _ordersListWaiterFilter,
       );
       // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
@@ -462,7 +463,7 @@ class SessionController extends GetxController {
     try {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
-        waiterId: _currentWaiterId,
+        waiterId: _ordersListWaiterFilter,
       );
       _applySessionOrderSummaries(
         summaries,
@@ -1562,6 +1563,16 @@ class SessionController extends GetxController {
     final session = _authRepository.cachedSession;
     if (session != null) return session.user.id;
     return 0;
+  }
+
+  /// Waiter filter for the open/paid order lists.
+  ///
+  /// `null` = manager/cashier/admin see every waiter's orders.
+  int? get _ordersListWaiterFilter {
+    final user = _authRepository.cachedSession?.user;
+    if (PosPermissions.canViewAllOpenOrders(user)) return null;
+    final id = _currentWaiterId;
+    return id > 0 ? id : null;
   }
 
   SessionOrder? _orderByNumber(String orderNumber) {

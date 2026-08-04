@@ -18,6 +18,7 @@ import '../pages/menu_page.dart';
 import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
+import '../pages/paid_orders_page.dart';
 import '../controllers/table_details_controller.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
@@ -40,6 +41,7 @@ class AppRoutes {
   static const menuSelection = '/menu-selection';
   static const tableDetails = '/table-details';
   static const statistics = '/statistics';
+  static const paidOrders = '/paid-orders';
 }
 
 class AppPages {
@@ -165,6 +167,10 @@ class AppPages {
     GetPage(
       name: AppRoutes.statistics,
       page: () => const StatisticsPage(),
+    ),
+    GetPage(
+      name: AppRoutes.paidOrders,
+      page: () => const PaidOrdersPage(),
     ),
   ];
 }

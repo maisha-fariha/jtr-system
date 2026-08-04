@@ -187,10 +187,80 @@ class OrderMapper {
     return productsLength;
   }
 
-  /// Keeps only open orders for the active business day list.
+  /// Keeps only unpaid open orders for the active business day list.
   static bool isActiveDayOpenOrder(Map<String, dynamic> order) {
+    if (isOrderFullyPaid(order)) return false;
     final status = order['status']?.toString().toLowerCase();
     return status != 'closed' && status != 'cancelled';
+  }
+
+  /// Paid / closed tickets for the statistics "Commandes payées" list.
+  static bool isActiveDayPaidOrder(Map<String, dynamic> order) {
+    if (isOrderFullyPaid(order)) return true;
+    final status = order['status']?.toString().toLowerCase();
+    return status == 'closed';
+  }
+
+  static List<SessionOrder> sessionOrdersFromPaidOrdersList(
+    List<Map<String, dynamic>> orders, {
+    int? waiterId,
+  }) {
+    final sortMillisById = <int, int>{};
+    final rows = <SessionOrder>[];
+    final seenOrderIds = <int>{};
+
+    for (final order in orders) {
+      if (!isActiveDayPaidOrder(order)) continue;
+      if (waiterId != null &&
+          waiterId > 0 &&
+          !orderBelongsToWaiter(order, waiterId)) {
+        continue;
+      }
+
+      final orderId = orderIdFromDetail(order);
+      if (orderId <= 0 || seenOrderIds.contains(orderId)) continue;
+      seenOrderIds.add(orderId);
+
+      rows.add(sessionOrderSummaryFromListMap(order));
+      sortMillisById[orderId] = paidOrderSortMillis(order);
+    }
+
+    // Latest paid first.
+    rows.sort(
+      (a, b) =>
+          (sortMillisById[b.id] ?? 0).compareTo(sortMillisById[a.id] ?? 0),
+    );
+    return rows;
+  }
+
+  /// Prefer local/API paid timestamps so the newest payment stays on top.
+  static int paidOrderSortMillis(Map<String, dynamic> order) {
+    for (final key in [
+      'paid_at_local',
+      'paid_at',
+      'payment_at',
+      'closed_at',
+      'updated_at',
+      'created_at',
+    ]) {
+      final raw = order[key];
+      if (raw is String) {
+        final ms = DateTime.tryParse(raw)?.millisecondsSinceEpoch;
+        if (ms != null && ms > 0) return ms;
+      }
+      if (raw is num && raw > 0) return raw.toInt();
+    }
+    return _orderSortMillis(order);
+  }
+
+  /// Stamp used when a payment just completed on this device.
+  static Map<String, dynamic> withLocalPaidAt(
+    Map<String, dynamic> order, {
+    DateTime? at,
+  }) {
+    final copy = Map<String, dynamic>.from(order);
+    copy['paid_at_local'] = (at ?? DateTime.now()).toUtc().toIso8601String();
+    return copy;
   }
 
   /// True when the order has no non-cancelled line items.

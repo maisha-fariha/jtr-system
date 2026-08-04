@@ -9,6 +9,7 @@ import '../../utils/api_log.dart';
 import '../models/active_day_info.dart';
 import '../models/api_envelope.dart';
 import '../models/day_statistics_info.dart';
+import '../mappers/order_mapper.dart';
 
 class SessionRemoteDataSource {
   SessionRemoteDataSource(this._client);
@@ -145,6 +146,7 @@ class SessionRemoteDataSource {
   Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
     required int page,
     int? waiterId,
+    String? status,
   }) async {
     final queryParameters = <String, dynamic>{
       'active_day': true,
@@ -153,6 +155,9 @@ class SessionRemoteDataSource {
     };
     if (waiterId != null && waiterId > 0) {
       queryParameters['waiter_id'] = waiterId;
+    }
+    if (status != null && status.isNotEmpty) {
+      queryParameters['status'] = status;
     }
 
     final response = await _client.get<Map<String, dynamic>>(
@@ -175,6 +180,51 @@ class SessionRemoteDataSource {
       orders: _extractOrdersFromPayload(envelope.data),
       lastPage: _readLastPage(envelope.data),
     );
+  }
+
+  /// Closed / paid orders for the active day (statistics list).
+  Future<List<Map<String, dynamic>>> fetchPaidOrdersList({
+    int? waiterId,
+  }) async {
+    try {
+      final first = await _fetchOrdersPage(
+        page: 1,
+        waiterId: waiterId,
+        status: 'closed',
+      );
+      var orders = List<Map<String, dynamic>>.from(first.orders);
+      if (first.lastPage > 1) {
+        const batchSize = 4;
+        for (var page = 2; page <= first.lastPage && page <= 50; page += batchSize) {
+          final batch = <int>[
+            for (var p = page; p < page + batchSize && p <= first.lastPage; p++)
+              p,
+          ];
+          final pages = await Future.wait(
+            batch.map(
+              (p) => _fetchOrdersPage(
+                page: p,
+                waiterId: waiterId,
+                status: 'closed',
+              ),
+            ),
+          );
+          for (final pageResult in pages) {
+            orders.addAll(pageResult.orders);
+          }
+        }
+      }
+      final paid = orders
+          .where(OrderMapper.isActiveDayPaidOrder)
+          .toList(growable: false);
+      if (paid.isNotEmpty) return paid;
+    } catch (_) {
+      // Fall through — some backends ignore status=closed.
+    }
+
+    // Fallback: active-day list, keep only paid/closed client-side.
+    final all = await fetchOrdersList(waiterId: waiterId);
+    return all.where(OrderMapper.isActiveDayPaidOrder).toList(growable: false);
   }
 
   /// Fallback when [fetchOrdersList] returns nothing ([GET /api/days/open-orders]).
@@ -554,5 +604,59 @@ class SessionLocalDataSource {
 
   Future<void> clearOpenOrdersList() async {
     await _storage.delete(StorageConstants.openOrdersKey);
+  }
+
+  Future<void> savePaidOrdersList(List<Map<String, dynamic>> orders) async {
+    await _storage.writeString(
+      StorageConstants.paidOrdersKey,
+      jsonEncode(orders),
+    );
+  }
+
+  Future<void> upsertPaidOrderInList(Map<String, dynamic> order) async {
+    final orderId = (order['id'] as num?)?.toInt() ?? 0;
+    if (orderId <= 0) return;
+
+    final current = readPaidOrdersList();
+    Map<String, dynamic>? previous;
+    for (final entry in current) {
+      if ((entry['id'] as num?)?.toInt() == orderId) {
+        previous = entry;
+        break;
+      }
+    }
+
+    var stamped = order;
+    if (order['paid_at_local'] == null &&
+        previous != null &&
+        previous['paid_at_local'] != null) {
+      stamped = Map<String, dynamic>.from(order)
+        ..['paid_at_local'] = previous['paid_at_local'];
+    } else if (order['paid_at_local'] == null) {
+      stamped = OrderMapper.withLocalPaidAt(order);
+    }
+
+    final updated = [
+      stamped,
+      ...current.where((entry) => (entry['id'] as num?)?.toInt() != orderId),
+    ]..sort(
+        (a, b) => OrderMapper.paidOrderSortMillis(b)
+            .compareTo(OrderMapper.paidOrderSortMillis(a)),
+      );
+    await savePaidOrdersList(updated);
+  }
+
+  List<Map<String, dynamic>> readPaidOrdersList() {
+    final raw = _storage.readString(StorageConstants.paidOrdersKey);
+    if (raw == null || raw.isEmpty) return const [];
+
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const [];
+
+    return decoded.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Future<void> clearPaidOrdersList() async {
+    await _storage.delete(StorageConstants.paidOrdersKey);
   }
 }

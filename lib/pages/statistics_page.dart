@@ -129,6 +129,42 @@ class StatisticsPage extends GetView<SessionController> {
                   ],
                 ),
                 JtrResponsive.getResponsiveSpacing(context, 28),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => controller.openPaidOrders(),
+                    icon: Icon(
+                      Icons.payments_outlined,
+                      size: JtrResponsive.getResponsiveSize(context, 20),
+                      color: AppTheme.primary,
+                    ),
+                    label: Text(
+                      'COMMANDES PAYÉES',
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 13),
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: AppTheme.primary,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.primary,
+                      side: const BorderSide(color: AppTheme.primary),
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          JtrResponsive.getResponsiveRadius(context, 12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                JtrResponsive.getResponsiveSpacing(context, 28),
                 const _SectionTitle(text: 'DÉTAIL PAR TABLE'),
                 JtrResponsive.getResponsiveSpacing(context, 12),
                 if (orders.isEmpty)

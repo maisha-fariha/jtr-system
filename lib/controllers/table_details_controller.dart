@@ -2013,14 +2013,21 @@ class TableDetailsController extends GetxController {
       onConfirm: () async {
         payingIsCash.value = isCash;
         try {
-          final updated = await _orderRepository.payOrder(
+          final result = await _orderRepository.payOrder(
             orderId: id,
             isCash: isCash,
             amount: amount,
             previousDisplayEntries: currentOrder.displayEntries,
             localSnapshot: currentOrder,
           );
-          _syncOrderInSession(updated, orderNumber);
+          final updated = result.order;
+          if (result.fullyPaid) {
+            if (Get.isRegistered<SessionController>()) {
+              Get.find<SessionController>().removePaidOrderFromOpenList(updated);
+            }
+          } else {
+            _syncOrderInSession(updated, orderNumber);
+          }
           showPaymentOptions.value = false;
           isBottomPanelExpanded.value = true;
           activeToolbarIcon.value = Icons.grid_view;
@@ -2035,7 +2042,9 @@ class TableDetailsController extends GetxController {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             AppSnackbar.show(
               'Paiement enregistré',
-              'Le paiement en $label a été enregistré.',
+              result.fullyPaid
+                  ? 'Table payée — retirée de la liste des tables ouvertes.'
+                  : 'Le paiement en $label a été enregistré.',
               snackPosition: SnackPosition.BOTTOM,
               duration: const Duration(seconds: 2),
               margin: const EdgeInsets.all(16),

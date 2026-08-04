@@ -282,6 +282,81 @@ class SessionRepository {
     _openOrdersMemory = null;
     _preloadedSessionOrders = null;
     await _local.clearOpenOrdersList();
+    await _local.clearPaidOrdersList();
+  }
+
+  /// Persist a fully paid ticket for the statistics paid-orders list.
+  Future<void> rememberPaidOrder(Map<String, dynamic> orderDetail) async {
+    await _local.upsertPaidOrderInList(
+      OrderMapper.withLocalPaidAt(orderDetail),
+    );
+  }
+
+  List<SessionOrder> getCachedPaidOrders({int? waiterId}) {
+    final cached = _local.readPaidOrdersList();
+    if (cached.isEmpty) return const [];
+    return OrderMapper.sessionOrdersFromPaidOrdersList(
+      cached,
+      waiterId: waiterId,
+    );
+  }
+
+  Future<List<SessionOrder>> getPaidOrders({
+    bool forceRefresh = false,
+    int? waiterId,
+  }) async {
+    if (!forceRefresh) {
+      final cached = getCachedPaidOrders(waiterId: waiterId);
+      if (cached.isNotEmpty) return cached;
+    }
+
+    if (!await _connectivity.isOnline) {
+      return getCachedPaidOrders(waiterId: waiterId);
+    }
+
+    try {
+      final maps = await _remote.fetchPaidOrdersList(waiterId: waiterId);
+      // Merge with local (just-paid may not be on API yet). Keep the newer
+      // paid_at stamp so the latest payment stays on top.
+      final local = _local.readPaidOrdersList();
+      final byId = <int, Map<String, dynamic>>{};
+      for (final row in maps) {
+        final id = OrderMapper.orderIdFromDetail(row);
+        if (id <= 0) continue;
+        byId[id] = row;
+      }
+      for (final row in local) {
+        final id = OrderMapper.orderIdFromDetail(row);
+        if (id <= 0) continue;
+        final existing = byId[id];
+        if (existing == null) {
+          byId[id] = row;
+          continue;
+        }
+        final localMs = OrderMapper.paidOrderSortMillis(row);
+        final remoteMs = OrderMapper.paidOrderSortMillis(existing);
+        if (localMs >= remoteMs) {
+          // Prefer local stamp / payload when fresher (just paid on device).
+          final merged = Map<String, dynamic>.from(existing);
+          if (row['paid_at_local'] != null) {
+            merged['paid_at_local'] = row['paid_at_local'];
+          }
+          byId[id] = merged;
+        }
+      }
+      final merged = byId.values.toList()
+        ..sort(
+          (a, b) => OrderMapper.paidOrderSortMillis(b)
+              .compareTo(OrderMapper.paidOrderSortMillis(a)),
+        );
+      await _local.savePaidOrdersList(merged);
+      return OrderMapper.sessionOrdersFromPaidOrdersList(
+        merged,
+        waiterId: waiterId,
+      );
+    } catch (_) {
+      return getCachedPaidOrders(waiterId: waiterId);
+    }
   }
 
   /// Open orders for the session screen — primary [GET /api/orders], not tables.

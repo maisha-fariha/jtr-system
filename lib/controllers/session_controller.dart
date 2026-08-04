@@ -92,6 +92,8 @@ class SessionController extends GetxController {
   final activeDay = ActiveDayInfo.fallback().obs;
   final dayStatistics = Rxn<DayStatisticsInfo>();
   final isLoadingStatistics = false.obs;
+  final paidOrders = <SessionOrder>[].obs;
+  final isLoadingPaidOrders = false.obs;
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
 
@@ -301,6 +303,56 @@ class SessionController extends GetxController {
     selectAction(SessionAction.statistics);
     await loadDayStatistics();
     await Get.toNamed(AppRoutes.statistics);
+  }
+
+  /// Remove a fully paid table from the open session list.
+  void removePaidOrderFromOpenList(SessionOrder order) {
+    _suppressedTableNumbers.add(order.number);
+    orders.removeWhere(
+      (o) =>
+          (order.id > 0 && o.id == order.id) ||
+          _tableKeysMatch(o.number, order.number),
+    );
+    orders.refresh();
+    _clearUiStateForOrder(order.number);
+    unawaited(() async {
+      try {
+        await _sessionRepository.getTablesList(forceRefresh: true);
+      } catch (_) {}
+      // Allow a new order on the same table number after pay.
+      Future<void>.delayed(const Duration(seconds: 2), () {
+        _suppressedTableNumbers.removeWhere(
+          (s) => _tableKeysMatch(s, order.number),
+        );
+      });
+    }());
+  }
+
+  Future<void> loadPaidOrders({bool forceRefresh = false}) async {
+    isLoadingPaidOrders.value = true;
+    try {
+      final rows = await _sessionRepository.getPaidOrders(
+        forceRefresh: forceRefresh,
+        waiterId: _currentWaiterId,
+      );
+      paidOrders.assignAll(rows);
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+      paidOrders.assignAll(
+        _sessionRepository.getCachedPaidOrders(waiterId: _currentWaiterId),
+      );
+    } catch (_) {
+      paidOrders.assignAll(
+        _sessionRepository.getCachedPaidOrders(waiterId: _currentWaiterId),
+      );
+    } finally {
+      isLoadingPaidOrders.value = false;
+    }
+  }
+
+  Future<void> openPaidOrders() async {
+    await loadPaidOrders(forceRefresh: true);
+    await Get.toNamed(AppRoutes.paidOrders);
   }
 
   Future<void> loadSessionOrders({

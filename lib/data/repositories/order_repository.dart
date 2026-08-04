@@ -5045,7 +5045,7 @@ class OrderRepository {
     return amount > 0 ? amount : null;
   }
 
-  Future<SessionOrder> payOrder({
+  Future<({SessionOrder order, bool fullyPaid})> payOrder({
     required int orderId,
     required bool isCash,
     required double amount,
@@ -5144,16 +5144,34 @@ class OrderRepository {
       );
       updated['total_paid'] = nextPaid.toStringAsFixed(2);
       updated['remaining_amount'] = nextRemaining.toStringAsFixed(2);
-      if (nextRemaining <= 0.001) {
+      final fullyPaid = nextRemaining <= 0.001;
+      if (fullyPaid) {
         updated['payment_status'] = 'paid';
         updated['payment_status_detailed'] = 'fully_paid';
         updated['remaining_amount'] = '0.00';
-        updated['status'] = updated['status'] ?? 'closed';
+        updated['status'] = 'closed';
       } else {
         updated['payment_status'] = 'partially_paid';
         updated['payment_status_detailed'] = 'partially_paid';
       }
       await _local.saveOrderDetail(orderId, updated);
+
+      if (fullyPaid) {
+        await _sessionLocal.removeOpenOrderFromList(orderId);
+        await _sessionLocal.upsertPaidOrderInList(
+          OrderMapper.withLocalPaidAt(updated),
+        );
+        // Free the table lock — best-effort (pay may already unlock server-side).
+        try {
+          final tableId = await _resolveTableIdForClose(
+            orderId: orderId,
+            tableNumber: localSnapshot?.number,
+          );
+          if (tableId != null && tableId > 0) {
+            await _remote.endTableSession(tableId);
+          }
+        } catch (_) {}
+      }
 
       lastPaymentLog = apiLog.toString();
       debugPrint(lastPaymentLog!);
@@ -5167,23 +5185,28 @@ class OrderRepository {
                 '${updated['total_price'] ?? '0'}',
               ));
 
+      final SessionOrder mapped;
       if (localSnapshot != null) {
-        return localSnapshot.copyWith(total: ticketTotalLabel);
+        mapped = localSnapshot.copyWith(total: ticketTotalLabel);
+      } else {
+        final suivreHints = _resolveSuivreHints(
+          orderId,
+          layoutHints: previousDisplayEntries,
+        );
+
+        mapped = OrderMapper.fromOrderDetail(
+          updated,
+          previousDisplayEntries: previousDisplayEntries,
+          suivreSplitHints: suivreHints.splits,
+          suivreCountHint: suivreHints.count,
+          demandedSectionIndices: suivreHints.demandedSections,
+        ).copyWith(total: ticketTotalLabel);
       }
 
-      final suivreHints = _resolveSuivreHints(
-        orderId,
-        layoutHints: previousDisplayEntries,
+      return (
+        order: mapped.copyWith(id: orderId),
+        fullyPaid: fullyPaid,
       );
-
-      final mapped = OrderMapper.fromOrderDetail(
-        updated,
-        previousDisplayEntries: previousDisplayEntries,
-        suivreSplitHints: suivreHints.splits,
-        suivreCountHint: suivreHints.count,
-        demandedSectionIndices: suivreHints.demandedSections,
-      );
-      return mapped.copyWith(total: ticketTotalLabel);
     } on ApiException catch (e) {
       apiLog.writeln('ERREUR: ${e.message}');
       if (_remote.lastApiLog != null) {

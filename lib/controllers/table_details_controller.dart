@@ -706,9 +706,8 @@ class TableDetailsController extends GetxController {
 
     try {
       final loadedTree = await _catalogRepository.getCategoryTree();
-      final loadedProducts = await _catalogRepository.getProducts(
-        forceRefresh: true,
-      );
+      // Cache-first — full products/list refresh runs in background.
+      final loadedProducts = await _catalogRepository.getProducts();
       categoryRoots.assignAll(loadedTree);
       products.assignAll(loadedProducts);
       categoryPath.clear();

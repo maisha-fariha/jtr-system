@@ -81,9 +81,8 @@ class MenuSelectionController extends GetxController {
     menusError.value = null;
 
     try {
-      // POS menus come from products/list nested menu_categories (not
-      // /api/menu-categories). Force refresh so min/max are up to date.
-      final products = await _catalogRepository.getProducts(forceRefresh: true);
+      // Cache-first: products/list is heavy; refresh in background after show.
+      final products = await _catalogRepository.getProducts();
       final composed = products.where((product) => product.isComposed).toList()
         ..sort((a, b) => a.name.compareTo(b.name));
 

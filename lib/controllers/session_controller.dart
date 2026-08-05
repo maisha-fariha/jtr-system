@@ -303,6 +303,8 @@ class SessionController extends GetxController {
   Future<void> openStatistics() async {
     selectAction(SessionAction.statistics);
     await loadDayStatistics();
+    // Warm paid-orders cache while the user views KPIs (non-blocking).
+    _prefetchPaidOrdersInBackground();
     await Get.toNamed(AppRoutes.statistics);
   }
 
@@ -329,7 +331,28 @@ class SessionController extends GetxController {
     }());
   }
 
+  /// Instant local snapshot for the paid-orders list (no network).
+  void _applyCachedPaidOrders() {
+    paidOrders.assignAll(
+      _sessionRepository.getCachedPaidOrders(waiterId: _ordersListWaiterFilter),
+    );
+  }
+
+  /// Prefetch while on Statistics so "Commandes payées" opens instantly.
+  void _prefetchPaidOrdersInBackground() {
+    if (isLoadingPaidOrders.value) return;
+    final cached = _sessionRepository.getCachedPaidOrders(
+      waiterId: _ordersListWaiterFilter,
+    );
+    if (cached.isNotEmpty) {
+      paidOrders.assignAll(cached);
+      return;
+    }
+    unawaited(loadPaidOrders(forceRefresh: false));
+  }
+
   Future<void> loadPaidOrders({bool forceRefresh = false}) async {
+    if (isLoadingPaidOrders.value) return;
     isLoadingPaidOrders.value = true;
     try {
       final rows = await _sessionRepository.getPaidOrders(
@@ -339,23 +362,25 @@ class SessionController extends GetxController {
       paidOrders.assignAll(rows);
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
-      paidOrders.assignAll(
-        _sessionRepository.getCachedPaidOrders(waiterId: _ordersListWaiterFilter),
-      );
+      _applyCachedPaidOrders();
     } catch (_) {
-      paidOrders.assignAll(
-        _sessionRepository.getCachedPaidOrders(waiterId: _ordersListWaiterFilter),
-      );
+      _applyCachedPaidOrders();
     } finally {
       isLoadingPaidOrders.value = false;
     }
   }
 
+  /// Opens paid orders immediately from cache; refreshes on the list page.
   Future<void> openPaidOrders() async {
-    if (isLoadingPaidOrders.value) return;
-    await loadPaidOrders(forceRefresh: true);
     if (Get.currentRoute == AppRoutes.paidOrders) return;
-    await Get.toNamed(AppRoutes.paidOrders);
+
+    // Show disk cache right away — do not block navigation on the API.
+    _applyCachedPaidOrders();
+
+    final navigation = Get.toNamed(AppRoutes.paidOrders);
+    // Network refresh while the user already sees the page (or a spinner).
+    unawaited(loadPaidOrders(forceRefresh: true));
+    await navigation;
   }
 
   Future<void> loadSessionOrders({

@@ -217,7 +217,14 @@ class SessionRemoteDataSource {
       final paid = orders
           .where(OrderMapper.isActiveDayPaidOrder)
           .toList(growable: false);
-      if (paid.isNotEmpty) return paid;
+
+      // Backend honored status=closed (empty day, or only closed rows).
+      // Skip the expensive "fetch all orders" fallback.
+      final closedFilterHonored = orders.isEmpty ||
+          orders.every(OrderMapper.isActiveDayPaidOrder);
+      if (paid.isNotEmpty || closedFilterHonored) {
+        return paid;
+      }
     } catch (_) {
       // Fall through — some backends ignore status=closed.
     }

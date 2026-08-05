@@ -39,41 +39,53 @@ class PaidOrdersPage extends GetView<SessionController> {
         ),
       ),
       body: Obx(() {
-        if (controller.isLoadingPaidOrders.value &&
-            controller.paidOrders.isEmpty) {
+        final loading = controller.isLoadingPaidOrders.value;
+        final orders = controller.paidOrders.toList();
+
+        if (loading && orders.isEmpty) {
           return const Center(
             child: CircularProgressIndicator(color: AppTheme.primary),
           );
         }
 
-        final orders = controller.paidOrders.toList();
-
-        return RefreshIndicator(
-          color: AppTheme.primary,
-          onRefresh: () => controller.loadPaidOrders(forceRefresh: true),
-          child: orders.isEmpty
-              ? ListView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  children: [
-                    SizedBox(
-                      height: MediaQuery.sizeOf(context).height * 0.35,
-                    ),
-                    const _PaidEmptyState(),
-                  ],
-                )
-              : ListView.separated(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    horizontal: 20,
-                    vertical: 24,
-                  ),
-                  itemCount: orders.length,
-                  separatorBuilder: (_, _) =>
-                      JtrResponsive.getResponsiveSpacing(context, 10),
-                  itemBuilder: (context, index) =>
-                      _PaidOrderRow(order: orders[index]),
-                ),
+        return Column(
+          children: [
+            if (loading)
+              const LinearProgressIndicator(
+                minHeight: 2,
+                color: AppTheme.primary,
+                backgroundColor: Colors.transparent,
+              ),
+            Expanded(
+              child: RefreshIndicator(
+                color: AppTheme.primary,
+                onRefresh: () => controller.loadPaidOrders(forceRefresh: true),
+                child: orders.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          SizedBox(
+                            height: MediaQuery.sizeOf(context).height * 0.35,
+                          ),
+                          const _PaidEmptyState(),
+                        ],
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: JtrResponsive.getResponsivePadding(
+                          context,
+                          horizontal: 20,
+                          vertical: 24,
+                        ),
+                        itemCount: orders.length,
+                        separatorBuilder: (_, _) =>
+                            JtrResponsive.getResponsiveSpacing(context, 10),
+                        itemBuilder: (context, index) =>
+                            _PaidOrderRow(order: orders[index]),
+                      ),
+              ),
+            ),
+          ],
         );
       }),
     );

@@ -130,7 +130,6 @@ class StatisticsPage extends GetView<SessionController> {
                 ),
                 JtrResponsive.getResponsiveSpacing(context, 28),
                 _PaidOrdersButton(
-                  isLoading: controller.isLoadingPaidOrders.value,
                   onPressed: controller.openPaidOrders,
                 ),
                 JtrResponsive.getResponsiveSpacing(context, 28),
@@ -171,11 +170,9 @@ class StatisticsPage extends GetView<SessionController> {
 
 class _PaidOrdersButton extends StatelessWidget {
   const _PaidOrdersButton({
-    required this.isLoading,
     required this.onPressed,
   });
 
-  final bool isLoading;
   final Future<void> Function() onPressed;
 
   @override
@@ -183,12 +180,11 @@ class _PaidOrdersButton extends StatelessWidget {
     final radius = JtrResponsive.getResponsiveRadius(context, 14);
     final height = JtrResponsive.getResponsiveHeight(context, 52);
     final iconSize = JtrResponsive.getResponsiveSize(context, 22);
-    final loaderSize = JtrResponsive.getResponsiveSize(context, 22);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: isLoading ? null : () => onPressed(),
+        onTap: () => onPressed(),
         borderRadius: BorderRadius.circular(radius),
         child: Ink(
           width: double.infinity,
@@ -216,45 +212,36 @@ class _PaidOrdersButton extends StatelessWidget {
             ],
           ),
           child: Center(
-            child: isLoading
-                ? SizedBox(
-                    width: loaderSize,
-                    height: loaderSize,
-                    child: const CircularProgressIndicator(
-                      strokeWidth: 2.4,
-                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.payments_rounded,
+                  color: Colors.white,
+                  size: iconSize,
+                ),
+                JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
+                Text(
+                  'COMMANDES PAYÉES',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      14,
                     ),
-                  )
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.payments_rounded,
-                        color: Colors.white,
-                        size: iconSize,
-                      ),
-                      JtrResponsive.getResponsiveHorizontalSpacing(context, 10),
-                      Text(
-                        'COMMANDES PAYÉES',
-                        style: TextStyle(
-                          fontSize: JtrResponsive.getResponsiveFontSize(
-                            context,
-                            14,
-                          ),
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                          color: Colors.white,
-                        ),
-                      ),
-                      JtrResponsive.getResponsiveHorizontalSpacing(context, 6),
-                      Icon(
-                        Icons.chevron_right_rounded,
-                        color: Colors.white.withValues(alpha: 0.9),
-                        size: iconSize,
-                      ),
-                    ],
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                    color: Colors.white,
                   ),
+                ),
+                JtrResponsive.getResponsiveHorizontalSpacing(context, 6),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: Colors.white.withValues(alpha: 0.9),
+                  size: iconSize,
+                ),
+              ],
+            ),
           ),
         ),
       ),

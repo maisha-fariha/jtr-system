@@ -159,9 +159,13 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
                       ),
                     ),
                     _HeaderIconButton(
-                      backgroundColor: AppTheme.lightButton,
+                      backgroundColor: _canConfirm
+                          ? AppTheme.lightButton
+                          : AppTheme.inactiveSurface,
                       icon: Icons.check,
-                      iconColor: AppTheme.primary,
+                      iconColor: _canConfirm
+                          ? AppTheme.primary
+                          : AppTheme.textSecondary.withValues(alpha: 0.4),
                       onTap: _canConfirm ? _confirm : null,
                     ),
                   ],
@@ -212,7 +216,6 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
                     color: AppTheme.darkText,
                   ),
                   decoration: InputDecoration(
-                    hintText: '1',
                     errorText: _errorText,
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(

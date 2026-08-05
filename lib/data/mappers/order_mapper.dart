@@ -807,7 +807,7 @@ class OrderMapper {
         waiter is Map<String, dynamic> ? (waiter['name'] as String? ?? '—') : '—';
 
     final products = extractProducts(data);
-    final displayEntries = finalizeDisplayEntries(
+    var displayEntries = finalizeDisplayEntries(
       data,
       previousDisplayEntries: previousDisplayEntries,
       suivreSplitHints: suivreSplitHints,
@@ -815,6 +815,24 @@ class OrderMapper {
       demandedSectionIndices: demandedSectionIndices,
       applyKitchenDemande: applyKitchenDemande,
     );
+
+    // GET /api/orders/:id often returns menu_selections as ids only — restore
+    // CHOIX labels from the live ticket when available.
+    if (previousDisplayEntries != null && previousDisplayEntries.isNotEmpty) {
+      displayEntries = preserveMenuLabelsFromPrevious(
+        previous: previousDisplayEntries,
+        next: displayEntries,
+      );
+    }
+
+    final resolvedProducts = displayEntries.isNotEmpty
+        ? [
+            for (final entry in displayEntries)
+              if (entry.type == OrderDisplayEntryType.product &&
+                  entry.product != null)
+                entry.product!,
+          ]
+        : products;
 
     return SessionOrder(
       id: orderId,
@@ -832,14 +850,14 @@ class OrderMapper {
       total: formatPrice(
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
-      products: products,
-      itemCount: products.length,
+      products: resolvedProducts,
+      itemCount: resolvedProducts.length,
       displayEntries: displayEntries.isNotEmpty
           ? displayEntries
           : [
-              for (var i = 0; i < products.length; i++)
+              for (var i = 0; i < resolvedProducts.length; i++)
                 OrderDisplayEntry.product(
-                  product: products[i],
+                  product: resolvedProducts[i],
                   lineIndex: i,
                 ),
             ],
@@ -2307,6 +2325,12 @@ class OrderMapper {
       display = stabilizeLiveLayoutWithServer(
         live: live.displayEntries,
         server: display,
+      );
+    } else {
+      // Even when shape drifts, keep CHOIX labels the GET often omits.
+      display = preserveMenuLabelsFromPrevious(
+        previous: live.displayEntries,
+        next: display,
       );
     }
 
@@ -7837,6 +7861,7 @@ class OrderMapper {
     required int productId,
     required double subTotal,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
@@ -7858,13 +7883,14 @@ class OrderMapper {
       seatNumber: seatNumber,
       courseNumber: course.number,
     );
+    final qty = quantity < 1 ? 1 : quantity;
 
     final newItem = _buildNewItemPayload(
       seatNumber: seatNumber,
       courseId: course.id,
       productId: productId,
-      qty: 1,
-      subTotal: subTotal,
+      qty: qty,
+      subTotal: subTotal * qty,
       status: itemStatus,
       comment: comment,
       menuSelections: menuSelections,
@@ -8129,6 +8155,163 @@ class OrderMapper {
     return null;
   }
 
+  /// Fills missing `selected_product_name` on menu_selections from a catalog
+  /// option id → name map (products/list nested menu_categories).
+  static Map<String, dynamic> enrichOrderDetailMenuSelectionNames(
+    Map<String, dynamic> orderDetail, {
+    required Map<int, String> optionNamesById,
+  }) {
+    if (optionNamesById.isEmpty) return orderDetail;
+
+    final working = Map<String, dynamic>.from(orderDetail);
+    final seatOrders = working['seat_orders'];
+    if (seatOrders is! List) return working;
+
+    working['seat_orders'] = [
+      for (final seat in seatOrders)
+        if (seat is Map)
+          _enrichSeatMenuSelectionNames(
+            Map<String, dynamic>.from(seat),
+            optionNamesById,
+          )
+        else
+          seat,
+    ];
+    return working;
+  }
+
+  static Map<String, dynamic> _enrichSeatMenuSelectionNames(
+    Map<String, dynamic> seat,
+    Map<int, String> optionNamesById,
+  ) {
+    final courses = seat['courses'];
+    if (courses is! List) return seat;
+    seat['courses'] = [
+      for (final course in courses)
+        if (course is Map)
+          _enrichCourseMenuSelectionNames(
+            Map<String, dynamic>.from(course),
+            optionNamesById,
+          )
+        else
+          course,
+    ];
+    return seat;
+  }
+
+  static Map<String, dynamic> _enrichCourseMenuSelectionNames(
+    Map<String, dynamic> course,
+    Map<int, String> optionNamesById,
+  ) {
+    final items = course['items'];
+    if (items is! List) return course;
+    course['items'] = [
+      for (final item in items)
+        if (item is Map)
+          _enrichItemMenuSelectionNames(
+            Map<String, dynamic>.from(item),
+            optionNamesById,
+          )
+        else
+          item,
+    ];
+    return course;
+  }
+
+  static Map<String, dynamic> _enrichItemMenuSelectionNames(
+    Map<String, dynamic> item,
+    Map<int, String> optionNamesById,
+  ) {
+    final menus = item['menu_selections'];
+    if (menus is! List || menus.isEmpty) return item;
+    item['menu_selections'] = [
+      for (final selection in menus)
+        if (selection is Map)
+          _enrichOneMenuSelectionName(
+            Map<String, dynamic>.from(selection),
+            optionNamesById,
+          )
+        else
+          selection,
+    ];
+    return item;
+  }
+
+  static Map<String, dynamic> _enrichOneMenuSelectionName(
+    Map<String, dynamic> selection,
+    Map<int, String> optionNamesById,
+  ) {
+    if (_menuSelectionLabel(selection) != null) return selection;
+    final id = (selection['selected_product_id'] as num?)?.toInt();
+    if (id == null || id <= 0) return selection;
+    final name = optionNamesById[id];
+    if (name == null || name.isEmpty) return selection;
+    selection['selected_product_name'] = name;
+    return selection;
+  }
+
+  /// Copies CHOIX labels from [previous] onto [next] when the server omitted them.
+  static List<OrderDisplayEntry> preserveMenuLabelsFromPrevious({
+    required List<OrderDisplayEntry> previous,
+    required List<OrderDisplayEntry> next,
+  }) {
+    final previousProducts = <OrderDisplayEntry>[
+      for (final entry in previous)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          entry,
+    ];
+    final remaining = List<OrderDisplayEntry>.from(previousProducts);
+    final result = <OrderDisplayEntry>[];
+    var lineIndex = 0;
+
+    OrderDisplayEntry? takeMatch(OrderDisplayEntry nextProduct) {
+      final id = nextProduct.itemId ?? 0;
+      if (id > 0) {
+        final byId = remaining.indexWhere((e) => (e.itemId ?? 0) == id);
+        if (byId >= 0) return remaining.removeAt(byId);
+      }
+      final key = _productFingerprint(nextProduct.product);
+      if (key != null) {
+        final byKey = remaining.indexWhere(
+          (e) => _productFingerprint(e.product) == key,
+        );
+        if (byKey >= 0) return remaining.removeAt(byKey);
+      }
+      final name = nextProduct.product?.name.trim().toUpperCase();
+      if (name != null && name.isNotEmpty) {
+        final byName = remaining.indexWhere(
+          (e) =>
+              e.product?.name.trim().toUpperCase() == name &&
+              (e.product?.menuItems.isNotEmpty ?? false),
+        );
+        if (byName >= 0) return remaining.removeAt(byName);
+      }
+      return null;
+    }
+
+    for (final entry in next) {
+      if (entry.type != OrderDisplayEntryType.product || entry.product == null) {
+        result.add(entry);
+        continue;
+      }
+      final match = takeMatch(entry);
+      result.add(
+        OrderDisplayEntry.product(
+          product: _productKeepingLiveMenuLabels(
+            live: match?.product ?? entry.product!,
+            server: entry.product,
+          ),
+          lineIndex: lineIndex++,
+          sectionIndex: entry.sectionIndex ?? 0,
+          courseNumber: entry.courseNumber,
+          itemId: entry.itemId ?? match?.itemId,
+        ),
+      );
+    }
+    return result;
+  }
+
   /// After Send, GET often returns menu_selections as ids only — keep the
   /// waiter's CHOIX labels from the live ticket when the server has none.
   static OrderProduct _productKeepingLiveMenuLabels({
@@ -8137,6 +8320,12 @@ class OrderMapper {
   }) {
     if (server == null) return live;
     if (server.menuItems.isEmpty && live.menuItems.isNotEmpty) {
+      return server.copyWith(menuItems: List<String>.from(live.menuItems));
+    }
+    // Prefer richer live labels when both are non-empty but server is thinner.
+    if (live.menuItems.isNotEmpty &&
+        server.menuItems.isNotEmpty &&
+        live.menuItems.length > server.menuItems.length) {
       return server.copyWith(menuItems: List<String>.from(live.menuItems));
     }
     return server;
@@ -8361,6 +8550,7 @@ class OrderMapper {
     required String productName,
     required double basePrice,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
@@ -8373,7 +8563,8 @@ class OrderMapper {
           ? current.copyWith(displayEntries: layoutHints)
           : current,
     );
-    final subTotal = basePrice + _menuSelectionsSupplement(menuSelections);
+    final qty = quantity < 1 ? 1 : quantity;
+    final unitSubTotal = basePrice + _menuSelectionsSupplement(menuSelections);
 
     // Open À SUIVRE: append on the session ticket like simple catalog taps.
     if ((selectedSuivreSectionIndex != null && selectedSuivreSectionIndex > 0) ||
@@ -8382,8 +8573,8 @@ class OrderMapper {
       return _predictAppendOnSessionOrder(
         current: workingCurrent,
         productName: productName,
-        unitPrice: subTotal,
-        qty: 1,
+        unitPrice: unitSubTotal,
+        qty: qty,
         menuItems: menuSelectionLabelsFromMaps(menuSelections),
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
       );
@@ -8395,8 +8586,9 @@ class OrderMapper {
         orderDetail: detail,
         productId: productId,
         productName: productName,
-        subTotal: subTotal,
+        subTotal: unitSubTotal,
         menuSelections: menuSelections,
+        quantity: qty,
         comment: comment,
         suivreSectionCount: suivreSectionCount,
         suivreSplitHints: suivreSplitHints,
@@ -8414,8 +8606,8 @@ class OrderMapper {
     return _predictAppendOnSessionOrder(
       current: workingCurrent,
       productName: productName,
-      unitPrice: subTotal,
-      qty: 1,
+      unitPrice: unitSubTotal,
+      qty: qty,
       menuItems: menuSelectionLabelsFromMaps(menuSelections),
       selectedSuivreSectionIndex: selectedSuivreSectionIndex,
     );
@@ -8521,6 +8713,7 @@ class OrderMapper {
     required String productName,
     required double subTotal,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
     int suivreSectionCount = 0,
     List<int> suivreSplitHints = const [],
@@ -8542,13 +8735,14 @@ class OrderMapper {
       seatNumber: seatNumber,
       courseNumber: course.number,
     );
+    final qty = quantity < 1 ? 1 : quantity;
 
     final newItem = _buildNewItemPayload(
       seatNumber: seatNumber,
       courseId: course.id,
       productId: productId,
-      qty: 1,
-      subTotal: subTotal,
+      qty: qty,
+      subTotal: subTotal * qty,
       status: itemStatus,
       comment: comment,
       menuSelections: menuSelections,

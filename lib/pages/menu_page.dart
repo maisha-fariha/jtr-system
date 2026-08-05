@@ -403,7 +403,7 @@ class _SelectedMenuSidePanel extends GetView<OrderMenuController> {
             ),
             JtrResponsive.getResponsiveSpacing(context, 12),
             Text(
-              'CHOIX ${controller.choiceNumber}',
+              'QTÉ ${controller.choiceNumber}',
               style: _MenuStyle.overline(context),
             ),
             JtrResponsive.getResponsiveSpacing(context, 6),

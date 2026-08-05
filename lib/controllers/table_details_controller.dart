@@ -706,7 +706,9 @@ class TableDetailsController extends GetxController {
 
     try {
       final loadedTree = await _catalogRepository.getCategoryTree();
-      final loadedProducts = await _catalogRepository.getProducts();
+      final loadedProducts = await _catalogRepository.getProducts(
+        forceRefresh: true,
+      );
       categoryRoots.assignAll(loadedTree);
       products.assignAll(loadedProducts);
       categoryPath.clear();
@@ -1106,6 +1108,7 @@ class TableDetailsController extends GetxController {
     _applyAddComposedProductToUi(
       product: product,
       menuSelections: submit.menuSelections,
+      quantity: submit.quantity < 1 ? 1 : submit.quantity,
       layoutHints: layoutHints,
       comment: submit.comment,
       selectedSuivreSectionIndex: effectiveSuivreSection,
@@ -1113,9 +1116,13 @@ class TableDetailsController extends GetxController {
     _trackLocalDraftAddComposed(
       product: product,
       menuSelections: submit.menuSelections,
+      quantity: submit.quantity < 1 ? 1 : submit.quantity,
       comment: submit.comment,
     );
-    stockVisual.consumeLocally(product.id, 1);
+    stockVisual.consumeLocally(
+      product.id,
+      submit.quantity < 1 ? 1 : submit.quantity,
+    );
     // Local-first: no PUT until Send (same as catalog composed adds).
     if (_mutationsAreLocalOnly || _isLocalDraft) return;
 
@@ -1123,6 +1130,7 @@ class TableDetailsController extends GetxController {
       _syncAddComposedProductInBackground(
         product: product,
         menuSelections: submit.menuSelections,
+        quantity: submit.quantity < 1 ? 1 : submit.quantity,
         rollbackSnapshot: rollbackSnapshot,
         layoutHints: layoutHints,
         comment: submit.comment,
@@ -1507,17 +1515,6 @@ class TableDetailsController extends GetxController {
         snackPosition: SnackPosition.BOTTOM,
         duration: const Duration(seconds: 3),
         margin: const EdgeInsets.all(16),
-      );
-      return;
-    }
-
-    final product = catalogProductByName(line.name);
-    if (product?.isComposed == true) {
-      AppSnackbar.show(
-        'Produit composé',
-        'Ce produit se configure via le sélecteur de menu.',
-        snackPosition: SnackPosition.BOTTOM,
-        duration: const Duration(seconds: 2),
       );
       return;
     }
@@ -2699,8 +2696,25 @@ class TableDetailsController extends GetxController {
       final allowed = await _ensureStockAllowsAdd(product);
       if (!allowed) return;
 
+      // Food list: always qty 1 — waiter adjusts quantity later on the ticket.
+      const quantity = 1;
+
       final layoutHints = order?.displayEntries;
-      final detail = await _catalogRepository.getProductDetail(product.id);
+      // Prefer nested menu_categories from products/list (same as toolbar menus).
+      CatalogProductModel detail = product;
+      if (detail.menuCategories.isEmpty) {
+        detail = await _catalogRepository.resolveProductWithMenuCategories(
+          product.id,
+        );
+      }
+      if (detail.menuCategories.isEmpty) {
+        AppSnackbar.show(
+          'Erreur',
+          'Ce menu n\'a pas de catégories configurées.',
+        );
+        return;
+      }
+
       final presetMenu = MenuMapper.presetFromProduct(
         detail,
         badgeNumber: 1,
@@ -2711,12 +2725,31 @@ class TableDetailsController extends GetxController {
         arguments: {
           'table': orderNumber,
           'presetMenu': presetMenu,
-          'choiceNumber': 1,
+          'choiceNumber': quantity,
           'returnToSelection': false,
         },
       );
 
       if (result is! MenuActiveSelection) return;
+
+      // Validate CHOIX against this product's min/max before inserting.
+      for (final category in result.menu.categories) {
+        if (category.items.isEmpty) continue;
+        final count =
+            result.selectedItemsByCourse[category.number]?.length ?? 0;
+        if (!category.allowsSelectionCount(count)) {
+          final min = category.effectiveMin;
+          final max = category.effectiveMax;
+          final range = max == null
+              ? 'au moins $min'
+              : (min == max ? '$min' : '$min–$max');
+          AppSnackbar.show(
+            'Sélection incomplète',
+            'Choisissez $range article(s) pour ${category.label}.',
+          );
+          return;
+        }
+      }
 
       final menuSelections = MenuMapper.menuSelectionsFromItems(
         result.allSelectedItems,
@@ -2729,19 +2762,22 @@ class TableDetailsController extends GetxController {
       _applyAddComposedProductToUi(
         product: detail,
         menuSelections: menuSelections,
+        quantity: quantity,
         layoutHints: layoutHints,
       );
       _trackLocalDraftAddComposed(
         product: detail,
         menuSelections: menuSelections,
+        quantity: quantity,
       );
-      stockVisual.consumeLocally(product.id, 1);
+      stockVisual.consumeLocally(product.id, quantity);
       if (_mutationsAreLocalOnly) return;
       if (_isLocalDraft) return;
       unawaited(
         _syncAddComposedProductInBackground(
           product: detail,
           menuSelections: menuSelections,
+          quantity: quantity,
           rollbackSnapshot: rollbackSnapshot,
           layoutHints: layoutHints,
         ),
@@ -2789,6 +2825,7 @@ class TableDetailsController extends GetxController {
   void _applyAddComposedProductToUi({
     required CatalogProductModel product,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     List<OrderDisplayEntry>? layoutHints,
     String comment = '',
     int? selectedSuivreSectionIndex,
@@ -2818,6 +2855,7 @@ class TableDetailsController extends GetxController {
         fastId != null ? _orderRepository.cachedOrderDetail(fastId) : null;
     final suivreTarget =
         selectedSuivreSectionIndex ?? selectedSuivreSection.value;
+    final qty = quantity < 1 ? 1 : quantity;
 
     final predicted = OrderMapper.predictAfterAppendComposedProduct(
       current: current,
@@ -2826,6 +2864,7 @@ class TableDetailsController extends GetxController {
       productName: product.name,
       basePrice: product.unitPrice,
       menuSelections: menuSelections,
+      quantity: qty,
       comment: comment,
       suivreSectionCount: suivreCount,
       suivreSplitHints: suivreSplits,
@@ -2850,6 +2889,7 @@ class TableDetailsController extends GetxController {
   Future<void> _syncAddComposedProductInBackground({
     required CatalogProductModel product,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     SessionOrder? rollbackSnapshot,
     List<OrderDisplayEntry>? layoutHints,
     String comment = '',
@@ -2863,6 +2903,7 @@ class TableDetailsController extends GetxController {
         );
     final effectiveLayoutHints = layoutHints ?? snapshot.displayEntries;
     final epochAtEnqueue = _ticketMutationEpoch;
+    final qty = quantity < 1 ? 1 : quantity;
 
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
@@ -2888,6 +2929,7 @@ class TableDetailsController extends GetxController {
             productId: product.id,
             basePrice: product.unitPrice,
             menuSelections: menuSelections,
+            quantity: qty,
             numberOfGuests: int.tryParse(snapshot.couverts),
           );
           if (epochAtEnqueue != _ticketMutationEpoch ||
@@ -2906,6 +2948,7 @@ class TableDetailsController extends GetxController {
           productId: product.id,
           basePrice: product.unitPrice,
           menuSelections: menuSelections,
+          quantity: qty,
           comment: comment,
           layoutHints: hints,
           selectedSuivreSectionIndex: suivreTarget,
@@ -4010,6 +4053,7 @@ class TableDetailsController extends GetxController {
   void _trackLocalDraftAddComposed({
     required CatalogProductModel product,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
   }) {
     final supplement = MenuMapper.menuSelectionsSupplement(menuSelections);
@@ -4017,6 +4061,7 @@ class TableDetailsController extends GetxController {
       LocalDraftLine(
         productId: product.id,
         unitPrice: product.unitPrice + supplement,
+        qty: quantity < 1 ? 1 : quantity,
         menuSelections: menuSelections,
         comment: comment,
         courseNumber: _resolveDraftCourseNumber(),

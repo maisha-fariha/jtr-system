@@ -6,6 +6,7 @@ class MenuSelectionSubmitResult {
     required this.productName,
     required this.basePrice,
     required this.menuSelections,
+    this.quantity = 1,
     this.comment = '',
   });
 
@@ -13,5 +14,8 @@ class MenuSelectionSubmitResult {
   final String productName;
   final double basePrice;
   final List<Map<String, dynamic>> menuSelections;
+
+  /// How many menus to insert on the order (from quantity dialog).
+  final int quantity;
   final String comment;
 }

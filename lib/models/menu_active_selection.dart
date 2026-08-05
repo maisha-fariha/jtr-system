@@ -10,31 +10,22 @@ class MenuActiveSelection {
   });
 
   final PresetMenu menu;
+
+  /// How many menus (quantity) the waiter is adding — not CHOIX option count.
   final int choiceNumber;
 
   /// Selected items grouped by CHOIX (course) number.
-  ///
-  /// For the requirement "choose N items from the same CHOIX list", we
-  /// must support multiple selections per course.
   final Map<int, List<MenuItem>> selectedItemsByCourse;
   final Map<int, String> messagesByCourse;
 
-  int _requiredCountForCourse(int courseNumber) {
-    final requested = choiceNumber < 1 ? 1 : choiceNumber;
-    final category = menu.categories
-        .where((c) => c.number == courseNumber)
-        .toList();
-    if (category.isEmpty) return requested;
-    final maxPossible = category.first.items.length;
-    // If there are fewer options than N, the "complete" state is selecting all.
-    return requested.clamp(0, maxPossible);
-  }
-
   bool isCourseComplete(int courseNumber) {
-    final required = _requiredCountForCourse(courseNumber);
-    if (required <= 0) return true;
-    final selected = selectedItemsByCourse[courseNumber] ?? const <MenuItem>[];
-    return selected.length == required;
+    final matches =
+        menu.categories.where((c) => c.number == courseNumber).toList();
+    if (matches.isEmpty) return true;
+    final category = matches.first;
+    final selected =
+        selectedItemsByCourse[courseNumber] ?? const <MenuItem>[];
+    return category.allowsSelectionCount(selected.length);
   }
 
   String? messageForCourse(int courseNumber) => messagesByCourse[courseNumber];
@@ -43,9 +34,6 @@ class MenuActiveSelection {
       selectedItemsByCourse.values.expand((items) => items).toList();
 
   MenuActiveSelection merge(MenuActiveSelection other) {
-    // The menu page returns the full current selection for this menu.
-    // Replace course lists — do not append. Appending kept deselected items
-    // after re-open / unselect / pick-another (left list showed two scoops).
     final messages = <int, String>{
       ...messagesByCourse,
       ...other.messagesByCourse,

@@ -16,7 +16,8 @@ class MenuMapper {
     Color(0xFFF1C40F),
   ];
 
-  /// List row for composed menu products (categories loaded on tap).
+  /// List row / full preset from [GET /api/products/list] nested `menu_categories`.
+  /// Do not use `/api/menu-categories` (admin-only).
   static PresetMenu thinPresetFromProduct(
     CatalogProductModel product, {
     required int badgeNumber,
@@ -33,7 +34,8 @@ class MenuMapper {
     );
   }
 
-  /// Full preset with CHOIX categories from [GET /api/products/:id].
+  /// Full preset with CHOIX from product `menu_categories`
+  /// ([GET /api/products/list] or [GET /api/products/:id]).
   static PresetMenu presetFromProduct(
     CatalogProductModel product, {
     required int badgeNumber,
@@ -51,8 +53,16 @@ class MenuMapper {
   static List<MenuCategory> categoriesFromProduct(CatalogProductModel product) {
     final categories = <MenuCategory>[];
 
-    for (var i = 0; i < product.menuCategories.length; i++) {
-      final menuCategory = product.menuCategories[i];
+    // Min/max live on each product's nested menu_categories from products/list.
+    final sorted = [...product.menuCategories]
+      ..sort((a, b) {
+        final byPos = a.position.compareTo(b.position);
+        if (byPos != 0) return byPos;
+        return a.id.compareTo(b.id);
+      });
+
+    for (var i = 0; i < sorted.length; i++) {
+      final menuCategory = sorted[i];
       final courseNumber = i + 1;
 
       categories.add(
@@ -60,6 +70,9 @@ class MenuMapper {
           number: courseNumber,
           label: menuCategory.name.toUpperCase(),
           color: _courseColors[i % _courseColors.length],
+          isRequired: menuCategory.isRequired,
+          minSelections: menuCategory.minSelections,
+          maxSelections: menuCategory.maxSelections,
           items: menuCategory.products
               .map(
                 (option) => MenuItem(

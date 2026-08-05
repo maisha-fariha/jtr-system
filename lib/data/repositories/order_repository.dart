@@ -153,7 +153,8 @@ class OrderRepository {
     final online = await _connectivity.isOnline;
 
     if (online) {
-      final detail = await _remote.fetchOrderDetail(orderId);
+      var detail = await _remote.fetchOrderDetail(orderId);
+      detail = await _enrichDetailMenuSelectionNames(detail);
 
       await _local.saveOrderDetail(orderId, detail);
 
@@ -177,11 +178,12 @@ class OrderRepository {
 
     final cached = _local.readOrderDetail(orderId);
     if (cached != null) {
+      final enriched = await _enrichDetailMenuSelectionNames(cached);
       final layoutHints =
           OrderMapper.coalesceLayoutHints(previousDisplayEntries);
       final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
       return OrderMapper.fromOrderDetail(
-        cached,
+        enriched,
         previousDisplayEntries: layoutHints,
         suivreSplitHints: suivreHints.splits,
         suivreCountHint: suivreHints.count,
@@ -193,6 +195,33 @@ class OrderRepository {
     throw ApiException(
       message: 'Détails de commande indisponibles hors ligne.',
     );
+  }
+
+  /// Resolves CHOIX option names from products/list when GET order returns ids only.
+  Future<Map<String, dynamic>> _enrichDetailMenuSelectionNames(
+    Map<String, dynamic> detail,
+  ) async {
+    try {
+      final products = await _catalog.getProducts();
+      final namesById = <int, String>{};
+      for (final product in products) {
+        for (final category in product.menuCategories) {
+          for (final option in category.products) {
+            if (option.id <= 0) continue;
+            final name = option.name.trim();
+            if (name.isEmpty) continue;
+            namesById.putIfAbsent(option.id, () => name.toUpperCase());
+          }
+        }
+      }
+      if (namesById.isEmpty) return detail;
+      return OrderMapper.enrichOrderDetailMenuSelectionNames(
+        detail,
+        optionNamesById: namesById,
+      );
+    } catch (_) {
+      return detail;
+    }
   }
 
   /// True while the ticket was intentionally emptied (delete-all), not create.
@@ -1267,6 +1296,8 @@ class OrderRepository {
       tableNumber: tableNumber,
     );
 
+    final enrichedDetail = await _enrichDetailMenuSelectionNames(detail);
+
     // Never call requestAllCourses here — that path can PUT to align suites
     // after a successful POST create. First Send must stay POST-only.
     if (localTicketBeforeSend != null) {
@@ -1276,7 +1307,7 @@ class OrderRepository {
       final layoutHints = previousDisplayEntries ??
           localTicketBeforeSend.displayEntries;
       final mapped = OrderMapper.fromOrderDetail(
-        detail,
+        enrichedDetail,
         previousDisplayEntries: layoutHints,
       );
       final merged = OrderMapper.patchServerItemIdsOntoLive(
@@ -1291,7 +1322,7 @@ class OrderRepository {
     apiLog.writeln('── Send complete — map server detail (no align PUT) ──');
     lastKitchenSendLog = apiLog.toString();
     final mapped = OrderMapper.fromOrderDetail(
-      detail,
+      enrichedDetail,
       previousDisplayEntries: previousDisplayEntries,
     );
     return mapped.copyWith(id: orderId, number: displayNumber);
@@ -1692,6 +1723,7 @@ class OrderRepository {
     required int productId,
     required double basePrice,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
     int? numberOfGuests,
   }) async {
@@ -1727,6 +1759,7 @@ class OrderRepository {
         ? numberOfGuests
         : OrderMapper.guestsForTable(tables, table.id);
     final salesZoneId = OrderMapper.inferSalesZoneId(tables, table: table);
+    final qty = quantity < 1 ? 1 : quantity;
     final payload = OrderMapper.buildCreateOrderWithItemPayload(
       waiterId: waiterId,
       numberOfGuests: guests,
@@ -1734,6 +1767,7 @@ class OrderRepository {
       unitPrice: basePrice + supplement,
       tableId: table.id,
       salesZoneId: salesZoneId,
+      qty: qty,
       comment: comment,
       menuSelections: menuSelections,
     );
@@ -3032,6 +3066,7 @@ class OrderRepository {
     required int productId,
     required double basePrice,
     required List<Map<String, dynamic>> menuSelections,
+    int quantity = 1,
     String comment = '',
     List<OrderDisplayEntry>? layoutHints,
     int? selectedSuivreSectionIndex,
@@ -3041,6 +3076,7 @@ class OrderRepository {
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
+    final qty = quantity < 1 ? 1 : quantity;
 
     if (!await _connectivity.isOnline) {
       lastAddItemLog = 'Hors ligne — ajout menu impossible.';
@@ -3050,7 +3086,7 @@ class OrderRepository {
     }
 
     apiLog.writeln('── Ajout produit composé ──');
-    apiLog.writeln('order_id=$orderId product_id=$productId');
+    apiLog.writeln('order_id=$orderId product_id=$productId qty=$qty');
 
     try {
       apiLog.writeln('── GET /api/orders/$orderId ──');
@@ -3067,6 +3103,7 @@ class OrderRepository {
             productId: productId,
             basePrice: basePrice,
             menuSelections: menuSelections,
+            quantity: qty,
             comment: comment,
             layoutHints: layoutHints,
             apiLog: apiLog,
@@ -3081,6 +3118,7 @@ class OrderRepository {
             productId: productId,
             basePrice: basePrice,
             menuSelections: menuSelections,
+            quantity: qty,
             comment: comment,
             tableNumber: tableNumber,
             waiterId: waiterId,
@@ -3116,6 +3154,7 @@ class OrderRepository {
         productId: productId,
         subTotal: basePrice + supplement,
         menuSelections: menuSelections,
+        quantity: qty,
         comment: comment,
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
@@ -3148,6 +3187,7 @@ class OrderRepository {
             productId: productId,
             basePrice: basePrice,
             menuSelections: menuSelections,
+            quantity: qty,
             comment: comment,
             tableNumber: tableNumber,
             waiterId: waiterId,
@@ -3173,10 +3213,12 @@ class OrderRepository {
     required List<Map<String, dynamic>> menuSelections,
     required String comment,
     required StringBuffer apiLog,
+    int quantity = 1,
     List<OrderDisplayEntry>? layoutHints,
   }) async {
     final cleaned = OrderMapper.withAllCourseItemsCleared(detail);
     final working = OrderMapper.asOpenEmptyOrderShell(cleaned);
+    final qty = quantity < 1 ? 1 : quantity;
     final supplement = menuSelections.fold<double>(
       0,
       (sum, selection) {
@@ -3204,6 +3246,7 @@ class OrderRepository {
         productId: productId,
         subTotal: basePrice + supplement,
         menuSelections: menuSelections,
+        quantity: qty,
         comment: comment,
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
@@ -3239,6 +3282,7 @@ class OrderRepository {
     required List<Map<String, dynamic>> menuSelections,
     required String comment,
     required StringBuffer apiLog,
+    int quantity = 1,
     String? tableNumber,
     int? waiterId,
   }) async {
@@ -3270,6 +3314,7 @@ class OrderRepository {
         productId: productId,
         basePrice: basePrice,
         menuSelections: menuSelections,
+        quantity: quantity < 1 ? 1 : quantity,
         comment: comment,
         numberOfGuests: guests,
       );
@@ -3294,6 +3339,7 @@ class OrderRepository {
           productId: productId,
           basePrice: basePrice,
           menuSelections: menuSelections,
+          quantity: quantity < 1 ? 1 : quantity,
           comment: comment,
           apiLog: apiLog,
         );

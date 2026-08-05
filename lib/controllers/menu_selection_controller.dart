@@ -11,7 +11,6 @@ import '../models/menu_active_selection.dart';
 import '../models/menu_item.dart';
 import '../models/menu_message_target.dart';
 import '../models/menu_selection_submit_result.dart';
-import '../models/order_display_entry.dart';
 import '../models/preset_menu.dart';
 import '../routes/app_pages.dart';
 import '../widgets/app_confirm_dialog.dart';
@@ -82,13 +81,15 @@ class MenuSelectionController extends GetxController {
     menusError.value = null;
 
     try {
-      final products = await _catalogRepository.getProducts();
+      // POS menus come from products/list nested menu_categories (not
+      // /api/menu-categories). Force refresh so min/max are up to date.
+      final products = await _catalogRepository.getProducts(forceRefresh: true);
       final composed = products.where((product) => product.isComposed).toList()
         ..sort((a, b) => a.name.compareTo(b.name));
 
       menus.assignAll([
         for (var i = 0; i < composed.length; i++)
-          MenuMapper.thinPresetFromProduct(composed[i], badgeNumber: i + 1),
+          MenuMapper.presetFromProduct(composed[i], badgeNumber: i + 1),
       ]);
     } on ApiException catch (error) {
       menusError.value = error.message;
@@ -112,10 +113,21 @@ class MenuSelectionController extends GetxController {
       activeSelection.value = null;
     }
 
+    // If list payload lacked categories, fill from products/list or product id.
     if (menu.categories.isEmpty) {
       try {
         isLoadingMenuDetail.value = true;
-        final product = await _catalogRepository.getProductDetail(menu.number);
+        final product =
+            await _catalogRepository.resolveProductWithMenuCategories(
+          menu.number,
+        );
+        if (product.menuCategories.isEmpty) {
+          AppSnackbar.show(
+            'Erreur',
+            'Ce menu n\'a pas de catégories configurées.',
+          );
+          return;
+        }
         menu = MenuMapper.presetFromProduct(
           product,
           badgeNumber: menu.badgeNumber,
@@ -242,8 +254,8 @@ class MenuSelectionController extends GetxController {
   void _showChoiceNumberDialog(PresetMenu menu) {
     MenuChoiceNumberDialog.show(
       menuLabel: menu.label,
-      onConfirm: (choiceNumber) =>
-          _openMenuPage(menu: menu, choiceNumber: choiceNumber),
+      onConfirm: (quantity) =>
+          _openMenuPage(menu: menu, choiceNumber: quantity),
     );
   }
 
@@ -253,12 +265,14 @@ class MenuSelectionController extends GetxController {
     Map<int, List<MenuItem>>? initialSelections,
     int? focusCourse,
   }) async {
+    // `choiceNumber` is menu quantity, not CHOIX option count.
+    final quantity = choiceNumber < 1 ? 1 : choiceNumber;
     final result = await Get.toNamed(
       AppRoutes.menu,
       arguments: {
         'table': orderNumber,
         'presetMenu': menu,
-        'choiceNumber': choiceNumber,
+        'choiceNumber': quantity,
         'returnToSelection': true,
         if (initialSelections != null) 'initialSelections': initialSelections,
         if (focusCourse != null) 'focusCourse': focusCourse,
@@ -391,21 +405,28 @@ class MenuSelectionController extends GetxController {
 
     _resolveOrderIdFromSession();
 
-    final requestedPerCourse = selection.choiceNumber < 1
-        ? 1
-        : selection.choiceNumber;
-
     for (final category in selection.menu.categories) {
       if (category.items.isEmpty) continue;
 
-      final required = requestedPerCourse.clamp(0, category.items.length);
       final selectedCount =
           selection.selectedItemsByCourse[category.number]?.length ?? 0;
+      final minRequired = category.effectiveMin;
+      final maxAllowed = category.effectiveMax;
 
-      if (selectedCount != required) {
+      if (selectedCount < minRequired) {
         AppSnackbar.show(
           'Sélection incomplète',
-          'Choisissez $required article(s) pour CHOIX ${category.number}.',
+          'Choisissez au moins $minRequired article(s) pour ${category.label}.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+        );
+        return;
+      }
+
+      if (maxAllowed != null && selectedCount > maxAllowed) {
+        AppSnackbar.show(
+          'Limite dépassée',
+          'Maximum $maxAllowed article(s) pour ${category.label}.',
           snackPosition: SnackPosition.BOTTOM,
           margin: const EdgeInsets.all(16),
         );
@@ -425,6 +446,9 @@ class MenuSelectionController extends GetxController {
         .where((message) => message.trim().isNotEmpty)
         .join(' | ');
 
+    final quantity =
+        selection.choiceNumber < 1 ? 1 : selection.choiceNumber;
+
     // Optimistic only — table details applies locally / syncs on Send Order.
     // Do not require orderId here (local draft / verify GET can be empty).
     Get.back(
@@ -433,6 +457,7 @@ class MenuSelectionController extends GetxController {
         productName: selection.menu.label,
         basePrice: selection.menu.priceValue,
         menuSelections: menuSelections,
+        quantity: quantity,
         comment: comment,
       ),
     );

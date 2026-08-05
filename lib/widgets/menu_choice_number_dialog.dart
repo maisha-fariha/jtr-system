@@ -1,38 +1,55 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 
-typedef MenuChoiceNumberCallback = void Function(int choiceNumber);
+/// Callback with the menu quantity (how many menus to add), not CHOIX picks.
+typedef MenuChoiceNumberCallback = void Function(int quantity);
 
+/// Asks for menu quantity before opening CHOIX selection.
 class MenuChoiceNumberDialog extends StatefulWidget {
   const MenuChoiceNumberDialog({
     super.key,
     required this.menuLabel,
     this.onConfirm,
-    this.maxChoices = 6,
+    this.initialQuantity = 1,
   });
 
   final String menuLabel;
   final MenuChoiceNumberCallback? onConfirm;
-  final int maxChoices;
+  final int initialQuantity;
 
   static Future<void> show({
     required String menuLabel,
     MenuChoiceNumberCallback? onConfirm,
-    int maxChoices = 6,
+    int initialQuantity = 1,
   }) {
     return Get.dialog(
       MenuChoiceNumberDialog(
         menuLabel: menuLabel,
         onConfirm: onConfirm,
-        maxChoices: maxChoices,
+        initialQuantity: initialQuantity,
       ),
       barrierDismissible: false,
       barrierColor: AppTheme.dialogBarrier,
     );
+  }
+
+  /// Returns a positive quantity, or `null` if dismissed.
+  static Future<int?> askQuantity({
+    required String menuLabel,
+    int initialQuantity = 1,
+  }) async {
+    int? result;
+    await show(
+      menuLabel: menuLabel,
+      initialQuantity: initialQuantity,
+      onConfirm: (quantity) => result = quantity,
+    );
+    return result;
   }
 
   @override
@@ -40,17 +57,44 @@ class MenuChoiceNumberDialog extends StatefulWidget {
 }
 
 class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
-  int? _selectedNumber;
+  late final TextEditingController _controller;
+  String? _errorText;
 
-  void _selectNumber(int value) {
-    setState(() => _selectedNumber = value);
+  @override
+  void initState() {
+    super.initState();
+    final initial =
+        widget.initialQuantity > 0 ? widget.initialQuantity : 1;
+    _controller = TextEditingController(text: '$initial');
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  int? get _parsedQuantity {
+    final raw = _controller.text.trim();
+    if (raw.isEmpty) return null;
+    return int.tryParse(raw);
+  }
+
+  bool get _canConfirm {
+    final qty = _parsedQuantity;
+    return qty != null && qty > 0;
   }
 
   void _confirm() {
-    final value = _selectedNumber;
-    if (value == null) return;
+    final qty = _parsedQuantity;
+    if (qty == null || qty < 1) {
+      setState(() {
+        _errorText = 'Entrez une quantité positive.';
+      });
+      return;
+    }
     Get.back();
-    widget.onConfirm?.call(value);
+    widget.onConfirm?.call(qty);
   }
 
   @override
@@ -61,23 +105,13 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
       }
 
       final isLarge = JtrResponsive.isLargeDevice(context);
-      final gridSpacing = JtrResponsive.getResponsiveWidth(
-        context,
-        isLarge ? 20 : 16,
-      );
-      final crossAxisCount = JtrResponsive.getResponsiveValue(
-        context,
-        small: 3,
-        medium: 3,
-        large: 6,
-      );
       final dialogRadius = JtrResponsive.getResponsiveRadius(
         context,
         isLarge ? 24 : 16,
       );
       final maxDialogWidth = JtrResponsive.getResponsiveWidth(
         context,
-        isLarge ? 560 : 400,
+        isLarge ? 480 : 400,
       );
 
       return Dialog(
@@ -117,7 +151,7 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: _choiceDialogFontSize(context, 16),
+                          fontSize: _qtyDialogFontSize(context, 16),
                           fontWeight: FontWeight.w700,
                           color: AppTheme.darkText,
                           letterSpacing: 0.3,
@@ -128,7 +162,7 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
                       backgroundColor: AppTheme.lightButton,
                       icon: Icons.check,
                       iconColor: AppTheme.primary,
-                      onTap: _selectedNumber == null ? null : _confirm,
+                      onTap: _canConfirm ? _confirm : null,
                     ),
                   ],
                 ),
@@ -141,25 +175,71 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
                   context,
                   isLarge ? 24 : 20,
                 ),
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: widget.maxChoices,
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: crossAxisCount,
-                    mainAxisSpacing: gridSpacing,
-                    crossAxisSpacing: gridSpacing,
-                    childAspectRatio: 1,
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Quantité',
+                    style: TextStyle(
+                      fontSize: _qtyDialogFontSize(context, 13),
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
-                  itemBuilder: (context, index) {
-                    final number = index + 1;
-                    final isSelected = _selectedNumber == number;
-                    return _ChoiceNumberButton(
-                      number: number,
-                      isSelected: isSelected,
-                      onTap: () => _selectNumber(number),
-                    );
+                ),
+                JtrResponsive.getResponsiveSpacing(context, 10),
+                TextField(
+                  controller: _controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.done,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(4),
+                  ],
+                  onChanged: (_) {
+                    if (_errorText != null) {
+                      setState(() => _errorText = null);
+                    } else {
+                      setState(() {});
+                    }
                   },
+                  onSubmitted: (_) {
+                    if (_canConfirm) _confirm();
+                  },
+                  style: TextStyle(
+                    fontSize: _qtyDialogFontSize(context, 22),
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: '1',
+                    errorText: _errorText,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        JtrResponsive.getResponsiveRadius(context, 12),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        JtrResponsive.getResponsiveRadius(context, 12),
+                      ),
+                      borderSide: BorderSide(color: AppTheme.cardBorder),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(
+                        JtrResponsive.getResponsiveRadius(context, 12),
+                      ),
+                      borderSide: BorderSide(
+                        color: AppTheme.primary,
+                        width: 2,
+                      ),
+                    ),
+                    contentPadding: JtrResponsive.getResponsivePadding(
+                      context,
+                      horizontal: 16,
+                      vertical: 14,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -170,7 +250,7 @@ class _MenuChoiceNumberDialogState extends State<MenuChoiceNumberDialog> {
   }
 }
 
-double _choiceDialogFontSize(BuildContext context, double base) {
+double _qtyDialogFontSize(BuildContext context, double base) {
   final fontSize = JtrResponsive.getResponsiveFontSize(context, base);
   if (JtrResponsive.isLargeDevice(context)) {
     return fontSize + 2;
@@ -178,7 +258,7 @@ double _choiceDialogFontSize(BuildContext context, double base) {
   return fontSize;
 }
 
-double _choiceDialogIconSize(BuildContext context, double base) {
+double _qtyDialogIconSize(BuildContext context, double base) {
   final size = JtrResponsive.getResponsiveSize(context, base);
   if (JtrResponsive.isLargeDevice(context)) {
     return size + 2;
@@ -223,51 +303,7 @@ class _HeaderIconButton extends StatelessWidget {
           child: Icon(
             icon,
             color: iconColor,
-            size: _choiceDialogIconSize(context, 22),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ChoiceNumberButton extends StatelessWidget {
-  const _ChoiceNumberButton({
-    required this.number,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final int number;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final isLarge = JtrResponsive.isLargeDevice(context);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isSelected ? AppTheme.lightButton : AppTheme.inactiveSurface,
-            border: Border.all(
-              color: isSelected ? AppTheme.primary : AppTheme.cardBorder,
-              width: isSelected ? (isLarge ? 2.5 : 2) : 1,
-            ),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            '$number',
-            style: TextStyle(
-              fontSize: _choiceDialogFontSize(context, 22),
-              fontWeight: FontWeight.w700,
-              color: AppTheme.darkText,
-            ),
+            size: _qtyDialogIconSize(context, 22),
           ),
         ),
       ),

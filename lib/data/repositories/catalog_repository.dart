@@ -153,6 +153,24 @@ class CatalogRepository {
     return product;
   }
 
+  /// Resolves a composed product with nested `menu_categories`.
+  ///
+  /// Prefers [GET /api/products/list] (POS source of truth for min/max).
+  /// Falls back to [GET /api/products/:id] only if the list entry has no
+  /// categories. Never uses `/api/menu-categories` (admin dashboard only).
+  Future<CatalogProductModel> resolveProductWithMenuCategories(
+    int productId, {
+    bool forceRefreshList = false,
+  }) async {
+    final products = await getProducts(forceRefresh: forceRefreshList);
+    final fromList = products.where((p) => p.id == productId).firstOrNull;
+    if (fromList != null && fromList.menuCategories.isNotEmpty) {
+      return fromList;
+    }
+
+    return getProductDetail(productId, forceRefresh: true);
+  }
+
   Future<void> _refreshProductDetailInBackground(int productId) async {
     try {
       if (!await _connectivity.isOnline) return;

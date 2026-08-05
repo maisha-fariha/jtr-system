@@ -81,6 +81,13 @@ class OrderMenuController extends GetxController {
 
   bool isSelected(MenuItem item) => _selected[_key(item)] == true;
 
+  MenuCategory? _categoryForCourse(int courseNumber) {
+    for (final category in visibleCategories) {
+      if (category.number == courseNumber) return category;
+    }
+    return null;
+  }
+
   void toggleItem(MenuItem item) {
     final key = _key(item);
     final isOn = _selected[key] == true;
@@ -90,15 +97,19 @@ class OrderMenuController extends GetxController {
       return;
     }
 
-    final maxAllowed = choiceNumber < 1 ? 1 : choiceNumber;
+    final category = _categoryForCourse(item.courseNumber);
+    final maxAllowed = category?.effectiveMax;
     final currentlySelectedInCourse = selectedItems
         .where((e) => e.courseNumber == item.courseNumber)
         .length;
 
-    if (currentlySelectedInCourse >= maxAllowed) {
+    // Menu quantity (`choiceNumber`) is unrelated — limits come from this
+    // product's `menu_categories[].max_selections`.
+    if (maxAllowed != null && currentlySelectedInCourse >= maxAllowed) {
+      final label = category?.label ?? 'ce choix';
       AppSnackbar.show(
         'Limite atteinte',
-        'Vous pouvez sélectionner au maximum $maxAllowed article(s) pour ce choix.',
+        'Vous pouvez sélectionner au maximum $maxAllowed article(s) pour $label.',
         snackPosition: SnackPosition.BOTTOM,
         margin: const EdgeInsets.all(16),
         duration: const Duration(seconds: 2),

@@ -83,18 +83,30 @@ class ProductMenuCategoryModel {
     required this.maxSelections,
     required this.products,
     this.description,
+    this.position = 0,
   });
 
   final int id;
   final String name;
   final String? description;
   final bool isRequired;
+
+  /// Per composed product — same category id can differ across menus.
   final int minSelections;
   final int maxSelections;
+  final int position;
   final List<ProductMenuOptionModel> products;
 
   factory ProductMenuCategoryModel.fromJson(Map<String, dynamic> json) {
     final rawProducts = json['products'];
+    final products = rawProducts is List
+        ? rawProducts
+            .whereType<Map<String, dynamic>>()
+            .map(ProductMenuOptionModel.fromJson)
+            .toList()
+        : <ProductMenuOptionModel>[];
+    products.sort((a, b) => a.position.compareTo(b.position));
+
     return ProductMenuCategoryModel(
       id: (json['id'] as num?)?.toInt() ?? 0,
       name: json['name'] as String? ?? '',
@@ -102,12 +114,8 @@ class ProductMenuCategoryModel {
       isRequired: json['is_required'] == true,
       minSelections: (json['min_selections'] as num?)?.toInt() ?? 1,
       maxSelections: (json['max_selections'] as num?)?.toInt() ?? 1,
-      products: rawProducts is List
-          ? rawProducts
-              .whereType<Map<String, dynamic>>()
-              .map(ProductMenuOptionModel.fromJson)
-              .toList()
-          : const [],
+      position: (json['position'] as num?)?.toInt() ?? 0,
+      products: products,
     );
   }
 
@@ -118,6 +126,7 @@ class ProductMenuCategoryModel {
         'is_required': isRequired,
         'min_selections': minSelections,
         'max_selections': maxSelections,
+        'position': position,
         'products': products.map((p) => p.toJson()).toList(),
       };
 }
@@ -129,6 +138,7 @@ class ProductMenuOptionModel {
     required this.menuPrice,
     required this.basePrice,
     required this.isDefault,
+    this.position = 0,
   });
 
   final int id;
@@ -136,6 +146,7 @@ class ProductMenuOptionModel {
   final String menuPrice;
   final String basePrice;
   final bool isDefault;
+  final int position;
 
   double get supplement =>
       double.tryParse(menuPrice.replaceAll(',', '.')) ?? 0;
@@ -147,6 +158,7 @@ class ProductMenuOptionModel {
       menuPrice: json['menu_price']?.toString() ?? '0',
       basePrice: json['base_price']?.toString() ?? '0',
       isDefault: json['is_default'] == true,
+      position: (json['position'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -156,5 +168,6 @@ class ProductMenuOptionModel {
         'menu_price': menuPrice,
         'base_price': basePrice,
         'is_default': isDefault,
+        'position': position,
       };
 }

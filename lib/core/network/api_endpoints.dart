@@ -42,7 +42,6 @@ class ApiEndpoints {
   static const categoriesTree = '/api/categories/tree';
   static const productsList = '/api/products/list';
   static String productById(int id) => '/api/products/$id';
-  static const menuCategories = '/api/menu-categories';
 
   // Stock Visuel (daily remaining qty). Soft-fail callers must not block orders.
   static const stockLimits = '/api/stock/limits';

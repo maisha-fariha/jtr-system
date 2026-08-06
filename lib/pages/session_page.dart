@@ -442,10 +442,16 @@ class _OrderRow extends GetView<SessionController> {
             extentRatio: 0.14,
             children: [
               SlidableAction(
-                onPressed: (_) =>
-                    controller.requestApplyOffer(order.number, context: context),
+                onPressed: controller.canAccessOffert
+                    ? (_) => controller.requestApplyOffer(
+                          order.number,
+                          context: context,
+                        )
+                    : null,
                 backgroundColor: AppTheme.background,
-                foregroundColor: AppTheme.primary,
+                foregroundColor: controller.canAccessOffert
+                    ? AppTheme.primary
+                    : AppTheme.darkText.withValues(alpha: 0.28),
                 icon: Icons.local_offer_outlined,
                 spacing: 0,
                 padding: EdgeInsets.zero,

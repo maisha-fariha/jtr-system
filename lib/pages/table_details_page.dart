@@ -844,6 +844,10 @@ class _ProductLine extends GetView<TableDetailsController> {
               iconColor: product.isOffered || orderOffered
                   ? AppTheme.primary
                   : null,
+              enabled: canModify &&
+                  controller.hasOffertAccess &&
+                  !product.isOffered &&
+                  !orderOffered,
               onPressed: () => controller.offerProduct(productIndex),
             ),
             _ProductSlidableAction(

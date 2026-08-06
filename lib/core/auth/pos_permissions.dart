@@ -11,6 +11,7 @@ class PosPermissions {
   static const accessStockVisual = 'access-stock-visual';
   static const accessCloseDay = 'access-close-day';
   static const accessPrintButton = 'access-print-button';
+  static const accessOffert = 'access-offert';
 
   // Table
   static const accessEditTableDetails = 'access-edit-table-details';
@@ -81,6 +82,14 @@ class PosPermissions {
     if (user.isSuperuser == true) return true;
 
     return keysFromUser(user).contains(accessPaymentButton);
+  }
+
+  /// True when the user may offer a line or table (offert).
+  static bool canAccessOffert(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+
+    return keysFromUser(user).contains(accessOffert);
   }
 
   /// True when the user may open Statistics.

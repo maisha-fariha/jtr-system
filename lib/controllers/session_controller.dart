@@ -1200,6 +1200,11 @@ class SessionController extends GetxController {
         _authRepository.cachedSession?.user,
       );
 
+  /// `access-offert` — table / line offer actions.
+  bool get canAccessOffert => PosPermissions.canAccessOffert(
+        _authRepository.cachedSession?.user,
+      );
+
   void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
     // Warm tables cache while the waiter types the table number.
@@ -1989,6 +1994,7 @@ class SessionController extends GetxController {
   }
 
   void requestApplyOffer(String orderNumber, {required BuildContext context}) {
+    if (!canAccessOffert) return;
     if (findOrder(orderNumber: orderNumber) == null) return;
 
     CancelTableDialog.show(

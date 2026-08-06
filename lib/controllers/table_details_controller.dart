@@ -1339,6 +1339,14 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  /// `access-offert` (or superuser) — line / table offer.
+  bool get hasOffertAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canAccessOffert(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
   /// Stock Visuel toggle: hidden without permission; disabled when payment open.
   bool get canToggleStockVisual =>
       hasStockVisualAccess && !showPaymentOptions.value && !isOrderOffered;
@@ -3288,6 +3296,7 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> offerProduct(int productIndex) async {
+    if (!hasOffertAccess) return;
     if (_blockIfOrderOffered()) return;
 
     final currentOrder = order;

@@ -78,7 +78,7 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
 
   /// Start (or restart) after login / cold-start restore.
   ///
-  /// Safe to call concurrently (e.g. login + force_login verify): a second
+  /// Safe to call concurrently (e.g. login): a second
   /// call while connecting queues one restart with the latest token.
   Future<void> start() async {
     if (_stopping) {
@@ -427,6 +427,11 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
 
   void _onForceLogout(ChannelReadEvent event) {
     if (_forceLogoutHandling) return;
+
+    if (_authRepository.shouldSuppressForceLogout) {
+      _log('force.logout ignored — credential verify session refresh');
+      return;
+    }
 
     final payload = event.tryGetDataAsMap();
     final wire = payload != null

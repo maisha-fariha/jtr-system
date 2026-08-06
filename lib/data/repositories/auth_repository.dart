@@ -1,11 +1,17 @@
+import 'dart:async';
+
+import 'package:get/get.dart';
+
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../models/user_suggestion.dart';
 import '../../services/connectivity_service.dart';
+import '../../services/reverb_realtime_service.dart';
 import '../../utils/api_log.dart';
 import '../datasources/auth_local_datasource.dart';
 import '../datasources/auth_remote_datasource.dart';
 import '../models/auth_session_model.dart';
+import '../models/auth_user_model.dart';
 import '../models/login_request.dart';
 import '../models/login_role_model.dart';
 import '../models/login_user_model.dart';
@@ -26,6 +32,10 @@ class AuthRepository {
   final ConnectivityService _connectivity;
   final ApiClient _apiClient;
 
+  /// Briefly ignore Reverb `force.logout` after a same-user credential verify
+  /// (API revokes the old token and broadcasts logout).
+  DateTime? _suppressForceLogoutUntil;
+
   List<LoginUserModel> get cachedUsers => _local.readLoginUsers();
 
   List<LoginRoleModel> get cachedRoles => _local.readLoginRoles();
@@ -35,6 +45,15 @@ class AuthRepository {
   bool get isAuthenticated {
     final token = cachedSession?.token ?? _local.readToken();
     return token != null && token.isNotEmpty;
+  }
+
+  /// True while [verifyCredentials] is refreshing the current user's session.
+  bool get shouldSuppressForceLogout {
+    final until = _suppressForceLogoutUntil;
+    if (until == null) return false;
+    if (DateTime.now().isBefore(until)) return true;
+    _suppressForceLogoutUntil = null;
+    return false;
   }
 
   List<UserSuggestion> get cachedUserSuggestions =>
@@ -133,8 +152,14 @@ class AuthRepository {
     return session;
   }
 
-  /// Validates credentials for delete/offer. Returns the token for one-shot use.
-  /// Does not replace the logged-in waiter session.
+  /// Validates credentials for delete/offer authorization.
+  ///
+  /// - Same user already logged in on this device: refresh the local session
+  ///   (API requires `force_login` when a session exists) so authorize works
+  ///   without showing "already logged in" and without logging this device out.
+  /// - Different user (manager on waiter phone): prefer `force_login: false`;
+  ///   if the account is already connected elsewhere, fall back to a one-shot
+  ///   `force_login: true` token without replacing the waiter session.
   Future<AuthSessionModel> verifyCredentials({
     required String userOrId,
     required String passcode,
@@ -146,15 +171,81 @@ class AuthRepository {
       );
     }
 
-    return _remote.login(
-      LoginRequest(
-        type: 'passcode',
-        userOrId: userOrId,
-        passcode: passcode,
-        forceLogin: true,
-      ),
-      skipAuth: true,
-    );
+    final current = cachedSession;
+    final isCurrentUser =
+        current != null && _sessionMatchesUserOrId(current.user, userOrId);
+
+    if (isCurrentUser) {
+      _suppressForceLogoutUntil =
+          DateTime.now().add(const Duration(seconds: 8));
+      try {
+        final session = await _remote.login(
+          LoginRequest(
+            type: 'passcode',
+            userOrId: userOrId,
+            passcode: passcode,
+            forceLogin: true,
+          ),
+          skipAuth: true,
+        );
+        // force_login revoked the previous token — keep this device alive.
+        await _local.saveSession(session);
+        _apiClient.setAuthToken(session.token);
+        logAuthToken(session.token, source: 'verify_credentials_same_user');
+        if (Get.isRegistered<ReverbRealtimeService>()) {
+          unawaited(Get.find<ReverbRealtimeService>().start());
+        }
+        return session;
+      } catch (_) {
+        _suppressForceLogoutUntil = null;
+        rethrow;
+      }
+    }
+
+    try {
+      return await _remote.login(
+        LoginRequest(
+          type: 'passcode',
+          userOrId: userOrId,
+          passcode: passcode,
+          forceLogin: false,
+        ),
+        skipAuth: true,
+      );
+    } on ApiException catch (e) {
+      if (!_isAlreadyLoggedInElsewhere(e)) rethrow;
+      // One-shot authorizer token only — do not replace the waiter session.
+      return _remote.login(
+        LoginRequest(
+          type: 'passcode',
+          userOrId: userOrId,
+          passcode: passcode,
+          forceLogin: true,
+        ),
+        skipAuth: true,
+      );
+    }
+  }
+
+  static bool _sessionMatchesUserOrId(AuthUserModel user, String userOrId) {
+    final q = userOrId.trim().toLowerCase();
+    if (q.isEmpty) return false;
+    if (user.id.toString() == q) return true;
+    final username = user.username?.trim().toLowerCase() ?? '';
+    if (username.isNotEmpty && username == q) return true;
+    if (user.name.trim().toLowerCase() == q) return true;
+    return false;
+  }
+
+  static bool _isAlreadyLoggedInElsewhere(ApiException error) {
+    final message = error.message.toLowerCase();
+    return message.contains('already logged in') ||
+        message.contains('déjà connect') ||
+        message.contains('deja connect') ||
+        message.contains('another device') ||
+        message.contains('autre appareil') ||
+        message.contains('autre device') ||
+        message.contains('autre session');
   }
 
   /// Restores the saved auth token into [ApiClient] after a cold start.
@@ -173,6 +264,7 @@ class AuthRepository {
   }
 
   Future<void> logout() async {
+    _suppressForceLogoutUntil = null;
     await _local.clearSession();
     _apiClient.setAuthToken(null);
     logAuthTokenCleared(source: 'logout');

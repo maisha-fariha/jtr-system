@@ -195,7 +195,7 @@ class _CancelTableDialogState extends State<CancelTableDialog> {
       error: _error,
       onBack: () => Navigator.of(context, rootNavigator: true).pop(),
       onSubmit: _submit,
-      submitLabel: 'Se connecter',
+      submitLabel: 'Valider',
       fieldWidthBuilder: (fieldWidth) => UserIdentifiantSuggestionsOverlay(
         controller: _identifiantFieldController,
         fieldWidth: fieldWidth,

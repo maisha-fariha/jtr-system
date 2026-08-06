@@ -301,6 +301,7 @@ class SessionController extends GetxController {
   }
 
   Future<void> openStatistics() async {
+    if (!canAccessStatistics) return;
     selectAction(SessionAction.statistics);
     await loadDayStatistics();
     // Warm paid-orders cache while the user views KPIs (non-blocking).
@@ -1188,6 +1189,16 @@ class SessionController extends GetxController {
     final selected = tableUiState.value.selectedRow;
     return selected != null && selected.productIndex == null;
   }
+
+  /// `access-print-button` — session / table-details Ticket actions.
+  bool get canPrintTicket => PosPermissions.canPrintTicket(
+        _authRepository.cachedSession?.user,
+      );
+
+  /// `access-dashboard` — Statistics section.
+  bool get canAccessStatistics => PosPermissions.canAccessStatistics(
+        _authRepository.cachedSession?.user,
+      );
 
   void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
@@ -2086,6 +2097,7 @@ class SessionController extends GetxController {
   }
 
   Future<void> printTicket({required BuildContext context}) async {
+    if (!canPrintTicket) return;
     if (!hasTableSelected) {
       _showSnack(
         'Sélection requise',

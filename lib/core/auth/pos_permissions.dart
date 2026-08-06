@@ -10,6 +10,7 @@ class PosPermissions {
   // Order
   static const accessStockVisual = 'access-stock-visual';
   static const accessCloseDay = 'access-close-day';
+  static const accessPrintButton = 'access-print-button';
 
   // Table
   static const accessEditTableDetails = 'access-edit-table-details';
@@ -64,6 +65,30 @@ class PosPermissions {
 
     final keys = keysFromUser(user);
     return keys.contains(accessStockVisual);
+  }
+
+  /// True when the user may print / ticket (session + table-details).
+  static bool canPrintTicket(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+
+    return keysFromUser(user).contains(accessPrintButton);
+  }
+
+  /// True when the user may open payment (cash / card).
+  static bool canAccessPayment(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+
+    return keysFromUser(user).contains(accessPaymentButton);
+  }
+
+  /// True when the user may open Statistics.
+  static bool canAccessStatistics(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+
+    return keysFromUser(user).contains(accessDashboard);
   }
 
   /// Manager / cashier / admin: see every waiter's open (and paid) orders.

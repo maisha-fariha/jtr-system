@@ -896,6 +896,18 @@ class _ActionButtons extends GetView<SessionController> {
     ),
   ];
 
+  bool _isActionEnabled(SessionAction action) {
+    switch (action) {
+      case SessionAction.ticket:
+        return controller.canPrintTicket;
+      case SessionAction.statistics:
+        return controller.canAccessStatistics;
+      case SessionAction.nouvelleCommande:
+      case SessionAction.demanderSuite:
+        return true;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -907,35 +919,45 @@ class _ActionButtons extends GetView<SessionController> {
         bottom: 8,
       ),
       child: Obx(
-        () => Row(
-          children: [
-            for (var i = 0; i < _actions.length; i++) ...[
-              if (i > 0) JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
-              Expanded(
-                child: _ActionButton(
-                  label: _actions[i].label,
-                  icon: _actions[i].icon,
-                  iconSize: _actions[i].iconSize,
-                  isActive: controller.selectedAction.value == _actions[i].action,
-                  onTap: () {
-                    final action = _actions[i].action;
-                    if (action == SessionAction.ticket) {
-                      controller.printTicket(context: context);
-                    } else if (action == SessionAction.nouvelleCommande) {
-                      controller.showTableNumberDialog(context: context);
-                    } else if (action == SessionAction.demanderSuite) {
-                      controller.requestNextCourse(context: context);
-                    } else if (action == SessionAction.statistics) {
-                      controller.openStatistics();
-                    } else {
-                      controller.selectAction(action);
-                    }
-                  },
+        () {
+          // Touch selection so Obx rebuilds with action highlight.
+          controller.selectedAction.value;
+
+          return Row(
+            children: [
+              for (var i = 0; i < _actions.length; i++) ...[
+                if (i > 0)
+                  JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+                Expanded(
+                  child: _ActionButton(
+                    label: _actions[i].label,
+                    icon: _actions[i].icon,
+                    iconSize: _actions[i].iconSize,
+                    isActive: controller.selectedAction.value ==
+                            _actions[i].action &&
+                        _isActionEnabled(_actions[i].action),
+                    isEnabled: _isActionEnabled(_actions[i].action),
+                    onTap: () {
+                      final action = _actions[i].action;
+                      if (!_isActionEnabled(action)) return;
+                      if (action == SessionAction.ticket) {
+                        controller.printTicket(context: context);
+                      } else if (action == SessionAction.nouvelleCommande) {
+                        controller.showTableNumberDialog(context: context);
+                      } else if (action == SessionAction.demanderSuite) {
+                        controller.requestNextCourse(context: context);
+                      } else if (action == SessionAction.statistics) {
+                        controller.openStatistics();
+                      } else {
+                        controller.selectAction(action);
+                      }
+                    },
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -948,26 +970,38 @@ class _ActionButton extends StatelessWidget {
     required this.iconSize,
     required this.isActive,
     required this.onTap,
+    this.isEnabled = true,
   });
 
   final String label;
   final IconData icon;
   final double iconSize;
   final bool isActive;
+  final bool isEnabled;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final backgroundColor =
-        isActive ? AppTheme.primary : AppTheme.inactiveSurface;
-    final labelColor = isActive ? Colors.white : AppTheme.darkText;
-    final iconColor = isActive
-        ? Colors.white
-        : AppTheme.toolbarIconColor(icon);
-    final responsiveIconSize = JtrResponsive.getResponsiveSize(context, iconSize);
+    final backgroundColor = !isEnabled
+        ? AppTheme.inactiveSurface.withValues(alpha: 0.55)
+        : isActive
+            ? AppTheme.primary
+            : AppTheme.inactiveSurface;
+    final labelColor = !isEnabled
+        ? AppTheme.darkText.withValues(alpha: 0.35)
+        : isActive
+            ? Colors.white
+            : AppTheme.darkText;
+    final iconColor = !isEnabled
+        ? AppTheme.darkText.withValues(alpha: 0.35)
+        : isActive
+            ? Colors.white
+            : AppTheme.toolbarIconColor(icon);
+    final responsiveIconSize =
+        JtrResponsive.getResponsiveSize(context, iconSize);
 
     return GestureDetector(
-      onTap: onTap,
+      onTap: isEnabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         height: JtrResponsive.adaptiveHeight(context, 110, compact: 78),
@@ -981,26 +1015,28 @@ class _ActionButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(
             JtrResponsive.getResponsiveRadius(context, 16),
           ),
-          boxShadow: isActive
-              ? [
-                  BoxShadow(
-                    color: AppTheme.primary.withValues(alpha: 0.35),
-                    blurRadius: 10,
-                    offset: const Offset(0, 4),
-                  ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.03),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
+          boxShadow: !isEnabled
+              ? null
+              : isActive
+                  ? [
+                      BoxShadow(
+                        color: AppTheme.primary.withValues(alpha: 0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.03),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            if (isActive)
+            if (isActive && isEnabled)
               Container(
                 width: JtrResponsive.getResponsiveSize(context, 44),
                 height: JtrResponsive.getResponsiveSize(context, 44),

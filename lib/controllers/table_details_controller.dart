@@ -1217,6 +1217,7 @@ class TableDetailsController extends GetxController {
   }
 
   void togglePaymentOptions() {
+    if (!hasPaymentAccess) return;
     final show = !showPaymentOptions.value;
     showPaymentOptions.value = show;
     if (show) {
@@ -1277,6 +1278,7 @@ class TableDetailsController extends GetxController {
   bool get isPayingCard => payingIsCash.value == false;
 
   bool get canPay =>
+      hasPaymentAccess &&
       resolvedOrderId != null &&
       (order?.products.isNotEmpty ?? false) &&
       !isPaying &&
@@ -1317,6 +1319,22 @@ class TableDetailsController extends GetxController {
   bool get hasStockVisualAccess {
     if (!Get.isRegistered<AuthRepository>()) return false;
     return PosPermissions.canAccessStockVisual(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// `access-print-button` (or superuser) — ticket print control.
+  bool get hasPrintTicketAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canPrintTicket(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// `access-payment-button` (or superuser) — payment toolbar control.
+  bool get hasPaymentAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canAccessPayment(
       Get.find<AuthRepository>().cachedSession?.user,
     );
   }
@@ -1597,6 +1615,7 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.receipt_long_outlined) {
+      if (!hasPrintTicketAccess) return;
       printTicket(context: context);
       return;
     }
@@ -1607,6 +1626,7 @@ class TableDetailsController extends GetxController {
     }
 
     if (icon == Icons.payments_outlined) {
+      if (!hasPaymentAccess) return;
       togglePaymentOptions();
       return;
     }
@@ -1619,10 +1639,16 @@ class TableDetailsController extends GetxController {
   bool isToolbarIconEnabled(IconData icon) {
     // Offered order: only ticket, payment, and send stay available.
     if (isOrderOffered) {
-      if (icon == Icons.receipt_long_outlined) return true;
-      if (icon == Icons.payments_outlined) return true;
+      if (icon == Icons.receipt_long_outlined) return hasPrintTicketAccess;
+      if (icon == Icons.payments_outlined) return hasPaymentAccess;
       if (icon == Icons.send_outlined) return canSendToKitchen;
       return false;
+    }
+    if (icon == Icons.receipt_long_outlined) {
+      return hasPrintTicketAccess;
+    }
+    if (icon == Icons.payments_outlined) {
+      return hasPaymentAccess;
     }
     if (icon == Icons.inventory_2_outlined) {
       return canToggleStockVisual || isStockVisualMode;
@@ -1637,6 +1663,7 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> printTicket({required BuildContext context}) async {
+    if (!hasPrintTicketAccess) return;
     final id = await _ensureResolvedOrderId();
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');

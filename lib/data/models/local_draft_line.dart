@@ -8,6 +8,7 @@ class LocalDraftLine {
     this.comment = '',
     this.courseNumber = 1,
     this.seatNumber = 1,
+    this.isOffered = false,
   });
 
   final int productId;
@@ -17,6 +18,7 @@ class LocalDraftLine {
   final String comment;
   final int courseNumber;
   final int seatNumber;
+  final bool isOffered;
 
   LocalDraftLine copyWith({
     int? productId,
@@ -26,6 +28,7 @@ class LocalDraftLine {
     String? comment,
     int? courseNumber,
     int? seatNumber,
+    bool? isOffered,
   }) {
     return LocalDraftLine(
       productId: productId ?? this.productId,
@@ -35,6 +38,7 @@ class LocalDraftLine {
       comment: comment ?? this.comment,
       courseNumber: courseNumber ?? this.courseNumber,
       seatNumber: seatNumber ?? this.seatNumber,
+      isOffered: isOffered ?? this.isOffered,
     );
   }
 }

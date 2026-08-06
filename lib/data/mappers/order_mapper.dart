@@ -3666,6 +3666,81 @@ class OrderMapper {
     );
   }
 
+  /// Keep `is_offer` from the detail we PUT when GET omits / resets the flag.
+  static SessionOrder overlayOfferFlagsFromDetail({
+    required SessionOrder order,
+    required Map<String, dynamic> sourceDetail,
+  }) {
+    final offeredByItemId = <int>{};
+    final offeredByLineIndex = <int>{};
+    var lineIndex = 0;
+    final seatOrders = sourceDetail['seat_orders'];
+    if (seatOrders is List) {
+      for (final seat in seatOrders) {
+        if (seat is! Map<String, dynamic>) continue;
+        for (final course in _sortedCoursesList(seat['courses'])) {
+          for (final item in _visibleItemsInStableAddOrder(course['items'])) {
+            if (_isOfferedLineItem(item)) {
+              final id = (item['id'] as num?)?.toInt() ?? 0;
+              if (id > 0) {
+                offeredByItemId.add(id);
+              } else {
+                offeredByLineIndex.add(lineIndex);
+              }
+            }
+            lineIndex++;
+          }
+        }
+      }
+    }
+
+    if (offeredByItemId.isEmpty && offeredByLineIndex.isEmpty) return order;
+
+    OrderProduct patchProduct(
+      OrderProduct product, {
+      required int index,
+      int? itemId,
+    }) {
+      final offered = (itemId != null &&
+              itemId > 0 &&
+              offeredByItemId.contains(itemId)) ||
+          offeredByLineIndex.contains(index);
+      if (!offered || product.isOffered) return product;
+      return product.copyWith(isOffered: true, price: '0,00 €');
+    }
+
+    final patchedEntries = [
+      for (final entry in order.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: patchProduct(
+              entry.product!,
+              index: entry.lineIndex ?? 0,
+              itemId: entry.itemId,
+            ),
+            lineIndex: entry.lineIndex ?? 0,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+
+    final patchedProducts = [
+      for (final entry in patchedEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          entry.product!,
+    ];
+
+    return order.copyWith(
+      products: patchedProducts.isNotEmpty ? patchedProducts : order.products,
+      displayEntries: patchedEntries,
+    );
+  }
+
   static List<OrderDisplayEntry> _rebuildEntriesKeepingDividers({
     required List<OrderDisplayEntry> next,
     required Map<int?, List<OrderDisplayEntry>> productsByCourse,
@@ -3901,11 +3976,7 @@ class OrderMapper {
             courseCopy['items'] = items.map((item) {
               if (item is! Map<String, dynamic>) return item;
               final itemCopy = Map<String, dynamic>.from(item);
-              itemCopy['is_offer'] = true;
-              itemCopy['offer_reason'] = 'Table offerte';
-              itemCopy['offer_datetime'] =
-                  DateTime.now().toUtc().toIso8601String();
-              itemCopy['sub_total'] = '0.00';
+              _markItemAsOffer(itemCopy, reason: 'Table offerte');
               return itemCopy;
             }).toList();
           }
@@ -4146,11 +4217,12 @@ class OrderMapper {
                 courseId: 0,
                 productId: line.productId,
                 qty: line.qty,
-                subTotal: line.unitPrice * line.qty,
+                subTotal: line.isOffered ? 0 : line.unitPrice * line.qty,
                 status: 'to_be_continued',
                 comment: line.comment,
                 menuSelections: line.menuSelections,
                 forCreate: true,
+                isOffer: line.isOffered,
               ),
           ],
         },
@@ -4297,7 +4369,11 @@ class OrderMapper {
         mutateVisibleItemByItemId(working, itemId, (item) {
           final qty = draft.qty < 1 ? 1 : draft.qty;
           item['qty'] = qty;
-          item['sub_total'] = draft.unitPrice * qty;
+          if (draft.isOffered) {
+            _markItemAsOffer(item);
+          } else {
+            item['sub_total'] = draft.unitPrice * qty;
+          }
           final comment = draft.comment.trim();
           if (comment.isNotEmpty) {
             item['comment'] = comment;
@@ -4314,6 +4390,7 @@ class OrderMapper {
         seatNumber: seatNumber,
         courseNumber: courseNumber,
       );
+      final qty = draft.qty < 1 ? 1 : draft.qty;
 
       _appendItemToSeatOrders(
         working,
@@ -4323,13 +4400,14 @@ class OrderMapper {
           seatNumber: seatNumber,
           courseId: courseId,
           productId: draft.productId,
-          qty: draft.qty < 1 ? 1 : draft.qty,
-          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          qty: qty,
+          subTotal: draft.isOffered ? 0 : draft.unitPrice * qty,
           status: itemStatus,
           comment: draft.comment,
           menuSelections: draft.menuSelections,
           isStillMenuMissing: false,
           forCreate: false,
+          isOffer: draft.isOffered,
         ),
       );
     }
@@ -4344,6 +4422,7 @@ class OrderMapper {
       );
       final course = findCourseInOrderDetail(working, courseNumber);
       final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
+      final qty = draft.qty < 1 ? 1 : draft.qty;
       _appendItemToSeatOrders(
         working,
         seatNumber: seatNumber,
@@ -4352,8 +4431,8 @@ class OrderMapper {
           seatNumber: seatNumber,
           courseId: courseId,
           productId: draft.productId,
-          qty: draft.qty < 1 ? 1 : draft.qty,
-          subTotal: draft.unitPrice * (draft.qty < 1 ? 1 : draft.qty),
+          qty: qty,
+          subTotal: draft.isOffered ? 0 : draft.unitPrice * qty,
           status: _resolveAppendItemStatus(
             working,
             seatNumber: seatNumber,
@@ -4363,6 +4442,7 @@ class OrderMapper {
           menuSelections: draft.menuSelections,
           isStillMenuMissing: false,
           forCreate: false,
+          isOffer: draft.isOffered,
         ),
       );
     }
@@ -7009,6 +7089,19 @@ class OrderMapper {
     return reason.isNotEmpty;
   }
 
+  /// API field is `is_offer` (Postman). Also set `is_offered` for clients that
+  /// read that alias. Zeroes [sub_total].
+  static void _markItemAsOffer(
+    Map<String, dynamic> item, {
+    String reason = 'Article offert',
+  }) {
+    item['is_offer'] = true;
+    item['is_offered'] = true;
+    item['offer_reason'] = reason;
+    item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
+    item['sub_total'] = '0.00';
+  }
+
   /// True when the ticket has a non-cancelled line that is not create-seed.
   static bool hasRealNonSeedVisibleItems(
     Map<String, dynamic> orderDetail, {
@@ -7319,12 +7412,7 @@ class OrderMapper {
     required int lineIndex,
   }) {
     // Mutates [orderDetail] in place — caller should pass a deep copy.
-    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
-      item['is_offer'] = true;
-      item['offer_reason'] = 'Article offert';
-      item['offer_datetime'] = DateTime.now().toUtc().toIso8601String();
-      item['sub_total'] = '0.00';
-    });
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, _markItemAsOffer);
     final payload = buildOrderUpdatePayload(orderDetail);
     final status = orderDetail['status']?.toString().trim().toLowerCase();
     payload['status'] = (status == null ||
@@ -8361,21 +8449,24 @@ class OrderMapper {
 
   /// After Send, GET often returns menu_selections as ids only — keep the
   /// waiter's CHOIX labels from the live ticket when the server has none.
+  /// Also keep a local `isOffered` until the API echoes `is_offer`.
   static OrderProduct _productKeepingLiveMenuLabels({
     required OrderProduct live,
     OrderProduct? server,
   }) {
     if (server == null) return live;
+    var result = server;
     if (server.menuItems.isEmpty && live.menuItems.isNotEmpty) {
-      return server.copyWith(menuItems: List<String>.from(live.menuItems));
-    }
-    // Prefer richer live labels when both are non-empty but server is thinner.
-    if (live.menuItems.isNotEmpty &&
+      result = result.copyWith(menuItems: List<String>.from(live.menuItems));
+    } else if (live.menuItems.isNotEmpty &&
         server.menuItems.isNotEmpty &&
         live.menuItems.length > server.menuItems.length) {
-      return server.copyWith(menuItems: List<String>.from(live.menuItems));
+      result = result.copyWith(menuItems: List<String>.from(live.menuItems));
     }
-    return server;
+    if (live.isOffered && !result.isOffered) {
+      result = result.copyWith(isOffered: true, price: '0,00 €');
+    }
+    return result;
   }
 
   static OrderProduct orderProductFromItem(Map<String, dynamic> item) {
@@ -8454,12 +8545,13 @@ class OrderMapper {
     }
 
     final existingUid = item['uid'];
+    final isOffer = _isOfferedLineItem(item);
     return _buildNewItemPayload(
       seatNumber: (item['seat_number'] as num?)?.toInt() ?? 1,
       courseId: (item['course_id'] as num?)?.toInt(),
       productId: _itemProductId(item),
       qty: (item['qty'] as num?)?.toInt() ?? 1,
-      subTotal: _parseMoney(item['sub_total']),
+      subTotal: isOffer ? 0 : _parseMoney(item['sub_total']),
       status: item['status'] as String? ?? 'to_be_continued',
       comment: item['comment'] as String? ?? '',
       menuSelections: item['menu_selections'] is List
@@ -8470,6 +8562,7 @@ class OrderMapper {
       isStillMenuMissing: item['is_still_menu_missing'] == true,
       forCreate: false,
       uid: existingUid is String && existingUid.isNotEmpty ? existingUid : null,
+      isOffer: isOffer,
     );
   }
 
@@ -8485,16 +8578,18 @@ class OrderMapper {
     bool isStillMenuMissing = false,
     bool forCreate = false,
     String? uid,
+    bool isOffer = false,
   }) {
     final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
+    final effectiveSubTotal = isOffer ? 0.0 : subTotal;
 
-    return {
+    final payload = <String, dynamic>{
       'id': 0,
       'uid': uid ?? generateOrderItemUid(),
       'seat_number': seatNumber,
       'course_id': forCreate ? 0 : (courseId ?? 0),
       'product': {'id': productId},
-      'sub_total': subTotal,
+      'sub_total': effectiveSubTotal,
       'qty': qty,
       'comment': comment,
       'status': status,
@@ -8504,6 +8599,10 @@ class OrderMapper {
       // Stable sort key before the API assigns a real timestamp/id.
       'created_at': DateTime.now().toUtc().toIso8601String(),
     };
+    if (isOffer) {
+      _markItemAsOffer(payload);
+    }
+    return payload;
   }
 
   static int _itemProductId(Map<String, dynamic> item) {

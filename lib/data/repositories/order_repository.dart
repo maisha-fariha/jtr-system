@@ -4827,6 +4827,12 @@ class OrderRepository {
       );
     }
 
+    // GET often omits is_offer after PUT — keep flags from the detail we sent.
+    order = OrderMapper.overlayOfferFlagsFromDetail(
+      order: order,
+      sourceDetail: localMutated,
+    );
+
     // Last resort: never return an empty SessionOrder when we still have lines.
     if (order.products.isEmpty && localCount > 0) {
       final fallback = OrderMapper.fromOrderDetail(
@@ -4837,12 +4843,16 @@ class OrderRepository {
         demandedSectionIndices: suivreHints.demandedSections,
       );
       await _persistSuivreLayoutHints(orderId, fallback.displayEntries);
-      return overlayCommentsFromMutated
+      final withComments = overlayCommentsFromMutated
           ? OrderMapper.overlayCommentsFromDetail(
               order: fallback,
               sourceDetail: localMutated,
             )
           : fallback;
+      return OrderMapper.overlayOfferFlagsFromDetail(
+        order: withComments,
+        sourceDetail: localMutated,
+      );
     }
 
     await _persistSuivreLayoutHints(orderId, order.displayEntries);

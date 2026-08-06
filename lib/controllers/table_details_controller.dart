@@ -3249,16 +3249,22 @@ class TableDetailsController extends GetxController {
   }
 
   void _applyLocalProductOffer(SessionOrder currentOrder, int productIndex) {
+    final offered = currentOrder.products[productIndex].copyWith(
+      isOffered: true,
+      price: '0,00 €',
+    );
     final updatedProducts = [...currentOrder.products];
-    updatedProducts[productIndex] =
-        updatedProducts[productIndex].copyWith(isOffered: true);
+    updatedProducts[productIndex] = offered;
     final updatedEntries = [
       for (final entry in currentOrder.displayEntries)
         if (entry.type == OrderDisplayEntryType.product &&
             entry.lineIndex == productIndex &&
             entry.product != null)
           OrderDisplayEntry.product(
-            product: entry.product!.copyWith(isOffered: true),
+            product: entry.product!.copyWith(
+              isOffered: true,
+              price: '0,00 €',
+            ),
             lineIndex: productIndex,
             sectionIndex: entry.sectionIndex ?? 0,
             courseNumber: entry.courseNumber,
@@ -3267,6 +3273,13 @@ class TableDetailsController extends GetxController {
         else
           entry,
     ];
+    // Keep draft in sync so Send PUT includes `is_offer`.
+    if (productIndex >= 0 && productIndex < _localDraftLines.length) {
+      _localDraftLines[productIndex] = _localDraftLines[productIndex].copyWith(
+        isOffered: true,
+        unitPrice: 0,
+      );
+    }
     _syncOrderInSession(
       currentOrder.copyWith(
         products: updatedProducts,
@@ -3306,20 +3319,27 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    // New / local-first tickets: offer stays on-device (no remote id yet).
-    if (_mutationsAreLocalOnly ||
+    // Optimistic UI + draft flag for next Send (local-first tickets).
+    _applyLocalProductOffer(currentOrder, productIndex);
+
+    final id = resolvedOrderId;
+    if (id == null ||
+        id <= 0 ||
         _isLocalDraft ||
         currentOrder.isLocalOnly) {
-      _applyLocalProductOffer(currentOrder, productIndex);
       return;
     }
 
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      // Creating a new order → details: never toast "order id not found".
-      _applyLocalProductOffer(currentOrder, productIndex);
-      return;
+    // Server-backed line → PUT `is_offer` immediately (don't wait for Send).
+    var serverItemId = 0;
+    for (final entry in currentOrder.displayEntries) {
+      if (entry.type == OrderDisplayEntryType.product &&
+          entry.lineIndex == productIndex) {
+        serverItemId = entry.itemId ?? 0;
+        break;
+      }
     }
+    if (serverItemId <= 0) return;
 
     isAddingProduct.value = true;
     try {
@@ -3328,20 +3348,10 @@ class TableDetailsController extends GetxController {
         lineIndex: productIndex,
       );
       _syncOrderInSession(updated, orderNumber);
-      AppSnackbar.show(
-        'Offert',
-        '${currentOrder.products[productIndex].name} a été offert.',
-        snackPosition: SnackPosition.BOTTOM,
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 2),
-      );
     } on ApiException catch (e) {
       debugPrint(_orderRepository.lastAddItemLog);
-      // Offer on a fresh/retired id: keep local offer, hide not-found noise.
-      if (_isOrderIdNotFoundError(e)) {
-        _applyLocalProductOffer(currentOrder, productIndex);
-        return;
-      }
+      // Local offer already applied — ignore not-found; surface other errors.
+      if (_isOrderIdNotFoundError(e)) return;
       ApiDebugDialog.show(title: 'Erreur offre', body: e.message);
     } catch (_) {
       AppSnackbar.show('Erreur', 'Impossible d\'offrir l\'article.');
@@ -4212,15 +4222,18 @@ class TableDetailsController extends GetxController {
       rebuilt.add(
         LocalDraftLine(
           productId: productId,
-          unitPrice: qty > 0
-              ? lineTotal / qty
-              : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0),
+          unitPrice: line.isOffered
+              ? 0
+              : (qty > 0
+                  ? lineTotal / qty
+                  : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0)),
           qty: qty,
           courseNumber: course > 0 ? course : 1,
           menuSelections: tracked?.menuSelections ?? const [],
           comment: line.message?.trim().isNotEmpty == true
               ? line.message!.trim()
               : (tracked?.comment ?? ''),
+          isOffered: line.isOffered || (tracked?.isOffered ?? false),
         ),
       );
     }

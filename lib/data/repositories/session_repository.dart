@@ -149,6 +149,57 @@ class SessionRepository {
     return tables;
   }
 
+  /// Unscoped open tickets for occupancy / Skip (all waiters).
+  ///
+  /// Prefer [GET /api/days/open-orders]; fall back to unfiltered orders page 1.
+  List<Map<String, dynamic>> _occupancyOpenOrders = const [];
+
+  /// Last occupancy snapshot (may be empty before first warm).
+  List<Map<String, dynamic>> get cachedOccupancyOpenOrders =>
+      List<Map<String, dynamic>>.unmodifiable(_occupancyOpenOrders);
+
+  Future<List<Map<String, dynamic>>> fetchOpenOrdersForOccupancy({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _occupancyOpenOrders.isNotEmpty) {
+      unawaited(_refreshOccupancyOpenOrdersInBackground());
+      return _occupancyOpenOrders;
+    }
+    return _loadOccupancyOpenOrders();
+  }
+
+  /// Force-refresh tables + open orders into memory (for Skip / New Order).
+  Future<void> warmOccupancyCaches() async {
+    await Future.wait<void>([
+      getTablesList(forceRefresh: true).then((_) {}),
+      _loadOccupancyOpenOrders().then((_) {}),
+    ]);
+  }
+
+  Future<List<Map<String, dynamic>>> _loadOccupancyOpenOrders() async {
+    if (!await _connectivity.isOnline) return _occupancyOpenOrders;
+    try {
+      final open = await _remote.fetchOpenOrdersList();
+      if (open.isNotEmpty) {
+        _occupancyOpenOrders = open;
+        return _occupancyOpenOrders;
+      }
+    } catch (_) {}
+    try {
+      final first = await _remote.fetchOrdersFirstPage();
+      _occupancyOpenOrders = first.orders;
+      return _occupancyOpenOrders;
+    } catch (_) {
+      return _occupancyOpenOrders;
+    }
+  }
+
+  Future<void> _refreshOccupancyOpenOrdersInBackground() async {
+    try {
+      await _loadOccupancyOpenOrders();
+    } catch (_) {}
+  }
+
   Future<void> _refreshTablesInBackground() async {
     try {
       if (!await _connectivity.isOnline) return;

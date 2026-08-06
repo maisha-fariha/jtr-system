@@ -44,27 +44,96 @@ class OrderMapper {
 
   /// Resolves the waiter user id on an order or table-session payload.
   static int? waiterIdFromOrderMap(Map<String, dynamic> data) {
-    final direct = data['waiter_id'];
-    if (direct is num) return direct.toInt();
+    int? asId(Object? raw) {
+      if (raw is num) return raw.toInt();
+      if (raw is String) return int.tryParse(raw.trim());
+      return null;
+    }
+
+    final direct = asId(data['waiter_id']);
+    if (direct != null && direct > 0) return direct;
 
     final waiter = data['waiter'];
     if (waiter is Map<String, dynamic>) {
-      final id = waiter['id'];
-      if (id is num) return id.toInt();
+      final id = asId(waiter['id']);
+      if (id != null && id > 0) return id;
     }
 
     final session = data['session'];
     if (session is Map<String, dynamic>) {
-      final sessionWaiterId = session['waiter_id'];
-      if (sessionWaiterId is num) return sessionWaiterId.toInt();
+      final sessionWaiterId = asId(session['waiter_id']);
+      if (sessionWaiterId != null && sessionWaiterId > 0) {
+        return sessionWaiterId;
+      }
 
       final sessionWaiter = session['waiter'];
       if (sessionWaiter is Map<String, dynamic>) {
-        final id = sessionWaiter['id'];
-        if (id is num) return id.toInt();
+        final id = asId(sessionWaiter['id']);
+        if (id != null && id > 0) return id;
       }
     }
 
+    final createdBy = asId(data['created_by']);
+    if (createdBy != null && createdBy > 0) return createdBy;
+
+    return null;
+  }
+
+  /// True when [order] is a **pending** ticket on [tableNumber] owned by
+  /// someone other than [waiterId] (or owner unknown).
+  ///
+  /// Payment fields are ignored — backend moves paid tickets off `pending`.
+  static bool openOrderBlocksOtherWaiterCreate(
+    Map<String, dynamic> order, {
+    required String tableNumber,
+    required int waiterId,
+  }) {
+    if (waiterId <= 0) return false;
+    if (!isPendingOrderStatus(order)) return false;
+
+    final orderTable = _tableNumberFromOrderOrTableMap(order);
+    if (orderTable == null || orderTable.isEmpty) return false;
+    if (normalizeTableKey(orderTable) != normalizeTableKey(tableNumber)) {
+      return false;
+    }
+
+    final owner = waiterIdFromOrderMap(order);
+    if (owner == null || owner <= 0) return true;
+    return owner != waiterId;
+  }
+
+  /// True when any open-order row blocks create for [waiterId] on [tableNumber].
+  static bool hasForeignOpenOrderOnTable(
+    List<Map<String, dynamic>> openOrders,
+    String tableNumber, {
+    required int waiterId,
+  }) {
+    for (final order in openOrders) {
+      if (openOrderBlocksOtherWaiterCreate(
+        order,
+        tableNumber: tableNumber,
+        waiterId: waiterId,
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static String? _tableNumberFromOrderOrTableMap(Map<String, dynamic> data) {
+    final direct = data['table_number'] ?? data['number'];
+    if (direct != null) {
+      final text = direct.toString().trim();
+      if (text.isNotEmpty) return text;
+    }
+    final table = data['table'];
+    if (table is Map<String, dynamic>) {
+      final nested = table['table_number'] ?? table['number'];
+      if (nested != null) {
+        final text = nested.toString().trim();
+        if (text.isNotEmpty) return text;
+      }
+    }
     return null;
   }
 
@@ -444,9 +513,9 @@ class OrderMapper {
     return waiterIdFromOrderMap(table);
   }
 
-  /// Waiter assigned to the table's active order (if any).
+  /// Waiter assigned to the table's pending active order (if any).
   ///
-  /// Ignores paid/closed leftovers — those must not keep the table "owned".
+  /// Non-pending leftovers are ignored — those must not keep the table "owned".
   static int? activeOrderOwnerId(
     List<Map<String, dynamic>> tables,
     String tableNumber,
@@ -489,14 +558,17 @@ class OrderMapper {
 
   /// True when [active_order] still blocks opening a new ticket.
   ///
-  /// Paid / closed / cancelled tickets free the table for another order.
+  /// Only `pending` blocks. Payment is ignored — backend changes status when paid.
   static bool activeOrderBlocksNewCreate(Map<String, dynamic> active) {
     final id = (active['id'] as num?)?.toInt() ?? 0;
     if (id <= 0) return false;
-    if (isOrderFullyPaid(active) || isOrderClosedOrCancelled(active)) {
-      return false;
-    }
-    return true;
+    return isPendingOrderStatus(active);
+  }
+
+  /// `status == pending` (case-insensitive). Used for Skip / occupancy only.
+  static bool isPendingOrderStatus(Map<String, dynamic> orderOrActive) {
+    final status = orderOrActive['status']?.toString().trim().toLowerCase();
+    return status == 'pending';
   }
 
   /// Active order id only when it still blocks a new create.
@@ -507,9 +579,10 @@ class OrderMapper {
     return (activeOrder['id'] as num?)?.toInt();
   }
 
-  /// True when another waiter owns this table's **open** order/session.
+  /// True when another waiter owns this table's **pending** order/session.
   ///
-  /// Paid/closed [active_order] leftovers are ignored so a new ticket can start.
+  /// Non-pending [active_order] leftovers are ignored (backend changes status
+  /// when paid). Payment fields are not consulted.
   static bool isAssignedToOtherWaiter(
     List<Map<String, dynamic>> tables,
     String tableNumber, {
@@ -527,18 +600,14 @@ class OrderMapper {
 
     for (final table in _tablesMatchingNumber(tables, normalized)) {
       final active = table['active_order'];
-      if (active is Map<String, dynamic> &&
-          !activeOrderBlocksNewCreate(active)) {
-        // Stale paid/closed ticket — do not treat as occupied.
-        continue;
-      }
+      final nonPendingLeftover = active is Map<String, dynamic> &&
+          !activeOrderBlocksNewCreate(active);
 
       final sessionOwner = tableSessionOwnerId(table);
       if (sessionOwner != null &&
           sessionOwner > 0 &&
           sessionOwner != waiterId) {
-        // Other waiter holds lock/session or is listed on the table row.
-        if (_blockingActiveOrderId(table) != null ||
+        if ((!nonPendingLeftover && _blockingActiveOrderId(table) != null) ||
             hasOrphanSessionWithoutOrder(table) ||
             table['is_locked'] == true ||
             table['status'] == 'open') {
@@ -546,35 +615,28 @@ class OrderMapper {
         }
       }
 
-      // Blocking active_order present without our waiter id → foreign.
+      if (nonPendingLeftover) continue;
+
+      // Pending active_order: block unless we can prove it is ours.
       if (_blockingActiveOrderId(table) != null) {
-        if (active is Map<String, dynamic>) {
-          final activeWaiter = waiterIdFromOrderMap(active);
-          if (activeWaiter != null &&
-              activeWaiter > 0 &&
-              activeWaiter != waiterId) {
-            return true;
-          }
-          // Has open active order but waiter unknown and not reclaimable by us.
-          if (activeWaiter == null || activeWaiter <= 0) {
-            final lockedBy = table['locked_by'];
-            if (lockedBy is num &&
-                lockedBy.toInt() > 0 &&
-                lockedBy.toInt() != waiterId) {
-              return true;
-            }
-          }
+        final activeWaiter = active is Map<String, dynamic>
+            ? waiterIdFromOrderMap(active)
+            : null;
+        final tableWaiter = waiterIdFromOrderMap(table);
+        final owner = activeWaiter ?? tableWaiter ?? sessionOwner;
+        if (owner == null || owner <= 0 || owner != waiterId) {
+          return true;
         }
       }
     }
     return false;
   }
 
-  /// Skip dialog only when another waiter owns an **open** (unpaid) order/session.
+  /// Skip dialog only when another waiter owns a **pending** order/session.
   ///
   /// Own active order / orphan session must never skip — after cancel the tables
   /// list can still show in-use briefly; the create path reclaims or reopens it.
-  /// Paid/closed leftovers must never skip — waiter can create a new order.
+  /// Non-pending leftovers must never skip — backend status is the source of truth.
   static bool shouldShowSkipDialogForCreate(
     List<Map<String, dynamic>> tables,
     String tableNumber, {
@@ -4576,14 +4638,25 @@ class OrderMapper {
     String normalized,
   ) {
     final matches = <Map<String, dynamic>>[];
-    final parsed = int.tryParse(normalized);
+    final key = normalizeTableKey(normalized);
+    final parsed = int.tryParse(key);
 
     for (final table in tables) {
       final number = table['table_number']?.toString() ??
           table['number']?.toString();
-      if (number == normalized) {
+      if (number != null && normalizeTableKey(number) == key) {
         matches.add(table);
         continue;
+      }
+
+      final nested = table['table'];
+      if (nested is Map<String, dynamic>) {
+        final nestedNumber =
+            nested['table_number']?.toString() ?? nested['number']?.toString();
+        if (nestedNumber != null && normalizeTableKey(nestedNumber) == key) {
+          matches.add(table);
+          continue;
+        }
       }
 
       final id = table['id'];

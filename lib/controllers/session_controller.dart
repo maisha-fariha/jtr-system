@@ -163,6 +163,8 @@ class SessionController extends GetxController {
     tablesLockRevision.value = reverb.tablesLockRevision.value;
     _tablesLockWorker = ever<int>(reverb.tablesLockRevision, (rev) {
       tablesLockRevision.value = rev;
+      // Lock changed — refresh occupancy caches in bg for the next Skip check.
+      _startOccupancyWarmInBackground();
     });
   }
 
@@ -215,12 +217,28 @@ class SessionController extends GetxController {
 
   Future<void> _prefetchTables() async {
     try {
-      await _sessionRepository.getTablesList();
+      await _sessionRepository.warmOccupancyCaches();
       _debugLogAssignedTablesOnSessionOpen();
       if (Get.isRegistered<ReverbRealtimeService>()) {
         Get.find<ReverbRealtimeService>().resyncSubscriptions();
       }
     } catch (_) {}
+  }
+
+  /// In-flight occupancy warm — never awaited on table confirm (bg only).
+  Future<void>? _occupancyWarmInFlight;
+
+  /// Refresh tables + open-orders in background. Safe to call often.
+  void _startOccupancyWarmInBackground() {
+    if (_occupancyWarmInFlight != null) return;
+    _occupancyWarmInFlight = () async {
+      try {
+        await _sessionRepository.warmOccupancyCaches();
+      } catch (_) {
+      } finally {
+        _occupancyWarmInFlight = null;
+      }
+    }();
   }
 
   void _debugLogAssignedTablesOnSessionOpen() {
@@ -1207,8 +1225,8 @@ class SessionController extends GetxController {
 
   void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
-    // Warm tables cache while the waiter types the table number.
-    unawaited(_sessionRepository.getTablesList());
+    // Warm tables + open-orders while the waiter types — confirm stays instant.
+    _startOccupancyWarmInBackground();
     TableNumberDialog.show(
       context: context,
       integerOnly: true,
@@ -1263,52 +1281,7 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Cache-first occupancy check (warmed on session open / New Order click).
-    // Only hit the network when cache is empty.
-    // Touch lock revision so any concurrent WS patch is already committed
-    // (revision bumps only after Hive apply).
-    tablesLockRevision.value;
-    var tables = _sessionRepository.cachedTables;
-    if (tables.isEmpty) {
-      try {
-        tables = await _sessionRepository.getTablesList(forceRefresh: true);
-      } catch (_) {
-        tables = _sessionRepository.cachedTables;
-      }
-    } else {
-      // Keep cache fresh for the next New Order without blocking this one.
-      unawaited(_sessionRepository.getTablesList());
-    }
-
-    var blockedByOtherWaiter = OrderMapper.shouldShowSkipDialogForCreate(
-      tables,
-      normalized,
-      waiterId: waiterId,
-    );
-    if (blockedByOtherWaiter) {
-      // Paid tickets often linger as active_order in a stale tables cache —
-      // refresh once, then allow create when the table is not actually open.
-      try {
-        tables = await _sessionRepository.getTablesList(forceRefresh: true);
-      } catch (_) {
-        tables = _sessionRepository.cachedTables;
-      }
-      blockedByOtherWaiter = OrderMapper.shouldShowSkipDialogForCreate(
-        tables,
-        normalized,
-        waiterId: waiterId,
-      );
-    }
-    if (blockedByOtherWaiter && !_tableHasBlockingOpenOrder(normalized)) {
-      // Manager/cashier see every open ticket — if 98 isn't open, it's paid/cleared.
-      // Also allow when this table is already in the paid-orders cache.
-      final user = _authRepository.cachedSession?.user;
-      if (PosPermissions.canViewAllOpenOrders(user) ||
-          _isTableKnownPaid(normalized)) {
-        blockedByOtherWaiter = false;
-      }
-    }
-    if (blockedByOtherWaiter) {
+    if (_shouldShowSkipForTable(normalized, waiterId)) {
       if (context.mounted) {
         await TableOccupiedDialog.show(
           context: context,
@@ -1319,6 +1292,7 @@ class SessionController extends GetxController {
       return;
     }
 
+    final tables = _sessionRepository.cachedTables;
     final ownActiveOrderId = OrderMapper.ownReusableActiveOrderId(
       tables,
       normalized,
@@ -1346,6 +1320,28 @@ class SessionController extends GetxController {
           couverts: couverts,
         ));
       },
+    );
+  }
+
+  /// Instant Skip from warm cache. Network refresh is background-only.
+  bool _shouldShowSkipForTable(String tableNumber, int waiterId) {
+    tablesLockRevision.value;
+    // Keep occupancy fresh for the *next* check — never block this one.
+    _startOccupancyWarmInBackground();
+
+    final tables = _sessionRepository.cachedTables;
+    if (OrderMapper.shouldShowSkipDialogForCreate(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    )) {
+      return true;
+    }
+
+    return OrderMapper.hasForeignOpenOrderOnTable(
+      _sessionRepository.cachedOccupancyOpenOrders,
+      tableNumber,
+      waiterId: waiterId,
     );
   }
 
@@ -1382,6 +1378,18 @@ class SessionController extends GetxController {
         existing: existingOwn,
         guests: guests,
       );
+      return;
+    }
+
+    // Local-first create never calls open-by-number — re-check occupancy here.
+    if (_shouldShowSkipForTable(tableNumber.trim(), waiterId)) {
+      if (context.mounted) {
+        await TableOccupiedDialog.show(
+          context: context,
+          userName: _currentUserDisplayName,
+          tableNumber: tableNumber.trim(),
+        );
+      }
       return;
     }
 
@@ -1459,40 +1467,6 @@ class SessionController extends GetxController {
       }
     }
     return null;
-  }
-
-  /// True when an open (session-list) ticket still exists for [tableNumber].
-  bool _tableHasBlockingOpenOrder(String tableNumber) {
-    final normalized = OrderMapper.normalizeTableKey(tableNumber);
-    if (normalized.isEmpty) return false;
-    for (final order in orders) {
-      if (_tableKeysMatch(order.number, normalized) ||
-          _tableKeysMatch(
-            order.number,
-            OrderMapper.tableDisplayNumber(normalized),
-          )) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /// True when [tableNumber] is known paid on this device (statistics cache).
-  bool _isTableKnownPaid(String tableNumber) {
-    final normalized = OrderMapper.normalizeTableKey(tableNumber);
-    if (normalized.isEmpty) return false;
-
-    bool matches(SessionOrder order) =>
-        _tableKeysMatch(order.number, normalized) ||
-        _tableKeysMatch(
-          order.number,
-          OrderMapper.tableDisplayNumber(normalized),
-        );
-
-    if (paidOrders.any(matches)) return true;
-    return _sessionRepository
-        .getCachedPaidOrders(waiterId: _ordersListWaiterFilter)
-        .any(matches);
   }
 
   void _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) {

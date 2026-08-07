@@ -1324,75 +1324,50 @@ class SessionController extends GetxController {
     );
   }
 
-  /// Refetch occupancy, then Skip only if there is a foreign **open** order
-  /// (`status == pending`). Locked/occupied without an open order → available.
-  ///
-  /// No payment_status / remaining_amount — status only.
+  /// Fast Skip for new-order:
+  /// - No order id / already non-pending in memory → available **immediately**
+  ///   (guest dialog), lists refresh in background.
+  /// - Memory says pending (or status unknown with an id) → one live GET
+  ///   (API status, not cache) before Skip or guest dialog.
   Future<bool> _shouldShowSkipForTable(String tableNumber, int waiterId) async {
     tablesLockRevision.value;
 
     logOrderFlow(
-      '[Skip] START table=$tableNumber waiterId=$waiterId — refetch occupancy',
+      '[Skip] START table=$tableNumber waiterId=$waiterId — fast path',
     );
-
-    try {
-      await _sessionRepository.warmOccupancyCaches();
-      logOrderFlow(
-        '[Skip] warm OK tables=${_sessionRepository.cachedTables.length} '
-        'openOrders=${_sessionRepository.cachedOccupancyOpenOrders.length}',
-      );
-    } catch (e) {
-      logOrderFlow('[Skip] warm FAILED: $e — continue with cache');
-    }
-    _occupancyWarmInFlight = null;
-
     _logSkipTableSnapshot(tableNumber, waiterId);
 
-    final tablesSaySkip = OrderMapper.shouldShowSkipDialogForCreate(
-      _sessionRepository.cachedTables,
-      tableNumber,
-      waiterId: waiterId,
-    );
-    final openSaySkip = OrderMapper.hasForeignOpenOrderOnTable(
-      _sessionRepository.cachedOccupancyOpenOrders,
-      tableNumber,
-      waiterId: waiterId,
-    );
-    logOrderFlow(
-      '[Skip] after warm: tablesSaySkip=$tablesSaySkip '
-      'openOrdersSaySkip=$openSaySkip '
-      '(Skip needs open/pending order — lock alone is not enough)',
-    );
-
-    if (!tablesSaySkip && !openSaySkip) {
-      logOrderFlow(
-        '[Skip] RESULT=false (no foreign open/pending order — available)',
-      );
-      return false;
-    }
-
-    final orderIdFromTables = OrderMapper.activeOrderIdOnTable(
+    final cachedStatus = OrderMapper.activeOrderStatus(
       _sessionRepository.cachedTables,
       tableNumber,
     );
-    final orderIdFromOpen = OrderMapper.foreignPendingOpenOrderId(
-      _sessionRepository.cachedOccupancyOpenOrders,
-      tableNumber,
-      waiterId: waiterId,
-    );
-    final orderId = orderIdFromTables ?? orderIdFromOpen;
+    final orderId = _candidateSkipOrderId(tableNumber, waiterId);
     logOrderFlow(
-      '[Skip] candidate orderId=$orderId '
-      '(fromTables=$orderIdFromTables fromOpen=$orderIdFromOpen)',
+      '[Skip] memory orderId=$orderId cachedStatus=$cachedStatus',
     );
 
+    // Instant free: nothing to verify, or cache already shows not open.
     if (orderId == null || orderId <= 0) {
-      // Occupied/locked signal but no order to verify → treat as available.
+      _startOccupancyWarmInBackground();
       logOrderFlow(
-        '[Skip] RESULT=false (no order id — not an open order, available)',
+        '[Skip] RESULT=false (no order id — available immediately, bg refresh)',
       );
       return false;
     }
+    if (cachedStatus != null &&
+        cachedStatus.isNotEmpty &&
+        cachedStatus != 'pending') {
+      _startOccupancyWarmInBackground();
+      logOrderFlow(
+        '[Skip] RESULT=false (cached status="$cachedStatus" not open — '
+        'available immediately, bg refresh)',
+      );
+      return false;
+    }
+
+    // Pending or unknown status — confirm with live API (not cache).
+    _startOccupancyWarmInBackground();
+    logOrderFlow('[Skip] verifying live status for orderId=$orderId');
 
     try {
       final detail =
@@ -1402,7 +1377,7 @@ class SessionController extends GetxController {
       final isOpen = OrderMapper.isPendingOrderStatus(detail);
       logOrderFlow(
         '[Skip] live GET order=$orderId status=$status '
-        'waiter_id=$owner isOpen/pending=$isOpen (status-only)',
+        'waiter_id=$owner isOpen/pending=$isOpen (API)',
       );
 
       if (!isOpen) {
@@ -1425,6 +1400,19 @@ class SessionController extends GetxController {
       logOrderFlow('[Skip] live GET FAILED: $e → RESULT=true (fail-safe)');
       return true;
     }
+  }
+
+  /// Best-effort order id from current memory (tables active_order / open-orders).
+  int? _candidateSkipOrderId(String tableNumber, int waiterId) {
+    return OrderMapper.activeOrderIdOnTable(
+          _sessionRepository.cachedTables,
+          tableNumber,
+        ) ??
+        OrderMapper.foreignPendingOpenOrderId(
+          _sessionRepository.cachedOccupancyOpenOrders,
+          tableNumber,
+          waiterId: waiterId,
+        );
   }
 
   void _logSkipTableSnapshot(String tableNumber, int waiterId) {

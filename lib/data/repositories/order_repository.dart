@@ -145,6 +145,11 @@ class OrderRepository {
     return OrderMapper.fromOrderDetail(detail).copyWith(id: orderId);
   }
 
+  /// GET order map for Skip — caller checks `status` only.
+  Future<Map<String, dynamic>> fetchOrderMapForOccupancy(int orderId) {
+    return _remote.fetchOrderDetail(orderId);
+  }
+
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,

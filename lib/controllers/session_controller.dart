@@ -1281,7 +1281,8 @@ class SessionController extends GetxController {
       return;
     }
 
-    if (_shouldShowSkipForTable(normalized, waiterId)) {
+    if (await _shouldShowSkipForTable(normalized, waiterId)) {
+      logOrderFlow('[Skip] showing TableOccupiedDialog table=$normalized');
       if (context.mounted) {
         await TableOccupiedDialog.show(
           context: context,
@@ -1323,25 +1324,123 @@ class SessionController extends GetxController {
     );
   }
 
-  /// Instant Skip from warm cache. Network refresh is background-only.
-  bool _shouldShowSkipForTable(String tableNumber, int waiterId) {
+  /// Refetch occupancy, then Skip only if there is a foreign **open** order
+  /// (`status == pending`). Locked/occupied without an open order → available.
+  ///
+  /// No payment_status / remaining_amount — status only.
+  Future<bool> _shouldShowSkipForTable(String tableNumber, int waiterId) async {
     tablesLockRevision.value;
-    // Keep occupancy fresh for the *next* check — never block this one.
-    _startOccupancyWarmInBackground();
 
-    final tables = _sessionRepository.cachedTables;
-    if (OrderMapper.shouldShowSkipDialogForCreate(
-      tables,
+    logOrderFlow(
+      '[Skip] START table=$tableNumber waiterId=$waiterId — refetch occupancy',
+    );
+
+    try {
+      await _sessionRepository.warmOccupancyCaches();
+      logOrderFlow(
+        '[Skip] warm OK tables=${_sessionRepository.cachedTables.length} '
+        'openOrders=${_sessionRepository.cachedOccupancyOpenOrders.length}',
+      );
+    } catch (e) {
+      logOrderFlow('[Skip] warm FAILED: $e — continue with cache');
+    }
+    _occupancyWarmInFlight = null;
+
+    _logSkipTableSnapshot(tableNumber, waiterId);
+
+    final tablesSaySkip = OrderMapper.shouldShowSkipDialogForCreate(
+      _sessionRepository.cachedTables,
       tableNumber,
       waiterId: waiterId,
-    )) {
-      return true;
-    }
-
-    return OrderMapper.hasForeignOpenOrderOnTable(
+    );
+    final openSaySkip = OrderMapper.hasForeignOpenOrderOnTable(
       _sessionRepository.cachedOccupancyOpenOrders,
       tableNumber,
       waiterId: waiterId,
+    );
+    logOrderFlow(
+      '[Skip] after warm: tablesSaySkip=$tablesSaySkip '
+      'openOrdersSaySkip=$openSaySkip '
+      '(Skip needs open/pending order — lock alone is not enough)',
+    );
+
+    if (!tablesSaySkip && !openSaySkip) {
+      logOrderFlow(
+        '[Skip] RESULT=false (no foreign open/pending order — available)',
+      );
+      return false;
+    }
+
+    final orderIdFromTables = OrderMapper.activeOrderIdOnTable(
+      _sessionRepository.cachedTables,
+      tableNumber,
+    );
+    final orderIdFromOpen = OrderMapper.foreignPendingOpenOrderId(
+      _sessionRepository.cachedOccupancyOpenOrders,
+      tableNumber,
+      waiterId: waiterId,
+    );
+    final orderId = orderIdFromTables ?? orderIdFromOpen;
+    logOrderFlow(
+      '[Skip] candidate orderId=$orderId '
+      '(fromTables=$orderIdFromTables fromOpen=$orderIdFromOpen)',
+    );
+
+    if (orderId == null || orderId <= 0) {
+      // Occupied/locked signal but no order to verify → treat as available.
+      logOrderFlow(
+        '[Skip] RESULT=false (no order id — not an open order, available)',
+      );
+      return false;
+    }
+
+    try {
+      final detail =
+          await _orderRepository.fetchOrderMapForOccupancy(orderId);
+      final status = detail['status']?.toString();
+      final owner = OrderMapper.waiterIdFromOrderMap(detail);
+      final isOpen = OrderMapper.isPendingOrderStatus(detail);
+      logOrderFlow(
+        '[Skip] live GET order=$orderId status=$status '
+        'waiter_id=$owner isOpen/pending=$isOpen (status-only)',
+      );
+
+      if (!isOpen) {
+        logOrderFlow(
+          '[Skip] RESULT=false (order not open, status="$status" — available)',
+        );
+        return false;
+      }
+      if (owner != null && owner > 0 && owner == waiterId) {
+        logOrderFlow(
+          '[Skip] RESULT=false (open order is own waiterId=$owner)',
+        );
+        return false;
+      }
+      logOrderFlow(
+        '[Skip] RESULT=true (open foreign/unknown order owner=$owner)',
+      );
+      return true;
+    } catch (e) {
+      logOrderFlow('[Skip] live GET FAILED: $e → RESULT=true (fail-safe)');
+      return true;
+    }
+  }
+
+  void _logSkipTableSnapshot(String tableNumber, int waiterId) {
+    final tables = _sessionRepository.cachedTables;
+    final status = OrderMapper.activeOrderStatus(tables, tableNumber);
+    final activeId = OrderMapper.activeOrderIdOnTable(tables, tableNumber);
+    final owner = OrderMapper.activeOrderOwnerId(tables, tableNumber);
+    final assigned = OrderMapper.isAssignedToOtherWaiter(
+      tables,
+      tableNumber,
+      waiterId: waiterId,
+    );
+    logOrderFlow(
+      '[Skip] snapshot table=$tableNumber myWaiter=$waiterId '
+      'activeOrderId=$activeId activeStatus=$status '
+      'pendingOwner=$owner assignedOther=$assigned',
     );
   }
 
@@ -1382,7 +1481,7 @@ class SessionController extends GetxController {
     }
 
     // Local-first create never calls open-by-number — re-check occupancy here.
-    if (_shouldShowSkipForTable(tableNumber.trim(), waiterId)) {
+    if (await _shouldShowSkipForTable(tableNumber.trim(), waiterId)) {
       if (context.mounted) {
         await TableOccupiedDialog.show(
           context: context,

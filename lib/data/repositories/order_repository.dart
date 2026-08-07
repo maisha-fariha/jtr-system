@@ -5210,7 +5210,7 @@ class OrderRepository {
         updated['payment_status'] = 'paid';
         updated['payment_status_detailed'] = 'fully_paid';
         updated['remaining_amount'] = '0.00';
-        updated['status'] = 'closed';
+        updated['status'] = 'completed';
       } else {
         updated['payment_status'] = 'partially_paid';
         updated['payment_status_detailed'] = 'partially_paid';
@@ -5219,9 +5219,11 @@ class OrderRepository {
 
       if (fullyPaid) {
         await _sessionLocal.removeOpenOrderFromList(orderId);
-        await _sessionLocal.upsertPaidOrderInList(
-          OrderMapper.withLocalPaidAt(updated),
-        );
+        if (OrderMapper.isActiveDayPaidOrder(updated)) {
+          await _sessionLocal.upsertPaidOrderInList(
+            OrderMapper.withLocalPaidAt(updated),
+          );
+        }
         // Free the table lock — best-effort (pay may already unlock server-side).
         try {
           final tableId = await _resolveTableIdForClose(

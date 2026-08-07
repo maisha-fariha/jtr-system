@@ -336,8 +336,9 @@ class SessionRepository {
     await _local.clearPaidOrdersList();
   }
 
-  /// Persist a fully paid ticket for the statistics paid-orders list.
+  /// Persist a completed+paid ticket for the statistics paid-orders list.
   Future<void> rememberPaidOrder(Map<String, dynamic> orderDetail) async {
+    if (!OrderMapper.isActiveDayPaidOrder(orderDetail)) return;
     await _local.upsertPaidOrderInList(
       OrderMapper.withLocalPaidAt(orderDetail),
     );
@@ -367,11 +368,13 @@ class SessionRepository {
 
     try {
       final maps = await _remote.fetchPaidOrdersList(waiterId: waiterId);
-      // Merge with local (just-paid may not be on API yet). Keep the newer
-      // paid_at stamp so the latest payment stays on top.
-      final local = _local.readPaidOrdersList();
+      // Keep local just-paid rows that are completed+paid and fresher.
+      final local = _local
+          .readPaidOrdersList()
+          .where(OrderMapper.isActiveDayPaidOrder);
       final byId = <int, Map<String, dynamic>>{};
       for (final row in maps) {
+        if (!OrderMapper.isActiveDayPaidOrder(row)) continue;
         final id = OrderMapper.orderIdFromDetail(row);
         if (id <= 0) continue;
         byId[id] = row;
@@ -384,10 +387,8 @@ class SessionRepository {
           byId[id] = row;
           continue;
         }
-        final localMs = OrderMapper.paidOrderSortMillis(row);
-        final remoteMs = OrderMapper.paidOrderSortMillis(existing);
-        if (localMs >= remoteMs) {
-          // Prefer local stamp / payload when fresher (just paid on device).
+        if (OrderMapper.paidOrderSortMillis(row) >=
+            OrderMapper.paidOrderSortMillis(existing)) {
           final merged = Map<String, dynamic>.from(existing);
           if (row['paid_at_local'] != null) {
             merged['paid_at_local'] = row['paid_at_local'];

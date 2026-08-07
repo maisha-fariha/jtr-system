@@ -299,11 +299,11 @@ class OrderMapper {
     return status != 'closed' && status != 'cancelled';
   }
 
-  /// Paid / closed tickets for the statistics "Commandes payées" list.
+  /// Paid-orders screen: only `status == completed` and fully paid.
   static bool isActiveDayPaidOrder(Map<String, dynamic> order) {
-    if (isOrderFullyPaid(order)) return true;
-    final status = order['status']?.toString().toLowerCase();
-    return status == 'closed';
+    final status = order['status']?.toString().trim().toLowerCase();
+    if (status != 'completed') return false;
+    return isOrderFullyPaid(order);
   }
 
   static List<SessionOrder> sessionOrdersFromPaidOrdersList(

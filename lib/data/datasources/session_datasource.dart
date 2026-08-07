@@ -182,7 +182,7 @@ class SessionRemoteDataSource {
     );
   }
 
-  /// Closed / paid orders for the active day (statistics list).
+  /// Completed + paid orders for the statistics list (latest paid first).
   Future<List<Map<String, dynamic>>> fetchPaidOrdersList({
     int? waiterId,
   }) async {
@@ -190,14 +190,18 @@ class SessionRemoteDataSource {
       final first = await _fetchOrdersPage(
         page: 1,
         waiterId: waiterId,
-        status: 'closed',
+        status: 'completed',
       );
       var orders = List<Map<String, dynamic>>.from(first.orders);
       if (first.lastPage > 1) {
         const batchSize = 4;
-        for (var page = 2; page <= first.lastPage && page <= 50; page += batchSize) {
+        for (var page = 2;
+            page <= first.lastPage && page <= 50;
+            page += batchSize) {
           final batch = <int>[
-            for (var p = page; p < page + batchSize && p <= first.lastPage; p++)
+            for (var p = page;
+                p < page + batchSize && p <= first.lastPage;
+                p++)
               p,
           ];
           final pages = await Future.wait(
@@ -205,7 +209,7 @@ class SessionRemoteDataSource {
               (p) => _fetchOrdersPage(
                 page: p,
                 waiterId: waiterId,
-                status: 'closed',
+                status: 'completed',
               ),
             ),
           );
@@ -214,24 +218,33 @@ class SessionRemoteDataSource {
           }
         }
       }
+
       final paid = orders
           .where(OrderMapper.isActiveDayPaidOrder)
-          .toList(growable: false);
-
-      // Backend honored status=closed (empty day, or only closed rows).
-      // Skip the expensive "fetch all orders" fallback.
-      final closedFilterHonored = orders.isEmpty ||
-          orders.every(OrderMapper.isActiveDayPaidOrder);
-      if (paid.isNotEmpty || closedFilterHonored) {
+          .toList(growable: true);
+      if (paid.isNotEmpty ||
+          orders.isEmpty ||
+          orders.every((o) {
+            final s = o['status']?.toString().trim().toLowerCase();
+            return s == 'completed';
+          })) {
+        paid.sort(
+          (a, b) => OrderMapper.paidOrderSortMillis(b)
+              .compareTo(OrderMapper.paidOrderSortMillis(a)),
+        );
         return paid;
       }
     } catch (_) {
-      // Fall through — some backends ignore status=closed.
+      // Fall through — some backends ignore status=completed.
     }
 
-    // Fallback: active-day list, keep only paid/closed client-side.
     final all = await fetchOrdersList(waiterId: waiterId);
-    return all.where(OrderMapper.isActiveDayPaidOrder).toList(growable: false);
+    final paid = all.where(OrderMapper.isActiveDayPaidOrder).toList();
+    paid.sort(
+      (a, b) => OrderMapper.paidOrderSortMillis(b)
+          .compareTo(OrderMapper.paidOrderSortMillis(a)),
+    );
+    return paid;
   }
 
   /// Fallback when [fetchOrdersList] returns nothing ([GET /api/days/open-orders]).
@@ -621,6 +634,8 @@ class SessionLocalDataSource {
   }
 
   Future<void> upsertPaidOrderInList(Map<String, dynamic> order) async {
+    if (!OrderMapper.isActiveDayPaidOrder(order)) return;
+
     final orderId = (order['id'] as num?)?.toInt() ?? 0;
     if (orderId <= 0) return;
 

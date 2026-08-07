@@ -1061,6 +1061,39 @@ class SessionController extends GetxController {
     listScrollSignal.value++;
   }
 
+  /// Tables locked after Send until that single order is re-fetched from API.
+  final refreshingAfterSendKeys = <String>{}.obs;
+
+  bool isRefreshingAfterSend(String tableNumber) {
+    return refreshingAfterSendKeys
+        .contains(OrderMapper.normalizeTableKey(tableNumber));
+  }
+
+  /// After Send: block re-entry for [tableNumber] only, GET that order once,
+  /// patch the session row, then unlock. Does **not** refresh the full list.
+  Future<void> refreshSentOrderFromApi({
+    required String tableNumber,
+    required Future<int?> orderIdFuture,
+  }) async {
+    final key = OrderMapper.normalizeTableKey(tableNumber);
+    if (key.isEmpty) return;
+
+    refreshingAfterSendKeys.add(key);
+    refreshingAfterSendKeys.refresh();
+    try {
+      final orderId = await orderIdFuture;
+      if (orderId == null || orderId <= 0) return;
+
+      final detail = await _orderRepository.getOrderDetail(orderId);
+      promoteOrderToTop(detail, replaceDetail: true);
+    } catch (_) {
+      // Keep optimistic row; unlock so the waiter is not stuck.
+    } finally {
+      refreshingAfterSendKeys.remove(key);
+      refreshingAfterSendKeys.refresh();
+    }
+  }
+
   static String normalizeTableKey(String value) =>
       OrderMapper.normalizeTableKey(value);
 
@@ -1243,6 +1276,12 @@ class SessionController extends GetxController {
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) {
+    if (isRefreshingAfterSend(orderNumber)) {
+      logOrderFlow(
+        'openTableDetails BLOCKED (refreshing after send) table=$orderNumber',
+      );
+      return;
+    }
     logOrderFlow(
       'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
       'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',

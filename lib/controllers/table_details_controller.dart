@@ -1831,6 +1831,14 @@ class TableDetailsController extends GetxController {
       waiterName = user?.name;
     }
 
+    // Completes with server order id when Send finishes (for single-order refresh).
+    final sentOrderId = Completer<int?>();
+    void completeSentOrderId(int? id) {
+      if (!sentOrderId.isCompleted) {
+        sentOrderId.complete(id != null && id > 0 ? id : null);
+      }
+    }
+
     _optimisticSync.enqueue(
       syncKey: _optimisticSyncKey,
       snapshot: snapshot,
@@ -1868,6 +1876,7 @@ class TableDetailsController extends GetxController {
           _rememberSentKitchenLines(toApply);
           orderUiRevision.value++;
         }
+        completeSentOrderId(toApply.id);
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
           session.promoteOrderToTop(toApply, replaceDetail: true);
@@ -1971,8 +1980,10 @@ class TableDetailsController extends GetxController {
               replaceDetail: true,
             );
           }
+          completeSentOrderId(recovered.order.id);
           return;
         }
+        completeSentOrderId(null);
         _showKitchenMutationError(
           title: 'Erreur envoi',
           action: 'envoyer en cuisine',
@@ -1981,6 +1992,15 @@ class TableDetailsController extends GetxController {
       },
     );
 
+    if (Get.isRegistered<SessionController>()) {
+      // Lock only this table; refresh only this order from API (not full list).
+      unawaited(
+        Get.find<SessionController>().refreshSentOrderFromApi(
+          tableNumber: orderNumber,
+          orderIdFuture: sentOrderId.future,
+        ),
+      );
+    }
     _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
   }
 

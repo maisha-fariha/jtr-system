@@ -119,47 +119,60 @@ class SessionController extends GetxController {
   /// containing them.
   final Set<String> _suppressedTableNumbers = <String>{};
 
+  /// Bumped on each list fetch so a late unscoped response cannot overwrite
+  /// a newer zone-scoped list.
+  int _ordersFetchGeneration = 0;
+
   @override
   void onInit() {
     super.onInit();
     _bindTablesLockRevision();
     final args = Get.arguments;
     final justPreloaded = args is Map && args['preloaded'] == true;
+    unawaited(_bootstrapSession(justPreloaded: justPreloaded));
+  }
 
-    // Prefer rows already mapped during connect preload (no empty remapping gap).
+  /// Resolve sales zone first, then load orders — never paint an unscoped
+  /// list when a zone is available (first login used to show every zone).
+  Future<void> _bootstrapSession({required bool justPreloaded}) async {
+    unawaited(loadActiveDay(forceRefresh: !justPreloaded));
+
+    // Wait for shortlist (often already warm from Connect) before any list I/O.
+    await loadSalesZones(
+      forceRefresh: !justPreloaded,
+      reloadOrdersIfChanged: false,
+    );
+
+    final zoneId = selectedSalesZoneId;
     final preloadedRows = justPreloaded
         ? _sessionRepository.takePreloadedSessionOrders()
         : null;
-    if (preloadedRows != null && preloadedRows.isNotEmpty) {
+
+    if (zoneId != null) {
+      // Zone known: never hydrate/paint a possibly-unscoped cache as final.
+      if (preloadedRows != null && preloadedRows.isNotEmpty) {
+        orders.assignAll(preloadedRows);
+      }
+      await loadSessionOrders(
+        forceRefresh: true,
+        showLoading: orders.isEmpty,
+        enrichDetails: false,
+        replaceExistingList: true,
+      );
+    } else if (preloadedRows != null && preloadedRows.isNotEmpty) {
+      // No shortlist → legacy Sur place (all open orders for waiter/day).
       orders.assignAll(preloadedRows);
     } else {
       _hydrateOrdersFromCache();
+      await loadSessionOrders(
+        forceRefresh: orders.isEmpty,
+        showLoading: orders.isEmpty,
+        enrichDetails: false,
+      );
     }
 
-    unawaited(loadActiveDay(forceRefresh: !justPreloaded));
-    unawaited(loadSalesZones());
-
-    if (justPreloaded) {
-      if (orders.isEmpty) {
-        // Preload missed rows — show loader, never flash "Aucune commande".
-        unawaited(
-          loadSessionOrders(
-            forceRefresh: true,
-            showLoading: true,
-            enrichDetails: false,
-          ),
-        );
-      }
-      unawaited(_prefetchTables());
-    } else {
-      unawaited(
-        loadSessionOrders(
-          forceRefresh: orders.isEmpty,
-          showLoading: orders.isEmpty,
-          enrichDetails: false,
-        ),
-      );
-      unawaited(_prefetchTables());
+    unawaited(_prefetchTables());
+    if (!justPreloaded) {
       unawaited(_prefetchCreateCatalog());
     }
   }
@@ -215,7 +228,10 @@ class SessionController extends GetxController {
   }
 
   /// Loads shortlist and selects default zone. Safe no-op if API unavailable.
-  Future<void> loadSalesZones({bool forceRefresh = false}) async {
+  Future<void> loadSalesZones({
+    bool forceRefresh = false,
+    bool reloadOrdersIfChanged = true,
+  }) async {
     final previousId = selectedSalesZone.value?.id;
     final zones = await _sessionRepository.getSalesZonesShortlist(
       forceRefresh: forceRefresh,
@@ -239,8 +255,16 @@ class SessionController extends GetxController {
     }
 
     final nextId = selectedSalesZone.value?.id;
+    if (nextId != null && nextId > 0) {
+      _subscribeActiveFloorChannel();
+    }
     // First time we get a zone (or zone changed) — reload list scoped to it.
-    if (nextId != null && nextId > 0 && nextId != previousId) {
+    // Bootstrap passes [reloadOrdersIfChanged]: false to avoid a race with its
+    // own single zone-scoped fetch.
+    if (reloadOrdersIfChanged &&
+        nextId != null &&
+        nextId > 0 &&
+        nextId != previousId) {
       unawaited(
         loadSessionOrders(
           forceRefresh: true,
@@ -248,7 +272,6 @@ class SessionController extends GetxController {
           replaceExistingList: true,
         ),
       );
-      _subscribeActiveFloorChannel();
     }
   }
 
@@ -276,7 +299,11 @@ class SessionController extends GetxController {
   Future<void> selectSalesZone(SalesZoneInfo zone) async {
     if (selectedSalesZone.value?.id == zone.id) return;
     selectedSalesZone.value = zone;
-    // Zone-specific list — force network with sales_zone_id.
+    // Drop previous zone rows immediately so the session list shows a loader
+    // while the zone-scoped fetch completes (not a stale mix of zones).
+    orders.clear();
+    ordersError.value = null;
+    isLoadingOrders.value = true;
     await loadSessionOrders(
       forceRefresh: true,
       showLoading: true,
@@ -488,6 +515,7 @@ class SessionController extends GetxController {
     /// When false, page-1 updates merge in place (no reshuffle).
     bool replaceExistingList = true,
   }) async {
+    final fetchGen = ++_ordersFetchGeneration;
     if (showLoading && orders.isEmpty) {
       isLoadingOrders.value = true;
     }
@@ -497,11 +525,13 @@ class SessionController extends GetxController {
       // Don't re-fetch active day here — onInit already loads it.
       // Stale-while-revalidate: paint cache instantly, then refresh UI when
       // the full network fetch returns (no spinner if rows already visible).
-      if (!forceRefresh) {
+      // Never use unscoped disk cache when a sales zone is selected.
+      if (!forceRefresh && selectedSalesZoneId == null) {
         final cached = _sessionRepository.getCachedSessionOrders(
           waiterId: _ordersListWaiterFilter,
         );
         if (cached.isNotEmpty) {
+          if (fetchGen != _ordersFetchGeneration) return;
           _applySessionOrderSummaries(
             cached,
             retainOrders: retainOrders,
@@ -532,6 +562,8 @@ class SessionController extends GetxController {
               salesZoneId: selectedSalesZoneId,
             );
 
+      if (fetchGen != _ordersFetchGeneration) return;
+
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
@@ -540,17 +572,19 @@ class SessionController extends GetxController {
         clearSuppressedMatches: forceRefresh,
       );
     } on ApiException catch (e) {
+      if (fetchGen != _ordersFetchGeneration) return;
       ordersError.value = e.message;
       if (orders.isEmpty && showLoading) {
         _showSnack('Erreur', e.message);
       }
     } catch (_) {
+      if (fetchGen != _ordersFetchGeneration) return;
       ordersError.value = 'Impossible de charger les commandes.';
       if (orders.isEmpty && showLoading) {
         _showSnack('Erreur', ordersError.value!);
       }
     } finally {
-      if (showLoading) {
+      if (showLoading && fetchGen == _ordersFetchGeneration) {
         isLoadingOrders.value = false;
       }
     }
@@ -560,12 +594,14 @@ class SessionController extends GetxController {
     Iterable<SessionOrder>? retainOrders,
     bool enrichDetails = false,
   }) async {
+    final fetchGen = ++_ordersFetchGeneration;
     try {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _ordersListWaiterFilter,
         salesZoneId: selectedSalesZoneId,
       );
+      if (fetchGen != _ordersFetchGeneration) return;
       // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
         summaries,
@@ -583,6 +619,7 @@ class SessionController extends GetxController {
   Future<void> refreshSessionOrders({
     Iterable<SessionOrder>? retainOrders,
   }) async {
+    final fetchGen = ++_ordersFetchGeneration;
     ordersError.value = null;
     unawaited(loadActiveDay(forceRefresh: true));
     try {
@@ -591,6 +628,7 @@ class SessionController extends GetxController {
         waiterId: _ordersListWaiterFilter,
         salesZoneId: selectedSalesZoneId,
       );
+      if (fetchGen != _ordersFetchGeneration) return;
       _applySessionOrderSummaries(
         summaries,
         retainOrders: retainOrders,
@@ -599,6 +637,7 @@ class SessionController extends GetxController {
         clearSuppressedMatches: true,
       );
     } catch (_) {
+      if (fetchGen != _ordersFetchGeneration) return;
       if (orders.isEmpty) {
         ordersError.value = 'Impossible de charger les commandes.';
       }

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:get/get.dart';
 
 import '../core/auth/pos_permissions.dart';
+import '../data/models/sales_zone_info.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../routes/app_pages.dart';
@@ -13,7 +14,8 @@ import '../services/reverb_realtime_service.dart';
 /// Returning users skip this and open [AppRoutes.session] from the device
 /// gate (cached orders paint first). Unauthenticated flows go to login.
 ///
-/// Loads open orders, active day and tables, then hands off to session.
+/// Loads sales zones, zone-scoped open orders, active day and tables, then
+/// hands off to session.
 class ConnectController extends GetxController {
   ConnectController({
     required AuthRepository authRepository,
@@ -27,6 +29,7 @@ class ConnectController extends GetxController {
   static const _syncTimeout = Duration(seconds: 20);
 
   /// Weighted phases so the bar advances through the whole 0–100% range.
+  static const _zonesEnd = 0.12;
   static const _ordersEnd = 0.70;
   static const _activeDayEnd = 0.85;
   static const _tablesEnd = 1.0;
@@ -72,15 +75,27 @@ class ConnectController extends GetxController {
     } catch (_) {}
 
     try {
-      _beginPhase(floor: 0.05, ceiling: _ordersEnd);
+      // Zones before orders — list must be sales-zone scoped from first paint.
+      _beginPhase(floor: 0.05, ceiling: _zonesEnd);
+      int? salesZoneId;
+      try {
+        final zones = await _sessionRepository
+            .getSalesZonesShortlist(forceRefresh: true)
+            .timeout(_syncTimeout);
+        salesZoneId = SalesZoneInfo.pickDefault(zones)?.id;
+      } catch (_) {
+        // Shortlist unavailable → legacy unscoped list (Sur place fallback).
+      }
+      _setProgress(_zonesEnd);
 
-      // Orders first — session must not open until this list is ready.
+      _beginPhase(floor: _zonesEnd, ceiling: _ordersEnd);
       await _sessionRepository
           .getSessionOrders(
             forceRefresh: true,
             waiterId: waiterId,
+            salesZoneId: salesZoneId,
             onProgress: (fraction) {
-              _setProgress(0.05 + fraction * (_ordersEnd - 0.05));
+              _setProgress(_zonesEnd + fraction * (_ordersEnd - _zonesEnd));
             },
           )
           .timeout(_syncTimeout);
@@ -104,9 +119,13 @@ class ConnectController extends GetxController {
       syncError.value = error.toString();
       // Still try one last orders pull so session is not empty if possible.
       try {
+        final zoneId = SalesZoneInfo.pickDefault(
+          _sessionRepository.cachedSalesZones,
+        )?.id;
         await _sessionRepository.getSessionOrders(
           forceRefresh: true,
           waiterId: waiterId,
+          salesZoneId: zoneId,
           onProgress: (fraction) {
             _setProgress(0.4 + fraction * 0.5);
           },

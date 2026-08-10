@@ -464,6 +464,9 @@ class SessionRepository {
         onProgress: onProgress,
       );
     } catch (_) {
+      if (salesZoneId != null && salesZoneId > 0) {
+        rethrow;
+      }
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) {
         onProgress?.call(1.0);
@@ -486,6 +489,11 @@ class SessionRepository {
         onProgress: onProgress,
       );
     } catch (_) {
+      // Never fall back to an unscoped disk cache when a zone was requested —
+      // that would flash every zone's orders after login / zone switch.
+      if (salesZoneId != null && salesZoneId > 0) {
+        rethrow;
+      }
       final cached = getCachedSessionOrders(waiterId: waiterId);
       if (cached.isNotEmpty) {
         onProgress?.call(1.0);

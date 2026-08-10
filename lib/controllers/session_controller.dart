@@ -15,11 +15,13 @@ import '../data/mappers/order_mapper.dart';
 import '../data/order_optimistic_sync.dart';
 import '../data/models/active_day_info.dart';
 import '../data/models/day_statistics_info.dart';
+import '../data/models/sales_zone_info.dart';
 import '../core/network/api_exception.dart';
 import '../core/auth/pos_permissions.dart';
 import '../controllers/login_controller.dart';
 import '../controllers/table_details_controller.dart';
 import '../utils/api_log.dart';
+import '../utils/app_theme.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -98,6 +100,10 @@ class SessionController extends GetxController {
   final isCreatingOrder = false.obs;
   final isPrintingTicket = false.obs;
 
+  /// Sales zones from shortlist (empty = legacy single-flow fallback).
+  final salesZones = <SalesZoneInfo>[].obs;
+  final selectedSalesZone = Rxn<SalesZoneInfo>();
+
   /// Bumped when the session list should jump to the top (e.g. after Send).
   final listScrollSignal = 0.obs;
 
@@ -131,6 +137,7 @@ class SessionController extends GetxController {
     }
 
     unawaited(loadActiveDay(forceRefresh: !justPreloaded));
+    unawaited(loadSalesZones());
 
     if (justPreloaded) {
       if (orders.isEmpty) {
@@ -207,9 +214,80 @@ class SessionController extends GetxController {
     _subscribeActiveFloorChannel();
   }
 
+  /// Loads shortlist and selects default zone. Safe no-op if API unavailable.
+  Future<void> loadSalesZones({bool forceRefresh = false}) async {
+    final previousId = selectedSalesZone.value?.id;
+    final zones = await _sessionRepository.getSalesZonesShortlist(
+      forceRefresh: forceRefresh,
+    );
+    salesZones.assignAll(zones);
+    if (zones.isEmpty) {
+      selectedSalesZone.value = null;
+      return;
+    }
+
+    final current = selectedSalesZone.value;
+    if (current != null) {
+      final match = zones.where((z) => z.id == current.id).toList();
+      if (match.isNotEmpty) {
+        selectedSalesZone.value = match.first;
+      } else {
+        selectedSalesZone.value = SalesZoneInfo.pickDefault(zones);
+      }
+    } else {
+      selectedSalesZone.value = SalesZoneInfo.pickDefault(zones);
+    }
+
+    final nextId = selectedSalesZone.value?.id;
+    // First time we get a zone (or zone changed) — reload list scoped to it.
+    if (nextId != null && nextId > 0 && nextId != previousId) {
+      unawaited(
+        loadSessionOrders(
+          forceRefresh: true,
+          showLoading: orders.isEmpty,
+          replaceExistingList: true,
+        ),
+      );
+      _subscribeActiveFloorChannel();
+    }
+  }
+
+  int? get selectedSalesZoneId {
+    final id = selectedSalesZone.value?.id;
+    if (id != null && id > 0) return id;
+    final fromDay = activeDay.value.salesZoneId;
+    if (fromDay != null && fromDay > 0) return fromDay;
+    return null;
+  }
+
+  String get selectedSalesZoneLabel {
+    final zone = selectedSalesZone.value;
+    if (zone != null) return zone.displayLabel;
+    return activeDay.value.salesZoneLabel;
+  }
+
+  bool get selectedZoneUsesTableFlow {
+    final zone = selectedSalesZone.value;
+    // No shortlist → keep legacy table flow (Sur place).
+    if (zone == null) return true;
+    return zone.usesTableFlow;
+  }
+
+  Future<void> selectSalesZone(SalesZoneInfo zone) async {
+    if (selectedSalesZone.value?.id == zone.id) return;
+    selectedSalesZone.value = zone;
+    // Zone-specific list — force network with sales_zone_id.
+    await loadSessionOrders(
+      forceRefresh: true,
+      showLoading: true,
+      replaceExistingList: true,
+    );
+    _subscribeActiveFloorChannel();
+  }
+
   /// Docs: subscribe `private-tables.floor.{id}` while on that floor/zone.
   void _subscribeActiveFloorChannel() {
-    final floorId = activeDay.value.salesZoneId;
+    final floorId = selectedSalesZoneId ?? activeDay.value.salesZoneId;
     if (floorId == null || floorId <= 0) return;
     if (!Get.isRegistered<ReverbRealtimeService>()) return;
     unawaited(Get.find<ReverbRealtimeService>().subscribeFloor(floorId));
@@ -446,10 +524,12 @@ class SessionController extends GetxController {
       final summaries = forceRefresh
           ? await _sessionRepository.refreshSessionOrdersFromNetwork(
               waiterId: _ordersListWaiterFilter,
+              salesZoneId: selectedSalesZoneId,
             )
           : await _sessionRepository.getSessionOrders(
               forceRefresh: true,
               waiterId: _ordersListWaiterFilter,
+              salesZoneId: selectedSalesZoneId,
             );
 
       _applySessionOrderSummaries(
@@ -484,6 +564,7 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _ordersListWaiterFilter,
+        salesZoneId: selectedSalesZoneId,
       );
       // Soft refresh: update fields in place — do not reshuffle the list.
       _applySessionOrderSummaries(
@@ -508,6 +589,7 @@ class SessionController extends GetxController {
       final summaries =
           await _sessionRepository.refreshSessionOrdersFromNetwork(
         waiterId: _ordersListWaiterFilter,
+        salesZoneId: selectedSalesZoneId,
       );
       _applySessionOrderSummaries(
         summaries,
@@ -1258,6 +1340,34 @@ class SessionController extends GetxController {
 
   void showTableNumberDialog({required BuildContext context}) {
     selectAction(SessionAction.nouvelleCommande);
+
+    // Zones without tables: skip table number (desktop free-order flow).
+    if (!selectedZoneUsesTableFlow) {
+      if (selectedSalesZone.value?.hasClientCardex == true) {
+        _showSnack(
+          'Zone',
+          'Cette zone nécessite un client (cardex) — bientôt disponible.',
+        );
+        return;
+      }
+      TableNumberDialog.show(
+        context: context,
+        title: 'NOMBRE DE COUVERTS',
+        integerOnly: true,
+        maxDigits: 3,
+        minValue: 1,
+        onConfirm: (couverts) {
+          unawaited(
+            _createFreeZoneOrderAndOpenDetails(
+              context: context,
+              couverts: couverts,
+            ),
+          );
+        },
+      );
+      return;
+    }
+
     // Warm tables + open-orders while the waiter types — confirm stays instant.
     _startOccupancyWarmInBackground();
     TableNumberDialog.show(
@@ -1267,6 +1377,57 @@ class SessionController extends GetxController {
       onConfirm: (tableNumber) {
         unawaited(_onTableNumberConfirmed(context, tableNumber));
       },
+    );
+  }
+
+  int _freeOrderSeq = 0;
+
+  /// Takeaway / delivery style: no table, local draft keyed as C1, C2, …
+  Future<void> _createFreeZoneOrderAndOpenDetails({
+    required BuildContext context,
+    required String couverts,
+  }) async {
+    final guests = int.tryParse(couverts.trim()) ?? 0;
+    if (guests < 1) {
+      _showSnack(
+        'Couverts',
+        'Le nombre de couverts doit être supérieur à 0.',
+      );
+      return;
+    }
+    final waiterId = _currentWaiterId;
+    if (waiterId <= 0) {
+      _showSnack('Erreur', 'Utilisateur non connecté. Veuillez vous reconnecter.');
+      return;
+    }
+
+    _freeOrderSeq += 1;
+    final ticketKey = 'C$_freeOrderSeq';
+    final zone = selectedSalesZone.value;
+    final name = _currentUserDisplayName;
+    final placeholder = SessionOrder(
+      id: 0,
+      number: ticketKey,
+      numberColor: AppTheme.primary,
+      group: '1',
+      poste: name.split(' ').first,
+      profitCenter: zone?.displayLabel ?? selectedSalesZoneLabel,
+      couverts: '$guests',
+      impressionCount: 0,
+      impressionColor: OrderMapper.impressionColorFor(0),
+      total: OrderMapper.formatPrice('0'),
+      products: const [],
+    );
+
+    _upsertOrderInList(placeholder);
+    logOrderFlow(
+      '_createFreeZoneOrder LOCAL DRAFT ticket=$ticketKey '
+      'zone=${zone?.id} guests=$guests',
+    );
+    openTableDetails(
+      placeholder.number,
+      deferDetailFetch: true,
+      seedOrder: placeholder,
     );
   }
 

@@ -8,6 +8,7 @@ import '../mappers/order_mapper.dart';
 import '../models/active_day_info.dart';
 import '../models/day_statistics_info.dart';
 import '../models/realtime/pos_bootstrap_config.dart';
+import '../models/sales_zone_info.dart';
 
 class SessionRepository {
   SessionRepository({
@@ -85,6 +86,30 @@ class SessionRepository {
       final day = await _remote.fetchActiveDay();
       await _local.saveActiveDay(day);
     } catch (_) {}
+  }
+
+  List<SalesZoneInfo> _salesZonesMemory = const [];
+
+  List<SalesZoneInfo> get cachedSalesZones =>
+      List<SalesZoneInfo>.unmodifiable(_salesZonesMemory);
+
+  /// Loads [GET /api/sales-zones/shortlist]. Empty list on failure (safe fallback).
+  Future<List<SalesZoneInfo>> getSalesZonesShortlist({
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh && _salesZonesMemory.isNotEmpty) {
+      return cachedSalesZones;
+    }
+    if (!await _connectivity.isOnline) {
+      return cachedSalesZones;
+    }
+    try {
+      final zones = await _remote.fetchSalesZonesShortlist();
+      _salesZonesMemory = zones;
+      return cachedSalesZones;
+    } catch (_) {
+      return cachedSalesZones;
+    }
   }
 
   Future<DayStatisticsInfo> getDayStatistics({bool forceRefresh = false}) async {
@@ -421,6 +446,7 @@ class SessionRepository {
   Future<List<SessionOrder>> getSessionOrders({
     bool forceRefresh = false,
     int? waiterId,
+    int? salesZoneId,
     void Function(double fraction)? onProgress,
   }) async {
     if (!forceRefresh) {
@@ -434,6 +460,7 @@ class SessionRepository {
     try {
       return await _fetchSessionOrdersFromNetwork(
         waiterId: waiterId,
+        salesZoneId: salesZoneId,
         onProgress: onProgress,
       );
     } catch (_) {
@@ -449,11 +476,13 @@ class SessionRepository {
   /// Network refresh: fetches every page before returning (see [getSessionOrders]).
   Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
     int? waiterId,
+    int? salesZoneId,
     void Function(double fraction)? onProgress,
   }) async {
     try {
       return await _fetchSessionOrdersFromNetwork(
         waiterId: waiterId,
+        salesZoneId: salesZoneId,
         onProgress: onProgress,
       );
     } catch (_) {
@@ -468,19 +497,24 @@ class SessionRepository {
 
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
+    int? salesZoneId,
     void Function(double fraction)? onProgress,
   }) async {
     final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
+    final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
 
     onProgress?.call(0.02);
-    final first = await _remote.fetchOrdersFirstPage(waiterId: scopedId);
+    final first = await _remote.fetchOrdersFirstPage(
+      waiterId: scopedId,
+      salesZoneId: zoneId,
+    );
     var pageMaps = first.orders;
     var lastPage = first.lastPage;
     var effectiveWaiterId = scopedId;
 
     // Prefer waiter-scoped page 1; only fall back once (page 1).
     if (pageMaps.isEmpty && scopedId != null) {
-      final unscoped = await _remote.fetchOrdersFirstPage();
+      final unscoped = await _remote.fetchOrdersFirstPage(salesZoneId: zoneId);
       pageMaps = unscoped.orders;
       lastPage = unscoped.lastPage;
       effectiveWaiterId = null;
@@ -500,6 +534,7 @@ class SessionRepository {
       final extraMaps = await _remote.fetchOrdersRemainingPages(
         lastPage: lastPage,
         waiterId: effectiveWaiterId,
+        salesZoneId: zoneId,
         onPagesLoaded: reportPages,
       );
       pageMaps = [...pageMaps, ...extraMaps];

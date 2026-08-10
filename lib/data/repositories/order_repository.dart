@@ -732,6 +732,7 @@ class OrderRepository {
     required int waiterId,
     required List<LocalDraftLine> lines,
     int? salesZoneId,
+    bool skipTableOpen = false,
     String? waiterName,
     List<OrderDisplayEntry>? previousDisplayEntries,
     SessionOrder? localTicketBeforeSend,
@@ -747,14 +748,33 @@ class OrderRepository {
       await _retireDeadOrderShell(existingOrderId, apiLog: apiLog);
     }
 
-    final table = await _openTableByNumberForCreate(
-      tableNumber: tableNumber,
-      numberOfGuests: numberOfGuests,
-      waiterId: waiterId,
-      waiterName: waiterName,
-      salesZoneId: salesZoneId,
-      apiLog: apiLog,
-    );
+    late final ResolvedTable table;
+    if (skipTableOpen) {
+      if (salesZoneId == null || salesZoneId <= 0) {
+        lastCreateOrderLog = apiLog.toString();
+        lastKitchenSendLog = apiLog.toString();
+        throw ApiException(
+          message: 'Zone de vente manquante pour créer la commande.',
+        );
+      }
+      apiLog.writeln(
+        '── Skip open-by-number (zone sans table) sales_zone_id=$salesZoneId ──',
+      );
+      table = ResolvedTable(
+        id: 0,
+        tableNumber: 0,
+        salesZoneId: salesZoneId,
+      );
+    } else {
+      table = await _openTableByNumberForCreate(
+        tableNumber: tableNumber,
+        numberOfGuests: numberOfGuests,
+        waiterId: waiterId,
+        waiterName: waiterName,
+        salesZoneId: salesZoneId,
+        apiLog: apiLog,
+      );
+    }
 
     final resolvedSalesZoneId = salesZoneId != null && salesZoneId > 0
         ? salesZoneId
@@ -770,7 +790,7 @@ class OrderRepository {
       await _retireDeadOrderShell(resumeOrderId, apiLog: apiLog);
     }
 
-    if (table.id <= 0) {
+    if (!skipTableOpen && table.id <= 0) {
       lastCreateOrderLog = apiLog.toString();
       lastKitchenSendLog = apiLog.toString();
       throw ApiException(
@@ -781,7 +801,7 @@ class OrderRepository {
     final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
-      tableId: table.id,
+      tableId: table.id > 0 ? table.id : null,
       salesZoneId: resolvedSalesZoneId,
       lines: lines,
     );
@@ -879,6 +899,8 @@ class OrderRepository {
     required int waiterId,
     required List<LocalDraftLine> lines,
     int? salesZoneId,
+    /// Takeaway / delivery zones: POST with sales_zone_id, no open-by-number.
+    bool skipTableOpen = false,
     String? waiterName,
     List<OrderDisplayEntry>? previousDisplayEntries,
     int? existingOrderId,
@@ -918,6 +940,7 @@ class OrderRepository {
           waiterId: waiterId,
           lines: lines,
           salesZoneId: salesZoneId,
+          skipTableOpen: skipTableOpen,
           waiterName: waiterName,
           previousDisplayEntries: previousDisplayEntries,
           localTicketBeforeSend: localTicketBeforeSend,
@@ -987,6 +1010,21 @@ class OrderRepository {
         '── Known orderId=$existingOrderId is empty → retire, then POST ──',
       );
       await _retireDeadOrderShell(existingOrderId, apiLog: apiLog);
+      // Free-zone empty shell: recreate via POST without open-by-number.
+      if (skipTableOpen) {
+        return await _createAndSendPostOnly(
+          tableNumber: tableNumber,
+          numberOfGuests: numberOfGuests,
+          waiterId: waiterId,
+          lines: lines,
+          salesZoneId: salesZoneId,
+          skipTableOpen: true,
+          waiterName: waiterName,
+          previousDisplayEntries: previousDisplayEntries,
+          localTicketBeforeSend: localTicketBeforeSend,
+          apiLog: apiLog,
+        );
+      }
     } else if (isFirstKitchenCreate &&
         existingOrderId != null &&
         existingOrderId > 0) {

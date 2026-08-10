@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -205,6 +207,8 @@ class _SessionHeader extends GetView<SessionController> {
   Widget build(BuildContext context) {
     return Obx(() {
       final day = controller.activeDay.value;
+      controller.salesZones.length;
+      controller.selectedSalesZone.value;
       final auth = Get.find<AuthRepository>();
       final userName = auth.cachedSession?.user.name?.trim() ?? '';
       final headerLabel =
@@ -263,7 +267,11 @@ class _SessionHeader extends GetView<SessionController> {
                 ],
               ),
             ),
-            Container(
+            GestureDetector(
+              onTap: controller.salesZones.isEmpty
+                  ? null
+                  : () => _showSalesZonePicker(context, controller),
+              child: Container(
               padding: JtrResponsive.getResponsivePadding(
                 context,
                 horizontal: 14,
@@ -275,15 +283,29 @@ class _SessionHeader extends GetView<SessionController> {
                   JtrResponsive.getResponsiveRadius(context, 20),
                 ),
               ),
-              child: Text(
-                day.salesZoneLabel,
-                style: TextStyle(
-                  color: AppTheme.primary,
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    controller.selectedSalesZoneLabel,
+                    style: TextStyle(
+                      color: AppTheme.primary,
+                      fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  if (controller.salesZones.length > 1) ...[
+                    SizedBox(width: JtrResponsive.getResponsiveSize(context, 4)),
+                    Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: JtrResponsive.getResponsiveSize(context, 18),
+                      color: AppTheme.primary,
+                    ),
+                  ],
+                ],
               ),
+            ),
             ),
             JtrResponsive.getResponsiveHorizontalSpacing(context, 4),
             IconButton(
@@ -299,6 +321,75 @@ class _SessionHeader extends GetView<SessionController> {
       );
     });
   }
+}
+
+void _showSalesZonePicker(BuildContext context, SessionController controller) {
+  final zones = controller.salesZones.toList();
+  if (zones.isEmpty) return;
+  final selectedId = controller.selectedSalesZone.value?.id;
+
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: AppTheme.background,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(
+        top: Radius.circular(JtrResponsive.getResponsiveRadius(context, 16)),
+      ),
+    ),
+    builder: (ctx) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 16,
+                vertical: 14,
+              ),
+              child: Text(
+                'Zone de vente',
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.darkText,
+                ),
+              ),
+            ),
+            const Divider(height: 1),
+            for (final zone in zones)
+              ListTile(
+                title: Text(
+                  zone.displayLabel,
+                  style: TextStyle(
+                    fontWeight: zone.id == selectedId
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+                subtitle: Text(
+                  zone.usesTableFlow ? 'Avec tables' : 'Sans table',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                trailing: zone.id == selectedId
+                    ? const Icon(Icons.check, color: AppTheme.primary)
+                    : null,
+                onTap: () {
+                  Navigator.of(ctx).pop();
+                  unawaited(controller.selectSalesZone(zone));
+                },
+              ),
+            JtrResponsive.getResponsiveSpacing(context, 8),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class _SessionTableLayout {

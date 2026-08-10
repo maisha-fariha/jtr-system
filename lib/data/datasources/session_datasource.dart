@@ -9,6 +9,7 @@ import '../../utils/api_log.dart';
 import '../models/active_day_info.dart';
 import '../models/api_envelope.dart';
 import '../models/day_statistics_info.dart';
+import '../models/sales_zone_info.dart';
 import '../mappers/order_mapper.dart';
 
 class SessionRemoteDataSource {
@@ -32,6 +33,26 @@ class SessionRemoteDataSource {
     }
 
     return ActiveDayInfo.fromJson(envelope.data!);
+  }
+
+  /// Active sales zones for POS (sorted by [SalesZoneInfo.displayOrder] client-side).
+  Future<List<SalesZoneInfo>> fetchSalesZonesShortlist() async {
+    final response = await _client.get<Map<String, dynamic>>(
+      ApiEndpoints.salesZonesShortlist,
+    );
+    final envelope = ApiEnvelope<dynamic>.fromJson(
+      response.data!,
+      (json) => json,
+    );
+
+    if (!envelope.success) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load sales zones.',
+        statusCode: envelope.status,
+      );
+    }
+
+    return SalesZoneInfo.listFromPayload(envelope.data);
   }
 
   Future<DayStatisticsInfo> fetchActiveDayStatistics() async {
@@ -78,9 +99,13 @@ class SessionRemoteDataSource {
   /// can paint without waiting on further pagination.
   Future<List<Map<String, dynamic>>> fetchOrdersList({
     int? waiterId,
+    int? salesZoneId,
     bool firstPageOnly = false,
   }) async {
-    final first = await fetchOrdersFirstPage(waiterId: waiterId);
+    final first = await fetchOrdersFirstPage(
+      waiterId: waiterId,
+      salesZoneId: salesZoneId,
+    );
     if (firstPageOnly || first.lastPage <= 1) {
       return first.orders;
     }
@@ -88,22 +113,32 @@ class SessionRemoteDataSource {
     final rest = await fetchOrdersRemainingPages(
       lastPage: first.lastPage,
       waiterId: waiterId,
+      salesZoneId: salesZoneId,
     );
     return [...first.orders, ...rest];
   }
 
   /// Page 1 only — same cost as a single Postman request.
   Future<({List<Map<String, dynamic>> orders, int lastPage})>
-      fetchOrdersFirstPage({int? waiterId}) {
-    return fetchOrdersPage(page: 1, waiterId: waiterId);
+      fetchOrdersFirstPage({int? waiterId, int? salesZoneId}) {
+    return fetchOrdersPage(
+      page: 1,
+      waiterId: waiterId,
+      salesZoneId: salesZoneId,
+    );
   }
 
   /// Single orders page (`per_page: 10`).
   Future<({List<Map<String, dynamic>> orders, int lastPage})> fetchOrdersPage({
     required int page,
     int? waiterId,
+    int? salesZoneId,
   }) {
-    return _fetchOrdersPage(page: page, waiterId: waiterId);
+    return _fetchOrdersPage(
+      page: page,
+      waiterId: waiterId,
+      salesZoneId: salesZoneId,
+    );
   }
 
   /// Pages 2..[lastPage] in parallel (capped).
@@ -113,6 +148,7 @@ class SessionRemoteDataSource {
   Future<List<Map<String, dynamic>>> fetchOrdersRemainingPages({
     required int lastPage,
     int? waiterId,
+    int? salesZoneId,
     void Function(int pagesLoaded, int totalPages)? onPagesLoaded,
   }) async {
     if (lastPage <= 1) return const [];
@@ -129,7 +165,13 @@ class SessionRemoteDataSource {
     for (var i = 0; i < remainingPages.length; i += batchSize) {
       final batch = remainingPages.skip(i).take(batchSize).toList();
       final pages = await Future.wait(
-        batch.map((page) => fetchOrdersPage(page: page, waiterId: waiterId)),
+        batch.map(
+          (page) => fetchOrdersPage(
+            page: page,
+            waiterId: waiterId,
+            salesZoneId: salesZoneId,
+          ),
+        ),
       );
       for (final page in pages) {
         orders.addAll(page.orders);
@@ -146,6 +188,7 @@ class SessionRemoteDataSource {
   Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
     required int page,
     int? waiterId,
+    int? salesZoneId,
     String? status,
   }) async {
     final queryParameters = <String, dynamic>{
@@ -155,6 +198,9 @@ class SessionRemoteDataSource {
     };
     if (waiterId != null && waiterId > 0) {
       queryParameters['waiter_id'] = waiterId;
+    }
+    if (salesZoneId != null && salesZoneId > 0) {
+      queryParameters['sales_zone_id'] = salesZoneId;
     }
     if (status != null && status.isNotEmpty) {
       queryParameters['status'] = status;

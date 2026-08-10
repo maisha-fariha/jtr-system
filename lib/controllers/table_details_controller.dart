@@ -1821,9 +1821,11 @@ class TableDetailsController extends GetxController {
     }
 
     int? salesZoneId;
+    var skipTableOpen = false;
     if (Get.isRegistered<SessionController>()) {
-      salesZoneId =
-          Get.find<SessionController>().activeDay.value.salesZoneId;
+      final session = Get.find<SessionController>();
+      salesZoneId = session.selectedSalesZoneId;
+      skipTableOpen = !session.selectedZoneUsesTableFlow;
     }
     String? waiterName;
     if (Get.isRegistered<AuthRepository>()) {
@@ -1902,6 +1904,7 @@ class TableDetailsController extends GetxController {
             waiterId: _currentWaiterId,
             lines: draftLines,
             salesZoneId: salesZoneId,
+            skipTableOpen: skipTableOpen,
             waiterName: waiterName,
             previousDisplayEntries: layoutBeforeSend,
             // Only pass id for 2nd+ Send (order already has API lines).
@@ -2009,6 +2012,23 @@ class TableDetailsController extends GetxController {
     if (id == null || id <= 0) {
       AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
       return;
+    }
+
+    if (Get.isRegistered<SessionController>()) {
+      final zone = Get.find<SessionController>().selectedSalesZone.value;
+      final entries = order?.displayEntries ?? const <OrderDisplayEntry>[];
+      if (zone != null &&
+          zone.requireSendBeforePayment &&
+          !_didCompleteKitchenSend &&
+          !_layoutHasServerItemIds(entries)) {
+        AppSnackbar.show(
+          'Paiement indisponible',
+          'Envoyez la commande en cuisine avant le paiement.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+        );
+        return;
+      }
     }
 
     final currentOrder = order;

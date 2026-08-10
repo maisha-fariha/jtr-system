@@ -4268,7 +4268,7 @@ class OrderMapper {
   static Map<String, dynamic> buildCreateOrderFromDraftLines({
     required int waiterId,
     required int numberOfGuests,
-    required int tableId,
+    int? tableId,
     int? salesZoneId,
     required List<LocalDraftLine> lines,
   }) {
@@ -4311,7 +4311,6 @@ class OrderMapper {
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
       'number_of_guests': numberOfGuests,
-      'table_id': tableId,
       'seat_orders': [
         {
           'seat_number': defaultSeat,
@@ -4319,7 +4318,12 @@ class OrderMapper {
         },
       ],
     };
-    if (salesZoneId != null) payload['sales_zone_id'] = salesZoneId;
+    if (tableId != null && tableId > 0) {
+      payload['table_id'] = tableId;
+    }
+    if (salesZoneId != null && salesZoneId > 0) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
     return payload;
   }
 

@@ -21,6 +21,8 @@ import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
 import '../data/datasources/stock_remote_datasource.dart';
 import '../data/repositories/stock_repository.dart';
+import '../data/datasources/customer_remote_datasource.dart';
+import '../data/repositories/customer_repository.dart';
 import '../data/datasources/realtime_remote_datasource.dart';
 import '../services/reverb_realtime_service.dart';
 
@@ -107,6 +109,17 @@ class AppBinding extends Bindings {
     Get.lazyPut<StockRepository>(
       () => StockRepository(
         remote: Get.find<StockRemoteDataSource>(),
+        connectivity: Get.find<ConnectivityService>(),
+      ),
+      fenix: true,
+    );
+    Get.lazyPut<CustomerRemoteDataSource>(
+      () => CustomerRemoteDataSource(Get.find<ApiClient>()),
+      fenix: true,
+    );
+    Get.lazyPut<CustomerRepository>(
+      () => CustomerRepository(
+        remote: Get.find<CustomerRemoteDataSource>(),
         connectivity: Get.find<ConnectivityService>(),
       ),
       fenix: true,

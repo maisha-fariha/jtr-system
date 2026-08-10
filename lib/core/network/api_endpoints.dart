@@ -16,6 +16,9 @@ class ApiEndpoints {
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';
   static const salesZonesShortlist = '/api/sales-zones/shortlist';
+  static const customersShortlist = '/api/customers/shortlist';
+  static const customers = '/api/customers';
+  static String customerById(int id) => '/api/customers/$id';
   static const orders = '/api/orders';
   static const createOrder = orders;
   static const openOrders = '/api/days/open-orders';

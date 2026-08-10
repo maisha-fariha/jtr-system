@@ -732,6 +732,7 @@ class OrderRepository {
     required int waiterId,
     required List<LocalDraftLine> lines,
     int? salesZoneId,
+    int? customerId,
     bool skipTableOpen = false,
     String? waiterName,
     List<OrderDisplayEntry>? previousDisplayEntries,
@@ -806,6 +807,7 @@ class OrderRepository {
       numberOfGuests: numberOfGuests,
       tableId: table.id > 0 ? table.id : null,
       salesZoneId: resolvedSalesZoneId,
+      customerId: customerId,
       tableNumberLabel: skipTableOpen ? freeTicketLabel : null,
       lines: lines,
     );
@@ -912,6 +914,7 @@ class OrderRepository {
     required int waiterId,
     required List<LocalDraftLine> lines,
     int? salesZoneId,
+    int? customerId,
     /// Takeaway / delivery zones: POST with sales_zone_id, no open-by-number.
     bool skipTableOpen = false,
     String? waiterName,
@@ -953,6 +956,7 @@ class OrderRepository {
           waiterId: waiterId,
           lines: lines,
           salesZoneId: salesZoneId,
+          customerId: customerId,
           skipTableOpen: skipTableOpen,
           waiterName: waiterName,
           previousDisplayEntries: previousDisplayEntries,
@@ -1031,6 +1035,7 @@ class OrderRepository {
           waiterId: waiterId,
           lines: lines,
           salesZoneId: salesZoneId,
+          customerId: customerId,
           skipTableOpen: true,
           waiterName: waiterName,
           previousDisplayEntries: previousDisplayEntries,
@@ -1119,6 +1124,7 @@ class OrderRepository {
       numberOfGuests: numberOfGuests,
       tableId: table.id,
       salesZoneId: resolvedSalesZoneId,
+      customerId: customerId,
       lines: lines,
     );
 

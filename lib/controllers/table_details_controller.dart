@@ -1904,6 +1904,7 @@ class TableDetailsController extends GetxController {
             waiterId: _currentWaiterId,
             lines: draftLines,
             salesZoneId: salesZoneId,
+            customerId: live.customerId ?? seedOrder?.customerId,
             skipTableOpen: skipTableOpen,
             waiterName: waiterName,
             previousDisplayEntries: layoutBeforeSend,

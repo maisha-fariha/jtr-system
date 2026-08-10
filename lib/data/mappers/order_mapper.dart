@@ -4284,6 +4284,7 @@ class OrderMapper {
     required int numberOfGuests,
     int? tableId,
     int? salesZoneId,
+    int? customerId,
     /// Free-zone ticket (`C1`, `C2`, …) when there is no [tableId].
     String? tableNumberLabel,
     required List<LocalDraftLine> lines,
@@ -4339,6 +4340,9 @@ class OrderMapper {
     }
     if (salesZoneId != null && salesZoneId > 0) {
       payload['sales_zone_id'] = salesZoneId;
+    }
+    if (customerId != null && customerId > 0) {
+      payload['customer_id'] = customerId;
     }
     final freeLabel = normalizeFreeZoneTicketLabel(tableNumberLabel);
     if (freeLabel != null && (tableId == null || tableId <= 0)) {

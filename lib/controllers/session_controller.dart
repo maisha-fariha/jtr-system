@@ -24,6 +24,7 @@ import '../utils/api_log.dart';
 import '../utils/app_theme.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/cancel_table_dialog.dart';
+import '../widgets/customer_cardex_dialog.dart';
 import '../widgets/table_number_dialog.dart';
 import '../widgets/table_occupied_dialog.dart';
 import '../widgets/ticket_loading_dialog.dart';
@@ -936,7 +937,13 @@ class SessionController extends GetxController {
     SessionOrder incoming,
     SessionOrder? previous,
   ) {
-    final resolved = _preferDetailedOrderCore(incoming, previous);
+    var resolved = _preferDetailedOrderCore(incoming, previous);
+    final prevCustomer = previous?.customerId;
+    if ((resolved.customerId == null || resolved.customerId! <= 0) &&
+        prevCustomer != null &&
+        prevCustomer > 0) {
+      resolved = resolved.copyWith(customerId: prevCustomer);
+    }
     if (!selectedZoneUsesTableFlow) {
       final keepFree = OrderMapper.normalizeFreeZoneTicketLabel(previous?.number) ??
           (previous != null && previous.id > 0
@@ -1538,27 +1545,21 @@ class SessionController extends GetxController {
     // Zones without tables: skip table number (desktop free-order flow).
     if (!selectedZoneUsesTableFlow) {
       if (selectedSalesZone.value?.hasClientCardex == true) {
-        _showSnack(
-          'Zone',
-          'Cette zone nécessite un client (cardex) — bientôt disponible.',
+        // Docs: resolve/create customer before creating the order.
+        unawaited(
+          CustomerCardexDialog.show(
+            context: context,
+            onSelected: (customer) {
+              _promptFreeZoneCovers(
+                context: context,
+                customerId: customer.id,
+              );
+            },
+          ),
         );
         return;
       }
-      TableNumberDialog.show(
-        context: context,
-        title: 'NOMBRE DE COUVERTS',
-        integerOnly: true,
-        maxDigits: 3,
-        minValue: 1,
-        onConfirm: (couverts) {
-          unawaited(
-            _createFreeZoneOrderAndOpenDetails(
-              context: context,
-              couverts: couverts,
-            ),
-          );
-        },
-      );
+      _promptFreeZoneCovers(context: context);
       return;
     }
 
@@ -1574,16 +1575,47 @@ class SessionController extends GetxController {
     );
   }
 
+  void _promptFreeZoneCovers({
+    required BuildContext context,
+    int? customerId,
+  }) {
+    TableNumberDialog.show(
+      context: context,
+      title: 'NOMBRE DE COUVERTS',
+      integerOnly: true,
+      maxDigits: 3,
+      minValue: 1,
+      onConfirm: (couverts) {
+        unawaited(
+          _createFreeZoneOrderAndOpenDetails(
+            context: context,
+            couverts: couverts,
+            customerId: customerId,
+          ),
+        );
+      },
+    );
+  }
+
   /// Takeaway / delivery style: no table, local draft keyed as C1, C2, …
   Future<void> _createFreeZoneOrderAndOpenDetails({
     required BuildContext context,
     required String couverts,
+    int? customerId,
   }) async {
     final guests = int.tryParse(couverts.trim()) ?? 0;
     if (guests < 1) {
       _showSnack(
         'Couverts',
         'Le nombre de couverts doit être supérieur à 0.',
+      );
+      return;
+    }
+    if (selectedSalesZone.value?.hasClientCardex == true &&
+        (customerId == null || customerId <= 0)) {
+      _showSnack(
+        'Client requis',
+        'Sélectionnez un client (cardex) pour cette zone.',
       );
       return;
     }
@@ -1608,12 +1640,13 @@ class SessionController extends GetxController {
       impressionColor: OrderMapper.impressionColorFor(0),
       total: OrderMapper.formatPrice('0'),
       products: const [],
+      customerId: customerId,
     );
 
     _upsertOrderInList(placeholder);
     logOrderFlow(
       '_createFreeZoneOrder LOCAL DRAFT ticket=$ticketKey '
-      'zone=${zone?.id} guests=$guests',
+      'zone=${zone?.id} guests=$guests customerId=${customerId ?? 'none'}',
     );
     openTableDetails(
       placeholder.number,

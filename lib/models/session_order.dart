@@ -17,6 +17,7 @@ class SessionOrder {
     required this.total,
     required this.products,
     this.waiterId,
+    this.customerId,
     int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
   })  : itemCount = itemCount ?? products.length,
@@ -27,6 +28,9 @@ class SessionOrder {
 
   /// Assigned waiter user id from the API, when known.
   final int? waiterId;
+
+  /// Cardex customer id when the sales zone requires a client.
+  final int? customerId;
   final String number;
   final Color numberColor;
   final String group;
@@ -64,6 +68,8 @@ class SessionOrder {
     String? total,
     List<OrderProduct>? products,
     int? waiterId,
+    int? customerId,
+    bool clearCustomerId = false,
     int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
   }) {
@@ -80,6 +86,7 @@ class SessionOrder {
       impressionColor: impressionColor ?? this.impressionColor,
       total: total ?? this.total,
       waiterId: waiterId ?? this.waiterId,
+      customerId: clearCustomerId ? null : (customerId ?? this.customerId),
       products: nextProducts,
       itemCount: itemCount ??
           (products != null ? nextProducts.length : this.itemCount),

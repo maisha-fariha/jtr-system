@@ -36,22 +36,30 @@ class LoginController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    // Never seed stale/dummy cache into the field — always wait for a fresh
+    // fetch (or an explicit cache fallback if offline).
     identifiantFieldController = UserIdentifiantFieldController(
       textController: identifiantController,
       hideSuggestionsFocusNode: passwordFocusNode,
-      initialUsers: _authRepository.cachedUserSuggestions,
+      initialUsers: const [],
     );
-    _loadAuthData();
+    unawaited(_loadAuthData());
   }
 
   Future<void> _loadAuthData() async {
     isLoadingUsers.value = true;
     try {
-      final loadedUsers = await _authRepository.getLoginUsers();
+      // Always hit the network after device activate / logout so the picker
+      // is not stuck on a previous session's cached (or dummy) users.
+      final loadedUsers = await _authRepository.getLoginUsers(
+        forceRefresh: true,
+      );
       users.assignAll(loadedUsers);
       identifiantFieldController.updateUsers(loadedUsers);
 
-      final loadedRoles = await _authRepository.getLoginRoles();
+      final loadedRoles = await _authRepository.getLoginRoles(
+        forceRefresh: true,
+      );
       roles.assignAll(loadedRoles.map((role) => role.name));
     } on ApiException catch (error) {
       final cached = _authRepository.cachedUserSuggestions;

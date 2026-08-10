@@ -1,6 +1,7 @@
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
+import '../controllers/login_controller.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
@@ -26,6 +27,10 @@ class AppNavigation {
     }
     if (Get.isRegistered<AuthRepository>()) {
       await Get.find<AuthRepository>().logout();
+    }
+    // Drop any lingering login controller so onInit reloads users from API.
+    if (Get.isRegistered<LoginController>()) {
+      Get.delete<LoginController>(force: true);
     }
     Get.offAllNamed(AppRoutes.login);
   }

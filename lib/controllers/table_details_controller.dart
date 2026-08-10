@@ -2037,23 +2037,6 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    if (Get.isRegistered<SessionController>()) {
-      final zone = Get.find<SessionController>().selectedSalesZone.value;
-      final entries = order?.displayEntries ?? const <OrderDisplayEntry>[];
-      if (zone != null &&
-          zone.requireSendBeforePayment &&
-          !_didCompleteKitchenSend &&
-          !_layoutHasServerItemIds(entries)) {
-        AppSnackbar.show(
-          'Paiement indisponible',
-          'Envoyez la commande en cuisine avant le paiement.',
-          snackPosition: SnackPosition.BOTTOM,
-          margin: const EdgeInsets.all(16),
-        );
-        return;
-      }
-    }
-
     final currentOrder = order;
     if (currentOrder == null || currentOrder.products.isEmpty) {
       AppSnackbar.show(

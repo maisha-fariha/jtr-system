@@ -798,11 +798,15 @@ class OrderRepository {
       );
     }
 
+    final freeTicketLabel =
+        OrderMapper.normalizeFreeZoneTicketLabel(tableNumber);
+
     final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
       tableId: table.id > 0 ? table.id : null,
       salesZoneId: resolvedSalesZoneId,
+      tableNumberLabel: skipTableOpen ? freeTicketLabel : null,
       lines: lines,
     );
 
@@ -825,7 +829,11 @@ class OrderRepository {
 
     if (orderId == null || orderId <= 0) {
       apiLog.writeln('── POST create failed/empty — try recover (no PUT) ──');
-      final recovered = await tryRecoverCreatedOrder(tableNumber: tableNumber);
+      final recovered = await tryRecoverCreatedOrder(
+        tableNumber: tableNumber,
+        salesZoneId: resolvedSalesZoneId,
+        waiterId: waiterId,
+      );
       if (recovered != null && recovered.order.id > 0) {
         final recoveredId = recovered.order.id;
         apiLog.writeln(
@@ -854,7 +862,9 @@ class OrderRepository {
       lastCreateOrderLog = apiLog.toString();
       lastKitchenSendLog = apiLog.toString();
       throw ApiException(
-        message: 'Impossible de créer la commande sur la table $tableNumber.',
+        message: OrderMapper.isFreeZoneTicketLabel(tableNumber)
+            ? 'Impossible de créer la commande.'
+            : 'Impossible de créer la commande sur la table $tableNumber.',
       );
     }
 
@@ -862,8 +872,11 @@ class OrderRepository {
     detail = <String, dynamic>{
       ...detail,
       'id': orderId,
-      'table_id': table.id,
-      'table_number': table.tableNumber,
+      if (table.id > 0) 'table_id': table.id,
+      if (OrderMapper.isFreeZoneTicketLabel(tableNumber))
+        'table_number': OrderMapper.normalizeFreeZoneTicketLabel(tableNumber)
+      else if (table.tableNumber > 0)
+        'table_number': table.tableNumber,
     };
 
     try {
@@ -1131,7 +1144,11 @@ class OrderRepository {
     // and finish — never PUT again (first Send is POST-only).
     if (orderId == null || orderId <= 0) {
       apiLog.writeln('── POST create failed/empty — try recover ──');
-      final recovered = await tryRecoverCreatedOrder(tableNumber: tableNumber);
+      final recovered = await tryRecoverCreatedOrder(
+        tableNumber: tableNumber,
+        salesZoneId: resolvedSalesZoneId,
+        waiterId: waiterId,
+      );
       if (recovered != null && recovered.order.id > 0) {
         final recoveredId = recovered.order.id;
         apiLog.writeln(
@@ -1334,10 +1351,13 @@ class OrderRepository {
       await _persistSuivreLayoutHints(orderId, previousDisplayEntries);
     }
 
-    final displayNumber = OrderMapper.displayKey(
-      orderId: orderId,
-      tableNumber: tableNumber,
-    );
+    final displayNumber =
+        OrderMapper.normalizeFreeZoneTicketLabel(localTicketBeforeSend?.number) ??
+            OrderMapper.normalizeFreeZoneTicketLabel(tableNumber?.toString()) ??
+            OrderMapper.displayKey(
+              orderId: orderId,
+              tableNumber: tableNumber,
+            );
 
     final enrichedDetail = await _enrichDetailMenuSelectionNames(detail);
 
@@ -1574,8 +1594,18 @@ class OrderRepository {
   /// When POST returned an error but the backend may have created the order.
   Future<CreateTableOrderResult?> tryRecoverCreatedOrder({
     required String tableNumber,
+    int? salesZoneId,
+    int? waiterId,
   }) async {
     if (!await _connectivity.isOnline) return null;
+
+    // Free-zone tickets (C1…) are not real tables — recover from open orders.
+    if (OrderMapper.isFreeZoneTicketLabel(tableNumber)) {
+      return _tryRecoverFreeZoneCreatedOrder(
+        salesZoneId: salesZoneId,
+        waiterId: waiterId,
+      );
+    }
 
     try {
       final tables = await _sessionRemote.fetchTablesList();
@@ -1612,6 +1642,66 @@ class OrderRepository {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Latest open order in the free zone (no table to resolve).
+  Future<CreateTableOrderResult?> _tryRecoverFreeZoneCreatedOrder({
+    int? salesZoneId,
+    int? waiterId,
+  }) async {
+    try {
+      final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
+      final scopedWaiter =
+          (waiterId != null && waiterId > 0) ? waiterId : null;
+      final page = await _sessionRemote.fetchOrdersFirstPage(
+        waiterId: scopedWaiter,
+        salesZoneId: zoneId,
+      );
+      if (page.orders.isEmpty) return null;
+
+      Map<String, dynamic>? best;
+      var bestMillis = -1;
+      for (final raw in page.orders) {
+        if (!OrderMapper.isActiveDayOpenOrder(raw)) continue;
+        if (scopedWaiter != null &&
+            !OrderMapper.orderBelongsToWaiter(raw, scopedWaiter)) {
+          continue;
+        }
+        final id = OrderMapper.orderIdFromDetail(raw);
+        if (id <= 0) continue;
+        final millis = _orderSortMillisSafe(raw);
+        if (millis >= bestMillis) {
+          bestMillis = millis;
+          best = raw;
+        }
+      }
+      if (best == null) return null;
+
+      final orderId = OrderMapper.orderIdFromDetail(best);
+      var detail = best;
+      try {
+        detail = await _remote.fetchOrderDetail(orderId);
+      } catch (_) {}
+      if (OrderMapper.isOrderClosedOrCancelled(detail)) return null;
+
+      await _local.saveOrderDetail(orderId, detail);
+      await _sessionLocal.upsertOpenOrderInList(detail);
+      final mapped = OrderMapper.fromOrderDetail(detail).copyWith(id: orderId);
+      return CreateTableOrderResult(order: mapped, apiLog: '');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  int _orderSortMillisSafe(Map<String, dynamic> order) {
+    for (final key in ['updated_at', 'created_at', 'opened_at']) {
+      final raw = order[key];
+      if (raw is String && raw.isNotEmpty) {
+        final parsed = DateTime.tryParse(raw);
+        if (parsed != null) return parsed.millisecondsSinceEpoch;
+      }
+    }
+    return OrderMapper.orderIdFromDetail(order);
   }
 
   Future<void> _tryStartTableSession({

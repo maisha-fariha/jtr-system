@@ -119,6 +119,10 @@ class SessionController extends GetxController {
   /// containing them.
   final Set<String> _suppressedTableNumbers = <String>{};
 
+  /// Stable C1/C2… labels for free-zone orders (API has no table_number).
+  final Map<int, String> _freeTicketByOrderId = <int, String>{};
+  int _freeOrderSeq = 0;
+
   /// Bumped on each list fetch so a late unscoped response cannot overwrite
   /// a newer zone-scoped list.
   int _ordersFetchGeneration = 0;
@@ -299,6 +303,9 @@ class SessionController extends GetxController {
   Future<void> selectSalesZone(SalesZoneInfo zone) async {
     if (selectedSalesZone.value?.id == zone.id) return;
     selectedSalesZone.value = zone;
+    // New zone → fresh C1… sequence for that zone's open tickets.
+    _freeTicketByOrderId.clear();
+    _freeOrderSeq = 0;
     // Drop previous zone rows immediately so the session list shows a loader
     // while the zone-scoped fetch completes (not a stale mix of zones).
     orders.clear();
@@ -711,6 +718,7 @@ class SessionController extends GetxController {
       }
     }
     _dedupeOrdersByTableKeyInPlace();
+    _relabelFreeZoneOrdersInPlace();
     orders.refresh();
 
     if (clearSuppressedMatches && _suppressedTableNumbers.isNotEmpty) {
@@ -822,9 +830,129 @@ class SessionController extends GetxController {
 
   /// Session list summaries omit products; never wipe lines / totals already loaded.
   ///
+  /// Free-zone list: never show order id — assign stable C1, C2, C3…
+  /// (API has no table_number for has_tables=false zones).
+  ///
+  /// Numbering: oldest open ticket → C1, newest → C[n].
+  /// List order: descending — C[n] (latest) at the top.
+  void _relabelFreeZoneOrdersInPlace() {
+    if (selectedZoneUsesTableFlow) return;
+
+    for (final order in orders) {
+      final free = OrderMapper.normalizeFreeZoneTicketLabel(order.number);
+      if (free != null && order.id > 0) {
+        _freeTicketByOrderId[order.id] = free;
+      }
+    }
+
+    // Oldest server id gets the lowest C#; newest gets the highest.
+    final unlabeledIds = <int>[
+      for (final order in orders)
+        if (order.id > 0 && !_freeTicketByOrderId.containsKey(order.id))
+          order.id,
+    ]..sort();
+
+    _syncFreeOrderSeqFromKnownLabels();
+    for (final id in unlabeledIds) {
+      _freeOrderSeq += 1;
+      _freeTicketByOrderId[id] = 'C$_freeOrderSeq';
+    }
+
+    for (var i = 0; i < orders.length; i++) {
+      final order = orders[i];
+      if (order.id <= 0) {
+        if (!OrderMapper.isFreeZoneTicketLabel(order.number)) {
+          _freeOrderSeq += 1;
+          orders[i] = order.copyWith(number: 'C$_freeOrderSeq');
+        }
+        continue;
+      }
+      final label = _freeTicketByOrderId[order.id];
+      if (label != null && order.number != label) {
+        orders[i] = order.copyWith(number: label);
+      }
+    }
+
+    orders.sort((a, b) {
+      final byC = _freeTicketSeq(b).compareTo(_freeTicketSeq(a));
+      if (byC != 0) return byC;
+      // Same C (shouldn't happen) — newer server id first.
+      return b.id.compareTo(a.id);
+    });
+  }
+
+  /// Parses `C12` → 12; unknown labels sort last in desc lists via 0.
+  int _freeTicketSeq(SessionOrder order) {
+    final free = OrderMapper.normalizeFreeZoneTicketLabel(order.number);
+    if (free == null) return order.id > 0 ? order.id : 0;
+    return int.tryParse(free.substring(1)) ?? 0;
+  }
+
+  void _syncFreeOrderSeqFromKnownLabels() {
+    var max = _freeOrderSeq;
+    void consider(String? raw) {
+      final free = OrderMapper.normalizeFreeZoneTicketLabel(raw);
+      if (free == null) return;
+      final n = int.tryParse(free.substring(1));
+      if (n != null && n > max) max = n;
+    }
+
+    for (final label in _freeTicketByOrderId.values) {
+      consider(label);
+    }
+    for (final order in orders) {
+      consider(order.number);
+    }
+    _freeOrderSeq = max;
+  }
+
+  String _nextFreeTicketLabel() {
+    _syncFreeOrderSeqFromKnownLabels();
+    _freeOrderSeq += 1;
+    return 'C$_freeOrderSeq';
+  }
+
+  SessionOrder _withFreeZoneDisplayNumber(SessionOrder order) {
+    if (selectedZoneUsesTableFlow) return order;
+
+    final existing = OrderMapper.normalizeFreeZoneTicketLabel(order.number);
+    if (existing != null) {
+      if (order.id > 0) _freeTicketByOrderId[order.id] = existing;
+      return order.copyWith(number: existing);
+    }
+    if (order.id > 0) {
+      final known = _freeTicketByOrderId[order.id];
+      if (known != null) return order.copyWith(number: known);
+      final next = _nextFreeTicketLabel();
+      _freeTicketByOrderId[order.id] = next;
+      return order.copyWith(number: next);
+    }
+    return order.copyWith(number: _nextFreeTicketLabel());
+  }
+
   /// Table-details mutations must call [updateOrderRow] with
   /// `replaceDetail: true` so emptying the last line is not discarded here.
   SessionOrder _preferDetailedOrder(
+    SessionOrder incoming,
+    SessionOrder? previous,
+  ) {
+    final resolved = _preferDetailedOrderCore(incoming, previous);
+    if (!selectedZoneUsesTableFlow) {
+      final keepFree = OrderMapper.normalizeFreeZoneTicketLabel(previous?.number) ??
+          (previous != null && previous.id > 0
+              ? _freeTicketByOrderId[previous.id]
+              : null) ??
+          (resolved.id > 0 ? _freeTicketByOrderId[resolved.id] : null);
+      if (keepFree != null) {
+        if (resolved.id > 0) _freeTicketByOrderId[resolved.id] = keepFree;
+        return resolved.copyWith(number: keepFree);
+      }
+      return _withFreeZoneDisplayNumber(resolved);
+    }
+    return resolved;
+  }
+
+  SessionOrder _preferDetailedOrderCore(
     SessionOrder incoming,
     SessionOrder? previous,
   ) {
@@ -1083,6 +1211,26 @@ class SessionController extends GetxController {
     }
 
     var safeOrder = order;
+    if (!selectedZoneUsesTableFlow) {
+      SessionOrder? previousById;
+      if (order.id > 0) {
+        for (final row in orders) {
+          if (row.id == order.id) {
+            previousById = row;
+            break;
+          }
+        }
+      }
+      final keep = OrderMapper.normalizeFreeZoneTicketLabel(order.number) ??
+          OrderMapper.normalizeFreeZoneTicketLabel(previousById?.number) ??
+          (order.id > 0 ? _freeTicketByOrderId[order.id] : null);
+      if (keep != null) {
+        if (order.id > 0) _freeTicketByOrderId[order.id] = keep;
+        safeOrder = order.copyWith(number: keep);
+      } else {
+        safeOrder = _withFreeZoneDisplayNumber(order);
+      }
+    }
     var forceReplace = replaceDetail;
     if (order.id > 0 &&
         _orderRepository.shouldDisplayAsEmptyCreateShell(order.id)) {
@@ -1205,7 +1353,14 @@ class SessionController extends GetxController {
       final orderId = await orderIdFuture;
       if (orderId == null || orderId <= 0) return;
 
-      final detail = await _orderRepository.getOrderDetail(orderId);
+      var detail = await _orderRepository.getOrderDetail(orderId);
+      final freeLabel = OrderMapper.normalizeFreeZoneTicketLabel(tableNumber);
+      if (freeLabel != null) {
+        _freeTicketByOrderId[orderId] = freeLabel;
+        detail = detail.copyWith(number: freeLabel);
+      } else if (!selectedZoneUsesTableFlow) {
+        detail = _withFreeZoneDisplayNumber(detail);
+      }
       promoteOrderToTop(detail, replaceDetail: true);
     } catch (_) {
       // Keep optimistic row; unlock so the waiter is not stuck.
@@ -1419,8 +1574,6 @@ class SessionController extends GetxController {
     );
   }
 
-  int _freeOrderSeq = 0;
-
   /// Takeaway / delivery style: no table, local draft keyed as C1, C2, …
   Future<void> _createFreeZoneOrderAndOpenDetails({
     required BuildContext context,
@@ -1440,8 +1593,7 @@ class SessionController extends GetxController {
       return;
     }
 
-    _freeOrderSeq += 1;
-    final ticketKey = 'C$_freeOrderSeq';
+    final ticketKey = _nextFreeTicketLabel();
     final zone = selectedSalesZone.value;
     final name = _currentUserDisplayName;
     final placeholder = SessionOrder(

@@ -1955,15 +1955,23 @@ class TableDetailsController extends GetxController {
       recover: (snap) async {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
+          salesZoneId: salesZoneId,
+          waiterId: _currentWaiterId,
         );
         if (recovered != null && recovered.order.id > 0) {
+          var recoveredOrder = recovered.order;
+          if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+            recoveredOrder = recoveredOrder.copyWith(
+              number: orderNumber.toUpperCase(),
+            );
+          }
           if (Get.isRegistered<SessionController>()) {
             Get.find<SessionController>().promoteOrderToTop(
-              recovered.order,
+              recoveredOrder,
               replaceDetail: true,
             );
           }
-          return recovered.order;
+          return recoveredOrder;
         }
         return snap;
       },
@@ -1975,15 +1983,29 @@ class TableDetailsController extends GetxController {
         }
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
+          salesZoneId: salesZoneId,
+          waiterId: _currentWaiterId,
         );
         if (recovered != null && recovered.order.id > 0) {
+          var recoveredOrder = recovered.order;
+          if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+            recoveredOrder = recoveredOrder.copyWith(
+              number: orderNumber.toUpperCase(),
+            );
+          }
           if (Get.isRegistered<SessionController>()) {
             Get.find<SessionController>().promoteOrderToTop(
-              recovered.order,
+              recoveredOrder,
               replaceDetail: true,
             );
           }
-          completeSentOrderId(recovered.order.id);
+          completeSentOrderId(recoveredOrder.id);
+          return;
+        }
+        // Free-zone: order often exists even when table-based recover fails —
+        // avoid a false "Impossible de créer… C13" snack.
+        if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+          completeSentOrderId(null);
           return;
         }
         completeSentOrderId(null);

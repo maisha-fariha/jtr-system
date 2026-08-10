@@ -4009,10 +4009,24 @@ class OrderMapper {
   static String displayKey({
     required int orderId,
     int? tableNumber,
+    String? tableLabel,
   }) {
+    final free = normalizeFreeZoneTicketLabel(tableLabel);
+    if (free != null) return free;
     if (tableNumber != null) return 'T$tableNumber';
     if (orderId > 0) return 'O$orderId';
     return '—';
+  }
+
+  /// App-generated free-zone tickets (`C1`, `C2`, …) when the zone has no tables.
+  static bool isFreeZoneTicketLabel(String? value) {
+    if (value == null) return false;
+    return RegExp(r'^C\d+$', caseSensitive: false).hasMatch(value.trim());
+  }
+
+  static String? normalizeFreeZoneTicketLabel(String? value) {
+    if (!isFreeZoneTicketLabel(value)) return null;
+    return value!.trim().toUpperCase();
   }
 
   static String formatPrice(String value) {
@@ -4270,6 +4284,8 @@ class OrderMapper {
     required int numberOfGuests,
     int? tableId,
     int? salesZoneId,
+    /// Free-zone ticket (`C1`, `C2`, …) when there is no [tableId].
+    String? tableNumberLabel,
     required List<LocalDraftLine> lines,
   }) {
     if (lines.isEmpty) {
@@ -4323,6 +4339,10 @@ class OrderMapper {
     }
     if (salesZoneId != null && salesZoneId > 0) {
       payload['sales_zone_id'] = salesZoneId;
+    }
+    final freeLabel = normalizeFreeZoneTicketLabel(tableNumberLabel);
+    if (freeLabel != null && (tableId == null || tableId <= 0)) {
+      payload['table_number'] = freeLabel;
     }
     return payload;
   }
@@ -6468,15 +6488,35 @@ class OrderMapper {
 
     final orderId = data['order_id'];
     if (orderId is num && orderId > 0) return orderId.toInt();
-
-    // Table/session payloads must not treat table id as order id.
-    if (data.containsKey('table_number') && activeOrder == null) {
-      return null;
+    if (orderId is String) {
+      final parsed = int.tryParse(orderId.trim());
+      if (parsed != null && parsed > 0) return parsed;
     }
 
     final order = unwrapOrderDetail(data);
     final direct = orderIdFromDetail(order);
-    if (direct > 0) return direct;
+    if (direct > 0) {
+      // Free-zone create echoes `table_number: "C13"` with a real order id —
+      // do not treat that as a bare table/session row.
+      if (normalizeFreeZoneTicketLabel(data['table_number']?.toString()) !=
+          null) {
+        return direct;
+      }
+      // Order payloads carry status / lines / order_number.
+      if (order.containsKey('seat_orders') ||
+          order.containsKey('order_number') ||
+          order['status'] != null ||
+          order['waiter_id'] != null ||
+          order['total_price'] != null ||
+          nestedOrder != null) {
+        return direct;
+      }
+      // Bare table row `{ id, table_number }` — table id is not an order id.
+      if (data.containsKey('table_number') && activeOrder == null) {
+        return null;
+      }
+      return direct;
+    }
 
     return null;
   }

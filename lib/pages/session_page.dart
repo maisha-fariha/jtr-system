@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
 import '../data/mappers/order_mapper.dart';
+import '../data/models/sales_zone_info.dart';
 import '../models/order_display_entry.dart';
 import '../models/order_product.dart';
 import '../models/session_order.dart';
@@ -331,65 +332,212 @@ void _showSalesZonePicker(BuildContext context, SessionController controller) {
   showModalBottomSheet<void>(
     context: context,
     backgroundColor: AppTheme.background,
+    isScrollControlled: true,
     shape: RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(
-        top: Radius.circular(JtrResponsive.getResponsiveRadius(context, 16)),
+        top: Radius.circular(JtrResponsive.getResponsiveRadius(context, 20)),
       ),
     ),
     builder: (ctx) {
+      final maxHeight = MediaQuery.of(ctx).size.height * 0.72;
       return SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: JtrResponsive.getResponsivePadding(
-                context,
-                horizontal: 16,
-                vertical: 14,
-              ),
-              child: Text(
-                'Zone de vente',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 16),
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.darkText,
-                ),
-              ),
-            ),
-            const Divider(height: 1),
-            for (final zone in zones)
-              ListTile(
-                title: Text(
-                  zone.displayLabel,
-                  style: TextStyle(
-                    fontWeight: zone.id == selectedId
-                        ? FontWeight.w700
-                        : FontWeight.w500,
-                    color: AppTheme.darkText,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  margin: EdgeInsets.only(
+                    top: JtrResponsive.getResponsiveSize(ctx, 10),
+                  ),
+                  width: JtrResponsive.getResponsiveSize(ctx, 40),
+                  height: JtrResponsive.getResponsiveSize(ctx, 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardBorder,
+                    borderRadius: BorderRadius.circular(99),
                   ),
                 ),
-                subtitle: Text(
-                  zone.usesTableFlow ? 'Avec tables' : 'Sans table',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                    color: AppTheme.textSecondary,
-                  ),
-                ),
-                trailing: zone.id == selectedId
-                    ? const Icon(Icons.check, color: AppTheme.primary)
-                    : null,
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  unawaited(controller.selectSalesZone(zone));
-                },
               ),
-            JtrResponsive.getResponsiveSpacing(context, 8),
-          ],
+              Padding(
+                padding: JtrResponsive.getResponsivePadding(
+                  ctx,
+                  horizontal: 20,
+                  vertical: 14,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Zone de vente',
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(ctx, 18),
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.darkText,
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                    SizedBox(height: JtrResponsive.getResponsiveSize(ctx, 4)),
+                    Text(
+                      'Choisissez le centre de profit actif',
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(ctx, 12),
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  padding: JtrResponsive.getResponsivePadding(
+                    ctx,
+                    horizontal: 16,
+                    vertical: 4,
+                  ),
+                  itemCount: zones.length,
+                  separatorBuilder: (_, __) => SizedBox(
+                    height: JtrResponsive.getResponsiveSize(ctx, 10),
+                  ),
+                  itemBuilder: (_, index) {
+                    final zone = zones[index];
+                    final selected = zone.id == selectedId;
+                    return _SalesZonePickerTile(
+                      zone: zone,
+                      selected: selected,
+                      onTap: () {
+                        Navigator.of(ctx).pop();
+                        unawaited(controller.selectSalesZone(zone));
+                      },
+                    );
+                  },
+                ),
+              ),
+              JtrResponsive.getResponsiveSpacing(ctx, 12),
+            ],
+          ),
         ),
       );
     },
   );
+}
+
+class _SalesZonePickerTile extends StatelessWidget {
+  const _SalesZonePickerTile({
+    required this.zone,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final SalesZoneInfo zone;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = JtrResponsive.getResponsiveRadius(context, 14);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(radius),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 14,
+            vertical: 12,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? AppTheme.lightButton : AppTheme.inactiveSurface,
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(
+              color: selected ? AppTheme.primary : AppTheme.cardBorder,
+              width: selected ? 1.6 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      zone.displayLabel,
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 14),
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.darkText,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    SizedBox(height: JtrResponsive.getResponsiveSize(context, 6)),
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: JtrResponsive.getResponsiveSize(context, 8),
+                        vertical: JtrResponsive.getResponsiveSize(context, 3),
+                      ),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? AppTheme.primary.withValues(alpha: 0.12)
+                            : AppTheme.background,
+                        borderRadius: BorderRadius.circular(
+                          JtrResponsive.getResponsiveRadius(context, 20),
+                        ),
+                      ),
+                      child: Text(
+                        zone.usesTableFlow ? 'Avec tables' : 'Sans table',
+                        style: TextStyle(
+                          fontSize: JtrResponsive.getResponsiveFontSize(
+                            context,
+                            11,
+                          ),
+                          fontWeight: FontWeight.w600,
+                          color: selected
+                              ? AppTheme.primary
+                              : AppTheme.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 160),
+                opacity: selected ? 1 : 0.35,
+                child: Container(
+                  width: JtrResponsive.getResponsiveSize(context, 26),
+                  height: JtrResponsive.getResponsiveSize(context, 26),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: selected ? AppTheme.primary : Colors.transparent,
+                    border: Border.all(
+                      color: selected ? AppTheme.primary : AppTheme.cardBorder,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: selected
+                      ? Icon(
+                          Icons.check_rounded,
+                          size: JtrResponsive.getResponsiveSize(context, 16),
+                          color: Colors.white,
+                        )
+                      : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SessionTableLayout {

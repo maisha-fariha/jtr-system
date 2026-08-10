@@ -1277,12 +1277,32 @@ class TableDetailsController extends GetxController {
 
   bool get isPayingCard => payingIsCash.value == false;
 
-  bool get canPay =>
-      hasPaymentAccess &&
-      resolvedOrderId != null &&
-      (order?.products.isNotEmpty ?? false) &&
-      !isPaying &&
-      !paymentModesLoading.value;
+  /// Cash/Card enabled when there is a sent/server ticket, or a local draft in a
+  /// zone that allows pay without Send (`require_send_before_payment: false`).
+  bool get canPay {
+    if (!hasPaymentAccess ||
+        isPaying ||
+        paymentModesLoading.value ||
+        (order?.products.isEmpty ?? true)) {
+      return false;
+    }
+
+    final entries = order?.displayEntries ?? const <OrderDisplayEntry>[];
+    final kitchenReady =
+        _didCompleteKitchenSend || _layoutHasServerItemIds(entries);
+    final hasServerOrder = (resolvedOrderId ?? 0) > 0;
+
+    if (!Get.isRegistered<SessionController>()) {
+      return hasServerOrder && kitchenReady;
+    }
+    final zone = Get.find<SessionController>().selectedSalesZone.value;
+    if (zone != null && zone.requireSendBeforePayment) {
+      return hasServerOrder && kitchenReady;
+    }
+
+    // Flag false / unknown: local draft can pay (server create runs on confirm).
+    return true;
+  }
 
   /// True when cached API detail has `status: "offered"`.
   ///
@@ -2031,9 +2051,23 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> payOrder({required BuildContext context, required bool isCash}) async {
-    final id = resolvedOrderId;
-    if (id == null || id <= 0) {
-      AppSnackbar.show('Erreur', 'Commande introuvable pour cette table.');
+    final entries = order?.displayEntries ?? const <OrderDisplayEntry>[];
+    final notSentToKitchen =
+        !_didCompleteKitchenSend && !_layoutHasServerItemIds(entries);
+
+    final zone = Get.isRegistered<SessionController>()
+        ? Get.find<SessionController>().selectedSalesZone.value
+        : null;
+    final requireSend = zone?.requireSendBeforePayment == true;
+
+    // true → must Send first (current Sur place flow).
+    if (requireSend && notSentToKitchen) {
+      AppSnackbar.show(
+        'Paiement indisponible',
+        'Envoyez la commande en cuisine avant le paiement.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
       return;
     }
 
@@ -2066,8 +2100,11 @@ class TableDetailsController extends GetxController {
 
     final label = isCash ? 'espèces' : 'carte de crédit';
     final amountLabel = payableTotalLabel;
+    final existingId = resolvedOrderId;
     // Prefer remaining_amount (partial pay) over ticket total_price.
-    final cachedPayable = _orderRepository.payableAmountForOrder(id);
+    final cachedPayable = existingId != null && existingId > 0
+        ? _orderRepository.payableAmountForOrder(existingId)
+        : null;
     final amount = OrderMapper.formatPaymentAmount(
       cachedPayable != null && cachedPayable > 0
           ? cachedPayable
@@ -2090,12 +2127,42 @@ class TableDetailsController extends GetxController {
       onConfirm: () async {
         payingIsCash.value = isCash;
         try {
+          var id = resolvedOrderId;
+          // false → pay before Send: push local draft to server, then /pay.
+          final needsServerSync = id == null ||
+              id <= 0 ||
+              (!_didCompleteKitchenSend &&
+                  !_layoutHasServerItemIds(
+                    order?.displayEntries ?? currentOrder.displayEntries,
+                  ));
+          if (needsServerSync) {
+            if (requireSend) {
+              AppSnackbar.show(
+                'Paiement indisponible',
+                'Envoyez la commande en cuisine avant le paiement.',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+              return;
+            }
+            id = await _createLocalDraftOnServerForPayment(currentOrder);
+            if (id == null || id <= 0) {
+              AppSnackbar.show(
+                'Erreur',
+                'Impossible de créer la commande pour le paiement.',
+                snackPosition: SnackPosition.BOTTOM,
+                margin: const EdgeInsets.all(16),
+              );
+              return;
+            }
+          }
+          final liveForPay = order ?? currentOrder;
           final result = await _orderRepository.payOrder(
             orderId: id,
             isCash: isCash,
             amount: amount,
-            previousDisplayEntries: currentOrder.displayEntries,
-            localSnapshot: currentOrder,
+            previousDisplayEntries: liveForPay.displayEntries,
+            localSnapshot: liveForPay,
           );
           final updated = result.order;
           if (result.fullyPaid) {
@@ -2150,6 +2217,97 @@ class TableDetailsController extends GetxController {
         }
       },
     );
+  }
+
+  /// Creates a local draft on the server so `/pay` has a real order id.
+  ///
+  /// Used when [SalesZoneInfo.requireSendBeforePayment] is false — pay is
+  /// allowed without an explicit kitchen Send, but the API still needs the
+  /// ticket created/synced first.
+  Future<int?> _createLocalDraftOnServerForPayment(SessionOrder live) async {
+    final layout = OrderMapper.stripEmptySuivreSectionsForCreate(
+      live.displayEntries,
+    );
+    final draftLines = _buildDraftLinesForSend(layout: layout, source: live);
+    if (draftLines.isEmpty) {
+      logOrderFlow('PAY create-draft: no draft lines');
+      return null;
+    }
+
+    int? salesZoneId;
+    var skipTableOpen = false;
+    if (Get.isRegistered<SessionController>()) {
+      final session = Get.find<SessionController>();
+      salesZoneId = session.selectedSalesZoneId;
+      skipTableOpen = !session.selectedZoneUsesTableFlow;
+    }
+    String? waiterName;
+    if (Get.isRegistered<AuthRepository>()) {
+      waiterName = Get.find<AuthRepository>().cachedSession?.user.name;
+    }
+
+    final guests = int.tryParse(live.couverts) ?? 1;
+    final snapshot = OrderOptimisticSync.deepSnapshot(
+      live.copyWith(displayEntries: layout),
+    );
+    final existingId = resolvedOrderId;
+    final isFirstKitchenCreate =
+        !_didCompleteKitchenSend && !_layoutHasServerItemIds(layout);
+
+    logOrderFlow(
+      'PAY create-draft table=$orderNumber lines=${draftLines.length} '
+      'zone=$salesZoneId skipTableOpen=$skipTableOpen '
+      'existingId=${existingId ?? 'none'}',
+    );
+
+    SessionOrder sent;
+    try {
+      sent = await _orderRepository.createAndSendLocalDraft(
+        tableNumber: orderNumber,
+        numberOfGuests: guests,
+        waiterId: _currentWaiterId,
+        lines: draftLines,
+        salesZoneId: salesZoneId,
+        customerId: live.customerId ?? seedOrder?.customerId,
+        skipTableOpen: skipTableOpen,
+        waiterName: waiterName,
+        previousDisplayEntries: layout,
+        existingOrderId:
+            (!isFirstKitchenCreate && existingId != null && existingId > 0)
+                ? existingId
+                : null,
+        localTicketBeforeSend: snapshot,
+        isFirstKitchenCreate: isFirstKitchenCreate,
+      );
+    } catch (e) {
+      logOrderFlow('PAY create-draft failed: $e — trying recover');
+      final recovered = await _orderRepository.tryRecoverCreatedOrder(
+        tableNumber: orderNumber,
+        salesZoneId: salesZoneId,
+        waiterId: _currentWaiterId,
+      );
+      if (recovered == null || recovered.order.id <= 0) rethrow;
+      sent = recovered.order;
+    }
+
+    if (sent.id <= 0) return null;
+
+    orderId = sent.id;
+    seedOrder = sent;
+    _localDraftLines.clear();
+    _deferDetailFetch = false;
+    _didCompleteKitchenSend = true;
+    _rememberSentKitchenLines(sent);
+    orderUiRevision.value++;
+    if (Get.isRegistered<SessionController>()) {
+      Get.find<SessionController>()
+          .promoteOrderToTop(sent, replaceDetail: true);
+    }
+    try {
+      _applySyncedOrder(sent);
+    } catch (_) {}
+    logOrderFlow('PAY create-draft OK orderId=${sent.id}');
+    return sent.id;
   }
 
   Future<void> addSuivreAfterLatestItems() async {

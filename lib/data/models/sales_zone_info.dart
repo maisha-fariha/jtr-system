@@ -10,6 +10,7 @@ class SalesZoneInfo {
     this.hasClientCardex = false,
     this.displayOrder = 0,
     this.isDefault = false,
+    this.requireSendBeforePayment = false,
   });
 
   final int id;
@@ -21,6 +22,10 @@ class SalesZoneInfo {
   final bool hasClientCardex;
   final int displayOrder;
   final bool isDefault;
+
+  /// When true, waiter must Send before Cash/Card (Sur place).
+  /// When false, local draft may pay after a silent server create.
+  final bool requireSendBeforePayment;
 
   /// Table / floor-plan zones use the existing table-number flow.
   bool get usesTableFlow => hasTables || hasFloorPlan;
@@ -44,6 +49,7 @@ class SalesZoneInfo {
       hasClientCardex: json['has_client_cardex'] == true,
       displayOrder: (json['display_order'] as num?)?.toInt() ?? 0,
       isDefault: json['is_default'] == true,
+      requireSendBeforePayment: json['require_send_before_payment'] == true,
     );
   }
 

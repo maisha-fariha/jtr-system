@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/mappers/order_mapper.dart';
 import 'order_display_entry.dart';
 import 'order_product.dart';
 
@@ -54,6 +55,12 @@ class SessionOrder {
   }
 
   bool get isLocalOnly => id <= 0;
+
+  /// List/header label: local `CL1` / `CL2`, after Send `C{id}`.
+  String get displayNumber => OrderMapper.ticketDisplayLabel(
+        id: id,
+        number: number,
+      );
 
   SessionOrder copyWith({
     int? id,

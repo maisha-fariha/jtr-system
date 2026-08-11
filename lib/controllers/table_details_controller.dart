@@ -1901,7 +1901,17 @@ class TableDetailsController extends GetxController {
         completeSentOrderId(toApply.id);
         if (Get.isRegistered<SessionController>()) {
           final session = Get.find<SessionController>();
-          session.promoteOrderToTop(toApply, replaceDetail: true);
+          final labeled = toApply.id > 0 &&
+                  !session.selectedZoneUsesTableFlow
+              ? toApply.copyWith(
+                  number: OrderMapper.freeZoneTicketLabelForOrderId(toApply.id),
+                )
+              : toApply;
+          session.promoteOrderToTop(
+            labeled,
+            replaceDetail: true,
+            replaceLocalDraftNumber: orderNumber,
+          );
         }
         try {
           _applySyncedOrder(toApply);
@@ -1981,15 +1991,21 @@ class TableDetailsController extends GetxController {
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
-          if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+          final freeZone = Get.isRegistered<SessionController>() &&
+              !Get.find<SessionController>().selectedZoneUsesTableFlow;
+          if (freeZone ||
+              OrderMapper.isFreeZoneTicketOrDraftLabel(orderNumber)) {
             recoveredOrder = recoveredOrder.copyWith(
-              number: orderNumber.toUpperCase(),
+              number: OrderMapper.freeZoneTicketLabelForOrderId(
+                recoveredOrder.id,
+              ),
             );
           }
           if (Get.isRegistered<SessionController>()) {
             Get.find<SessionController>().promoteOrderToTop(
               recoveredOrder,
               replaceDetail: true,
+              replaceLocalDraftNumber: orderNumber,
             );
           }
           return recoveredOrder;
@@ -2009,15 +2025,20 @@ class TableDetailsController extends GetxController {
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
-          if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+          if (OrderMapper.isFreeZoneTicketOrDraftLabel(orderNumber) ||
+              (Get.isRegistered<SessionController>() &&
+                  !Get.find<SessionController>().selectedZoneUsesTableFlow)) {
             recoveredOrder = recoveredOrder.copyWith(
-              number: orderNumber.toUpperCase(),
+              number: OrderMapper.freeZoneTicketLabelForOrderId(
+                recoveredOrder.id,
+              ),
             );
           }
           if (Get.isRegistered<SessionController>()) {
             Get.find<SessionController>().promoteOrderToTop(
               recoveredOrder,
               replaceDetail: true,
+              replaceLocalDraftNumber: orderNumber,
             );
           }
           completeSentOrderId(recoveredOrder.id);
@@ -2025,7 +2046,7 @@ class TableDetailsController extends GetxController {
         }
         // Free-zone: order often exists even when table-based recover fails —
         // avoid a false "Impossible de créer… C13" snack.
-        if (OrderMapper.isFreeZoneTicketLabel(orderNumber)) {
+        if (OrderMapper.isFreeZoneTicketOrDraftLabel(orderNumber)) {
           completeSentOrderId(null);
           return;
         }
@@ -2101,6 +2122,10 @@ class TableDetailsController extends GetxController {
     final label = isCash ? 'espèces' : 'carte de crédit';
     final amountLabel = payableTotalLabel;
     final existingId = resolvedOrderId;
+    final ticketLabel = OrderMapper.ticketDisplayLabel(
+      id: existingId ?? 0,
+      number: orderNumber,
+    );
     // Prefer remaining_amount (partial pay) over ticket total_price.
     final cachedPayable = existingId != null && existingId > 0
         ? _orderRepository.payableAmountForOrder(existingId)
@@ -2123,7 +2148,7 @@ class TableDetailsController extends GetxController {
       context: context,
       title: 'Paiement',
       message:
-          'Encaisser $amountLabel pour la table $orderNumber en $label ?',
+          'Encaisser $amountLabel pour $ticketLabel en $label ?',
       onConfirm: () async {
         payingIsCash.value = isCash;
         try {
@@ -2292,22 +2317,32 @@ class TableDetailsController extends GetxController {
 
     if (sent.id <= 0) return null;
 
-    orderId = sent.id;
-    seedOrder = sent;
+    final labeled = Get.isRegistered<SessionController>() &&
+            !Get.find<SessionController>().selectedZoneUsesTableFlow
+        ? sent.copyWith(
+            number: OrderMapper.freeZoneTicketLabelForOrderId(sent.id),
+          )
+        : sent;
+
+    orderId = labeled.id;
+    seedOrder = labeled;
     _localDraftLines.clear();
     _deferDetailFetch = false;
     _didCompleteKitchenSend = true;
-    _rememberSentKitchenLines(sent);
+    _rememberSentKitchenLines(labeled);
     orderUiRevision.value++;
     if (Get.isRegistered<SessionController>()) {
-      Get.find<SessionController>()
-          .promoteOrderToTop(sent, replaceDetail: true);
+      Get.find<SessionController>().promoteOrderToTop(
+        labeled,
+        replaceDetail: true,
+        replaceLocalDraftNumber: orderNumber,
+      );
     }
     try {
-      _applySyncedOrder(sent);
+      _applySyncedOrder(labeled);
     } catch (_) {}
-    logOrderFlow('PAY create-draft OK orderId=${sent.id}');
-    return sent.id;
+    logOrderFlow('PAY create-draft OK orderId=${labeled.id}');
+    return labeled.id;
   }
 
   Future<void> addSuivreAfterLatestItems() async {

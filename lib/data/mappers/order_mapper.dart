@@ -228,7 +228,6 @@ class OrderMapper {
   static SessionOrder sessionOrderSummaryFromListMap(
     Map<String, dynamic> data,
   ) {
-    final tableNumber = tableNumberFromDetail(data);
     final orderId = orderIdFromDetail(data);
     final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
 
@@ -248,7 +247,7 @@ class OrderMapper {
 
     return SessionOrder(
       id: orderId,
-      number: displayKey(orderId: orderId, tableNumber: tableNumber),
+      number: displayNumberFromDetail(data),
       numberColor: AppTheme.primary,
       group: '1',
       poste: _shortPoste(waiterName),
@@ -920,7 +919,6 @@ class OrderMapper {
     Set<int> demandedSectionIndices = const {},
     bool applyKitchenDemande = false,
   }) {
-    final tableNumber = tableNumberFromDetail(data);
     final orderId = orderIdFromDetail(data);
     final printCount = (data['receipt_print_count'] as num?)?.toInt() ?? 0;
 
@@ -963,10 +961,7 @@ class OrderMapper {
 
     return SessionOrder(
       id: orderId,
-      number: displayKey(
-        orderId: orderId,
-        tableNumber: tableNumber,
-      ),
+      number: displayNumberFromDetail(data),
       numberColor: AppTheme.primary,
       group: '1',
       poste: _shortPoste(waiterName),
@@ -4013,20 +4008,112 @@ class OrderMapper {
   }) {
     final free = normalizeFreeZoneTicketLabel(tableLabel);
     if (free != null) return free;
+    if (isLocalDraftKey(tableLabel)) return tableLabel!.trim().toUpperCase();
     if (tableNumber != null) return 'T$tableNumber';
-    if (orderId > 0) return 'O$orderId';
+    if (orderId > 0) return freeZoneTicketLabelForOrderId(orderId);
     return '—';
   }
 
-  /// App-generated free-zone tickets (`C1`, `C2`, …) when the zone has no tables.
-  static bool isFreeZoneTicketLabel(String? value) {
-    if (value == null) return false;
-    return RegExp(r'^C\d+$', caseSensitive: false).hasMatch(value.trim());
+  /// Sent / updated free-zone ticket: `C{orderId}`.
+  static String freeZoneTicketLabelForOrderId(int orderId) => 'C$orderId';
+
+  /// Local (not yet sent) free-zone ticket: `CL{orderId}`.
+  static String localFreeZoneTicketLabelForOrderId(int orderId) => 'CL$orderId';
+
+  /// UI label: local drafts `CL1`, `CL2`, … — after Send `C{orderId}`.
+  static String ticketDisplayLabel({
+    required int id,
+    required String number,
+  }) {
+    if (id > 0) {
+      if (isFreeZoneTicketOrDraftLabel(number)) {
+        return freeZoneTicketLabelForOrderId(id);
+      }
+      return number;
+    }
+    if (isLocalFreeZoneTicketLabel(number)) {
+      return number.trim().toUpperCase();
+    }
+    if (isFreeZoneTicketOrDraftLabel(number)) return number;
+    return number;
   }
 
+  /// Internal leftover draft key (`D…`) — migrated to `CL{n}` on the list.
+  static bool isLocalDraftKey(String? value) {
+    if (value == null) return false;
+    return RegExp(r'^D\d+$', caseSensitive: false).hasMatch(value.trim());
+  }
+
+  static int localClSequence(String? value) {
+    if (!isLocalFreeZoneTicketLabel(value)) return 0;
+    return int.tryParse(value!.trim().substring(2)) ?? 0;
+  }
+
+  /// Next device-local label: `CL1`, `CL2`, … (not the server order id).
+  static String nextLocalClLabel(Iterable<String> existingNumbers) {
+    var max = 0;
+    for (final raw in existingNumbers) {
+      final n = localClSequence(raw);
+      if (n > max) max = n;
+    }
+    return 'CL${max + 1}';
+  }
+
+  /// Local free-zone label `CL582` (has server id, not yet sent/updated).
+  static bool isLocalFreeZoneTicketLabel(String? value) {
+    if (value == null) return false;
+    return RegExp(r'^CL\d+$', caseSensitive: false).hasMatch(value.trim());
+  }
+
+  /// Sent free-zone labels (`C582`). Legacy `O#` / `L#` still recognized.
+  static bool isFreeZoneTicketLabel(String? value) {
+    if (value == null) return false;
+    if (isLocalFreeZoneTicketLabel(value)) return false;
+    return RegExp(r'^[COL]\d+$', caseSensitive: false).hasMatch(value.trim());
+  }
+
+  static bool isFreeZoneTicketOrDraftLabel(String? value) =>
+      isFreeZoneTicketLabel(value) ||
+      isLocalFreeZoneTicketLabel(value) ||
+      isLocalDraftKey(value);
+
   static String? normalizeFreeZoneTicketLabel(String? value) {
+    if (isLocalFreeZoneTicketLabel(value)) {
+      return value!.trim().toUpperCase();
+    }
     if (!isFreeZoneTicketLabel(value)) return null;
-    return value!.trim().toUpperCase();
+    final digits = value!.trim().substring(1);
+    return 'C$digits';
+  }
+
+  /// Display number for an order detail.
+  /// Local (`CL{id}`) stays local; sent tickets use `C{id}`.
+  static String displayNumberFromDetail(Map<String, dynamic> data) {
+    final orderId = orderIdFromDetail(data);
+    final rawLabel = data['table_number']?.toString();
+    final tableId = (data['table_id'] as num?)?.toInt() ?? 0;
+    final numericTable = tableNumberFromDetail(data);
+
+    if (orderId > 0 && isLocalFreeZoneTicketLabel(rawLabel)) {
+      return localFreeZoneTicketLabelForOrderId(orderId);
+    }
+
+    final free = normalizeFreeZoneTicketLabel(rawLabel);
+    if (free != null) {
+      if (orderId > 0) return freeZoneTicketLabelForOrderId(orderId);
+      return free;
+    }
+
+    // No real table → free-zone ticket (takeaway / delivery).
+    if (tableId <= 0 && numericTable == null && orderId > 0) {
+      return freeZoneTicketLabelForOrderId(orderId);
+    }
+
+    return displayKey(
+      orderId: orderId,
+      tableNumber: numericTable,
+      tableLabel: rawLabel,
+    );
   }
 
   static String formatPrice(String value) {
@@ -4288,7 +4375,7 @@ class OrderMapper {
     int? tableId,
     int? salesZoneId,
     int? customerId,
-    /// Free-zone ticket (`C1`, `C2`, …) when there is no [tableId].
+    /// Free-zone ticket (`C{orderId}` after create, or omit for local draft).
     String? tableNumberLabel,
     required List<LocalDraftLine> lines,
   }) {
@@ -4353,6 +4440,7 @@ class OrderMapper {
       payload['customer_id'] = customerId;
     }
     final freeLabel = normalizeFreeZoneTicketLabel(tableNumberLabel);
+    // Only persist stable C{orderId} labels — never sequential local C1/C2.
     if (freeLabel != null && (tableId == null || tableId <= 0)) {
       payload['table_number'] = freeLabel;
     }
@@ -6859,6 +6947,8 @@ class OrderMapper {
       if (orderDetail['table_id'] != null) 'table_id': orderDetail['table_id'],
       if (orderDetail['customer_id'] != null)
         'customer_id': orderDetail['customer_id'],
+      if (orderDetail['table_number'] != null)
+        'table_number': orderDetail['table_number'],
       'seat_orders': seatOrders is List
           ? seatOrders
               .whereType<Map<String, dynamic>>()

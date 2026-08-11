@@ -752,7 +752,7 @@ class _OrderRow extends GetView<SessionController> {
                         flex: _SessionTableLayout.columnFlexes[0],
                         expandOnTap: true,
                         child: Text(
-                          order.number,
+                          order.displayNumber,
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: JtrResponsive.getResponsiveFontSize(context, 13),

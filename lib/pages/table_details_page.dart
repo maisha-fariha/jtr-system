@@ -156,7 +156,7 @@ class _TableDetailsHeader extends StatelessWidget {
               ),
             ),
             child: Text(
-              order.number,
+              order.displayNumber,
               style: TextStyle(
                 fontSize: JtrResponsive.getResponsiveFontSize(context, 14),
                 fontWeight: FontWeight.w800,

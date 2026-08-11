@@ -799,16 +799,15 @@ class OrderRepository {
       );
     }
 
-    final freeTicketLabel =
-        OrderMapper.normalizeFreeZoneTicketLabel(tableNumber);
-
+    // Local sequential C1/C2 drafts are not sent as table_number —
+    // persist C{orderId} after create.
     final createPayload = OrderMapper.buildCreateOrderFromDraftLines(
       waiterId: waiterId,
       numberOfGuests: numberOfGuests,
       tableId: table.id > 0 ? table.id : null,
       salesZoneId: resolvedSalesZoneId,
       customerId: customerId,
-      tableNumberLabel: skipTableOpen ? freeTicketLabel : null,
+      tableNumberLabel: null,
       lines: lines,
     );
 
@@ -859,12 +858,13 @@ class OrderRepository {
           previousDisplayEntries: previousDisplayEntries,
           localTicketBeforeSend: localTicketBeforeSend,
           apiLog: apiLog,
+          assignFreeZoneOrderIdLabel: skipTableOpen,
         );
       }
       lastCreateOrderLog = apiLog.toString();
       lastKitchenSendLog = apiLog.toString();
       throw ApiException(
-        message: OrderMapper.isFreeZoneTicketLabel(tableNumber)
+        message: OrderMapper.isFreeZoneTicketOrDraftLabel(tableNumber)
             ? 'Impossible de créer la commande.'
             : 'Impossible de créer la commande sur la table $tableNumber.',
       );
@@ -875,7 +875,9 @@ class OrderRepository {
       ...detail,
       'id': orderId,
       if (table.id > 0) 'table_id': table.id,
-      if (OrderMapper.isFreeZoneTicketLabel(tableNumber))
+      if (skipTableOpen)
+        'table_number': OrderMapper.freeZoneTicketLabelForOrderId(orderId)
+      else if (OrderMapper.isFreeZoneTicketLabel(tableNumber))
         'table_number': OrderMapper.normalizeFreeZoneTicketLabel(tableNumber)
       else if (table.tableNumber > 0)
         'table_number': table.tableNumber,
@@ -884,6 +886,11 @@ class OrderRepository {
     try {
       detail = await _remote.fetchOrderDetail(orderId);
       apiLog.writeln('── GET /api/orders/$orderId après POST-only create ──');
+      if (skipTableOpen) {
+        detail = Map<String, dynamic>.from(detail);
+        detail['table_number'] =
+            OrderMapper.freeZoneTicketLabelForOrderId(orderId);
+      }
     } catch (e) {
       apiLog.writeln('── GET detail après POST-only create échoué: $e ──');
     }
@@ -901,6 +908,7 @@ class OrderRepository {
       previousDisplayEntries: previousDisplayEntries,
       localTicketBeforeSend: localTicketBeforeSend,
       apiLog: apiLog,
+      assignFreeZoneOrderIdLabel: skipTableOpen,
     );
   }
 
@@ -948,9 +956,10 @@ class OrderRepository {
     );
 
     if (isFirstKitchenCreate) {
+      late final SessionOrder sent;
       _postOnlySendGuard++;
       try {
-        return await _createAndSendPostOnly(
+        sent = await _createAndSendPostOnly(
           tableNumber: tableNumber,
           numberOfGuests: numberOfGuests,
           waiterId: waiterId,
@@ -967,6 +976,10 @@ class OrderRepository {
       } finally {
         _postOnlySendGuard--;
       }
+      if (skipTableOpen) {
+        return _persistFreeZoneOrderIdLabel(sent, apiLog: apiLog);
+      }
+      return sent;
     }
 
     // 2nd+ Send only: known order that already has lines → PUT.
@@ -1352,19 +1365,35 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
     SessionOrder? localTicketBeforeSend,
     required StringBuffer apiLog,
+    bool assignFreeZoneOrderIdLabel = false,
   }) async {
     if (previousDisplayEntries != null &&
         previousDisplayEntries.isNotEmpty) {
       await _persistSuivreLayoutHints(orderId, previousDisplayEntries);
     }
 
-    final displayNumber =
-        OrderMapper.normalizeFreeZoneTicketLabel(localTicketBeforeSend?.number) ??
-            OrderMapper.normalizeFreeZoneTicketLabel(tableNumber?.toString()) ??
-            OrderMapper.displayKey(
-              orderId: orderId,
-              tableNumber: tableNumber,
-            );
+    final freeZoneLabel = assignFreeZoneOrderIdLabel && orderId > 0
+        ? OrderMapper.freeZoneTicketLabelForOrderId(orderId)
+        : null;
+    if (freeZoneLabel != null) {
+      detail = Map<String, dynamic>.from(detail);
+      detail['table_number'] = freeZoneLabel;
+      await _local.saveOrderDetail(orderId, detail);
+      await _sessionLocal.upsertOpenOrderInList(detail);
+    }
+
+    final displayNumber = freeZoneLabel ??
+        OrderMapper.normalizeFreeZoneTicketLabel(
+          detail['table_number']?.toString(),
+        ) ??
+        OrderMapper.normalizeFreeZoneTicketLabel(
+          localTicketBeforeSend?.number,
+        ) ??
+        OrderMapper.normalizeFreeZoneTicketLabel(tableNumber?.toString()) ??
+        OrderMapper.displayKey(
+          orderId: orderId,
+          tableNumber: tableNumber,
+        );
 
     final enrichedDetail = await _enrichDetailMenuSelectionNames(detail);
 
@@ -1396,6 +1425,51 @@ class OrderRepository {
       previousDisplayEntries: previousDisplayEntries,
     );
     return mapped.copyWith(id: orderId, number: displayNumber);
+  }
+
+  /// Persist `table_number: C{orderId}` after POST-only guard is released.
+  Future<SessionOrder> _persistFreeZoneOrderIdLabel(
+    SessionOrder sent, {
+    required StringBuffer apiLog,
+  }) async {
+    final orderId = sent.id;
+    if (orderId <= 0) return sent;
+    final label = OrderMapper.freeZoneTicketLabelForOrderId(orderId);
+    if (OrderMapper.normalizeFreeZoneTicketLabel(sent.number) == label) {
+      // Still try to push to API when local already shows C{id}.
+    }
+
+    try {
+      var detail = _local.readOrderDetail(orderId) ??
+          await _remote.fetchOrderDetail(orderId);
+      detail = Map<String, dynamic>.from(detail);
+      final current =
+          OrderMapper.normalizeFreeZoneTicketLabel(
+            detail['table_number']?.toString(),
+          );
+      if (current == label) {
+        await _local.saveOrderDetail(orderId, detail);
+        await _sessionLocal.upsertOpenOrderInList(detail);
+        return sent.copyWith(number: label);
+      }
+      detail['table_number'] = label;
+      apiLog.writeln('── PUT free-zone table_number=$label ──');
+      detail = await _putOrderUpdate(
+        orderId: orderId,
+        payload: OrderMapper.buildOrderUpdatePayload(detail),
+        apiLog: apiLog,
+      );
+      detail = Map<String, dynamic>.from(detail);
+      detail['table_number'] = label;
+      await _local.saveOrderDetail(orderId, detail);
+      await _sessionLocal.upsertOpenOrderInList(detail);
+      lastKitchenSendLog = apiLog.toString();
+      return sent.copyWith(number: label);
+    } catch (e) {
+      apiLog.writeln('── free-zone table_number persist non-fatal: $e ──');
+      lastKitchenSendLog = apiLog.toString();
+      return sent.copyWith(number: label);
+    }
   }
 
   Future<ResolvedTable> _openTableByNumberForCreate({
@@ -1606,8 +1680,8 @@ class OrderRepository {
   }) async {
     if (!await _connectivity.isOnline) return null;
 
-    // Free-zone tickets (C1…) are not real tables — recover from open orders.
-    if (OrderMapper.isFreeZoneTicketLabel(tableNumber)) {
+    // Free-zone tickets (C{id}) are not real tables — recover from open orders.
+    if (OrderMapper.isFreeZoneTicketOrDraftLabel(tableNumber)) {
       return _tryRecoverFreeZoneCreatedOrder(
         salesZoneId: salesZoneId,
         waiterId: waiterId,

@@ -4183,7 +4183,9 @@ class OrderMapper {
       'number_of_guests': numberOfGuests,
       'table_id': tableId,
     };
-    // Table-bound: omit sales_zone_id (same as draft create / old branch).
+    if (salesZoneId != null && salesZoneId > 0) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
     return payload;
   }
 
@@ -4226,7 +4228,9 @@ class OrderMapper {
         },
       ],
     };
-    // Table-bound creates omit sales_zone_id (inherit from table).
+    if (salesZoneId != null && salesZoneId > 0) {
+      payload['sales_zone_id'] = salesZoneId;
+    }
     return payload;
   }
 
@@ -4331,8 +4335,7 @@ class OrderMapper {
       ],
     };
 
-    // Free-zone only — table tickets inherit zone (avoids send-before-pay lock).
-    if ((tableId == null || tableId <= 0) && salesZoneId != null) {
+    if (salesZoneId != null && salesZoneId > 0) {
       payload['sales_zone_id'] = salesZoneId;
     }
     // Optional: some backends also accept table_id; session start usually binds it.
@@ -4428,12 +4431,7 @@ class OrderMapper {
     if (tableId != null && tableId > 0) {
       payload['table_id'] = tableId;
     }
-    // Free-zone only: table orders inherit zone from the table (old branch
-    // left sales_zone_id null via activeDay). Attaching Sur place here makes
-    // the API enforce "send before pay" even though Send only POSTs the order.
-    if ((tableId == null || tableId <= 0) &&
-        salesZoneId != null &&
-        salesZoneId > 0) {
+    if (salesZoneId != null && salesZoneId > 0) {
       payload['sales_zone_id'] = salesZoneId;
     }
     if (customerId != null && customerId > 0) {

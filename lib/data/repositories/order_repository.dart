@@ -1288,8 +1288,7 @@ class OrderRepository {
       );
       payload['waiter_id'] = waiterId;
       payload['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
-      // Do not force sales_zone_id on table tickets — same as POST create.
-      if (tableId <= 0 && salesZoneId != null && salesZoneId > 0) {
+      if (salesZoneId != null && salesZoneId > 0) {
         payload['sales_zone_id'] = salesZoneId;
       }
       if (tableId > 0) {

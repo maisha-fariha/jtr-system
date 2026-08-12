@@ -552,9 +552,19 @@ class OrderMapper {
   }
 
   static int _orderSortMillis(Map<String, dynamic> order) {
-    final createdAt = order['created_at'];
-    if (createdAt is String) {
-      return DateTime.tryParse(createdAt)?.millisecondsSinceEpoch ?? 0;
+    // Prefer activity time so Send / edits float to the top after refresh.
+    for (final key in [
+      'updated_at',
+      'last_updated_at',
+      'modified_at',
+      'created_at',
+    ]) {
+      final raw = order[key];
+      if (raw is String) {
+        final ms = DateTime.tryParse(raw)?.millisecondsSinceEpoch;
+        if (ms != null && ms > 0) return ms;
+      }
+      if (raw is num && raw > 0) return raw.toInt();
     }
     return 0;
   }

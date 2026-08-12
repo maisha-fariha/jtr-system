@@ -887,15 +887,22 @@ class SessionController extends GetxController {
       }
     }
 
-    orders.sort((a, b) {
-      if (a.id <= 0 && b.id <= 0) {
-        return OrderMapper.localClSequence(b.number)
-            .compareTo(OrderMapper.localClSequence(a.number));
+    // Keep API / mapper order for remote tickets (updated_at). Only float
+    // unsent local drafts above them.
+    final remotes = <SessionOrder>[];
+    final locals = <SessionOrder>[];
+    for (final order in orders) {
+      if (order.id <= 0) {
+        locals.add(order);
+      } else {
+        remotes.add(order);
       }
-      if (a.id <= 0) return -1;
-      if (b.id <= 0) return 1;
-      return b.id.compareTo(a.id);
-    });
+    }
+    locals.sort(
+      (a, b) => OrderMapper.localClSequence(b.number)
+          .compareTo(OrderMapper.localClSequence(a.number)),
+    );
+    orders.assignAll([...locals, ...remotes]);
   }
 
   String _nextLocalClLabel() {

@@ -5499,7 +5499,10 @@ class OrderRepository {
 
       final SessionOrder mapped;
       if (localSnapshot != null) {
-        mapped = localSnapshot.copyWith(total: ticketTotalLabel);
+        mapped = localSnapshot.copyWith(
+          total: ticketTotalLabel,
+          isPartiallyPaid: OrderMapper.isOrderPartiallyPaid(updated),
+        );
       } else {
         final suivreHints = _resolveSuivreHints(
           orderId,
@@ -5819,7 +5822,11 @@ class OrderRepository {
 
     final SessionOrder mapped;
     if (localSnapshot != null) {
-      mapped = localSnapshot.copyWith(total: ticketTotalLabel);
+      mapped = localSnapshot.copyWith(
+        total: ticketTotalLabel,
+        isPartiallyPaid: !isFullyPaid &&
+            OrderMapper.isOrderPartiallyPaid(updated),
+      );
     } else {
       final suivreHints = _resolveSuivreHints(
         orderId,

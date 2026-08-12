@@ -19,6 +19,7 @@ class SessionOrder {
     required this.products,
     this.waiterId,
     this.customerId,
+    this.isPartiallyPaid = false,
     int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
   })  : itemCount = itemCount ?? products.length,
@@ -32,6 +33,9 @@ class SessionOrder {
 
   /// Cardex customer id when the sales zone requires a client.
   final int? customerId;
+
+  /// True when some amount is paid but remaining > 0.
+  final bool isPartiallyPaid;
   final String number;
   final Color numberColor;
   final String group;
@@ -77,6 +81,7 @@ class SessionOrder {
     int? waiterId,
     int? customerId,
     bool clearCustomerId = false,
+    bool? isPartiallyPaid,
     int? itemCount,
     List<OrderDisplayEntry>? displayEntries,
   }) {
@@ -94,6 +99,7 @@ class SessionOrder {
       total: total ?? this.total,
       waiterId: waiterId ?? this.waiterId,
       customerId: clearCustomerId ? null : (customerId ?? this.customerId),
+      isPartiallyPaid: isPartiallyPaid ?? this.isPartiallyPaid,
       products: nextProducts,
       itemCount: itemCount ??
           (products != null ? nextProducts.length : this.itemCount),

@@ -262,6 +262,7 @@ class OrderMapper {
       itemCount: _itemCountFromListMap(data, products.length),
       displayEntries: const [],
       waiterId: waiterIdFromOrderMap(data),
+      isPartiallyPaid: isOrderPartiallyPaid(data),
     );
   }
 
@@ -390,6 +391,33 @@ class OrderMapper {
     return payment == 'fully_paid' ||
         payment == 'paid' ||
         payment == 'completed';
+  }
+
+  /// Open ticket with a payment already recorded but remaining balance.
+  static bool isOrderPartiallyPaid(Map<String, dynamic> orderDetail) {
+    if (isOrderFullyPaid(orderDetail)) return false;
+    final payment =
+        orderDetail['payment_status']?.toString().toLowerCase() ?? '';
+    final detailed =
+        orderDetail['payment_status_detailed']?.toString().toLowerCase() ?? '';
+    if (payment.contains('partial') || detailed.contains('partial')) {
+      return true;
+    }
+
+    double? parseMoney(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      if (raw is String) {
+        return double.tryParse(
+          raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+        );
+      }
+      return null;
+    }
+
+    final paid = parseMoney(orderDetail['total_paid']) ?? 0;
+    final remaining = parseMoney(orderDetail['remaining_amount']);
+    if (paid > 0.001 && remaining != null && remaining > 0.001) return true;
+    return false;
   }
 
   /// Empty shells that the backend already closed/paid cannot accept new lines.
@@ -984,6 +1012,7 @@ class OrderMapper {
                 ),
             ],
       waiterId: waiterIdFromOrderMap(data),
+      isPartiallyPaid: isOrderPartiallyPaid(data),
     );
   }
 

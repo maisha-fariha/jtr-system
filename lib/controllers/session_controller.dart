@@ -975,6 +975,7 @@ class SessionController extends GetxController {
             ? incoming.couverts
             : previous.couverts,
         waiterId: incoming.waiterId ?? previous.waiterId,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
       );
     }
 
@@ -1021,6 +1022,7 @@ class SessionController extends GetxController {
             ? incoming.couverts
             : previous.couverts,
         waiterId: incoming.waiterId ?? previous.waiterId,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
         itemCount: previous.itemCount > 0
             ? previous.itemCount
             : (incoming.itemCount > 0
@@ -1039,7 +1041,10 @@ class SessionController extends GetxController {
     if (incoming.products.isEmpty &&
         previous.itemCount > incoming.itemCount &&
         previous.itemCount > 0) {
-      return incoming.copyWith(itemCount: previous.itemCount);
+      return incoming.copyWith(
+        itemCount: previous.itemCount,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
+      );
     }
 
     // Local delete in flight: never adopt a fatter API ticket.
@@ -1053,7 +1058,9 @@ class SessionController extends GetxController {
       );
     }
 
-    return incoming;
+    return incoming.isPartiallyPaid || !previous.isPartiallyPaid
+        ? incoming
+        : incoming.copyWith(isPartiallyPaid: true);
   }
 
   /// Reloads open orders for the session screen after create/edit on a table.

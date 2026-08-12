@@ -781,14 +781,39 @@ class _OrderRow extends GetView<SessionController> {
                         orderNumber: order.number,
                         flex: _SessionTableLayout.columnFlexes[0],
                         expandOnTap: true,
-                        child: Text(
-                          order.displayNumber,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                            fontWeight: FontWeight.bold,
-                            color: order.numberColor,
-                          ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              order.displayNumber,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  13,
+                                ),
+                                fontWeight: FontWeight.bold,
+                                color: order.numberColor,
+                              ),
+                            ),
+                            if (order.isPartiallyPaid) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                'PARTIEL',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    8,
+                                  ),
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.4,
+                                  color: const Color(0xFFE67E22),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                       _OrderTableCell(

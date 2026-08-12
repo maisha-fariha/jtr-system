@@ -678,14 +678,12 @@ class _OrderRow extends GetView<SessionController> {
       // Re-read from the live session list so ticket / total / couverts updates
       // show immediately (constructor [order] can be a stale snapshot).
       controller.orders.length;
-      controller.refreshingAfterSendKeys.length;
       final order =
           controller.findOrder(orderNumber: this.order.number) ?? this.order;
       final state = controller.tableUiState.value;
       final isExpanded = state.expandedOrderNumber == order.number;
       final isRowSelected = state.selectedRow?.orderNumber == order.number &&
           state.selectedRow?.productIndex == null;
-      final isRefreshing = controller.isRefreshingAfterSend(order.number);
       final cardRadius = JtrResponsive.getResponsiveRadius(context, 12);
 
       return Padding(
@@ -730,9 +728,7 @@ class _OrderRow extends GetView<SessionController> {
             ],
           ),
           child: GestureDetector(
-            onDoubleTap: isRefreshing
-                ? null
-                : () => controller.openTableDetails(
+            onDoubleTap: () => controller.openTableDetails(
                       order.number,
                       orderId: order.id > 0 ? order.id : null,
                       deferDetailFetch: order.isLocalOnly,
@@ -743,9 +739,7 @@ class _OrderRow extends GetView<SessionController> {
               color: AppTheme.background,
               borderRadius: BorderRadius.circular(cardRadius),
               border: Border.all(
-                color: isRefreshing
-                    ? AppTheme.primary.withValues(alpha: 0.35)
-                    : AppTheme.cardBorder,
+                color: AppTheme.cardBorder,
               ),
               boxShadow: [
                 BoxShadow(
@@ -758,17 +752,11 @@ class _OrderRow extends GetView<SessionController> {
             clipBehavior: Clip.antiAlias,
             child: Column(
               children: [
-                if (isRefreshing)
-                  const LinearProgressIndicator(
-                    minHeight: 2,
-                    backgroundColor: Color(0x00FFFFFF),
-                    color: AppTheme.primary,
-                  ),
                 Container(
                 decoration: BoxDecoration(
                   color: isRowSelected ? AppTheme.lightButton : Colors.transparent,
                   borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(isRefreshing ? 0 : cardRadius),
+                    top: Radius.circular(cardRadius),
                     bottom: isExpanded ? Radius.zero : Radius.circular(cardRadius),
                   ),
                 ),
@@ -829,16 +817,9 @@ class _OrderRow extends GetView<SessionController> {
                         orderNumber: order.number,
                         flex: _SessionTableLayout.columnFlexes[2],
                         child: Text(
-                          isRefreshing ? '…' : order.poste,
+                          order.poste,
                           textAlign: TextAlign.center,
-                          style: _SessionTableLayout.cellStyle(context).copyWith(
-                            color: isRefreshing
-                                ? AppTheme.textSecondary
-                                : null,
-                            fontStyle: isRefreshing
-                                ? FontStyle.italic
-                                : FontStyle.normal,
-                          ),
+                          style: _SessionTableLayout.cellStyle(context),
                         ),
                       ),
                       _OrderTableCell(

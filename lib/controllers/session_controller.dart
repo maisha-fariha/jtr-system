@@ -1307,10 +1307,14 @@ class SessionController extends GetxController {
   ///
   /// [replaceLocalDraftNumber] — free-zone: drop the pre-Send `C#` row when the
   /// ticket becomes `C{orderId}`.
+  ///
+  /// [selectForActions] — select the row so Ticket / suite work immediately
+  /// after Send (no wait for a post-send refresh lock).
   void promoteOrderToTop(
     SessionOrder order, {
     bool replaceDetail = true,
     String? replaceLocalDraftNumber,
+    bool selectForActions = false,
   }) {
     clearSuppressedTable(order.number);
     if (replaceLocalDraftNumber != null &&
@@ -1333,18 +1337,29 @@ class SessionController extends GetxController {
       orders.refresh();
     }
     listScrollSignal.value++;
+
+    if (selectForActions) {
+      tableUiState.value = tableUiState.value.copyWith(
+        selectedRow: SessionRowSelection(orderNumber: order.number),
+      );
+    } else if (replaceLocalDraftNumber != null &&
+        replaceLocalDraftNumber.isNotEmpty) {
+      // Free-zone rename: keep Ticket selection if it still pointed at CLn.
+      final selected = tableUiState.value.selectedRow;
+      if (selected != null &&
+          _tableKeysMatch(selected.orderNumber, replaceLocalDraftNumber)) {
+        tableUiState.value = tableUiState.value.copyWith(
+          selectedRow: SessionRowSelection(
+            orderNumber: order.number,
+            productIndex: selected.productIndex,
+          ),
+        );
+      }
+    }
   }
 
-  /// Tables locked after Send until that single order is re-fetched from API.
-  final refreshingAfterSendKeys = <String>{}.obs;
-
-  bool isRefreshingAfterSend(String tableNumber) {
-    return refreshingAfterSendKeys
-        .contains(OrderMapper.normalizeTableKey(tableNumber));
-  }
-
-  /// After Send: block re-entry for [tableNumber] only, GET that order once,
-  /// patch the session row, then unlock. Does **not** refresh the full list.
+  /// After Send: quietly re-fetch that order and patch the session row.
+  /// Does **not** lock the table (Ticket / reopen stay available immediately).
   Future<void> refreshSentOrderFromApi({
     required String tableNumber,
     required Future<int?> orderIdFuture,
@@ -1352,8 +1367,6 @@ class SessionController extends GetxController {
     final key = OrderMapper.normalizeTableKey(tableNumber);
     if (key.isEmpty) return;
 
-    refreshingAfterSendKeys.add(key);
-    refreshingAfterSendKeys.refresh();
     try {
       final orderId = await orderIdFuture;
       if (orderId == null || orderId <= 0) return;
@@ -1368,12 +1381,10 @@ class SessionController extends GetxController {
         detail,
         replaceDetail: true,
         replaceLocalDraftNumber: tableNumber,
+        selectForActions: true,
       );
     } catch (_) {
-      // Keep optimistic row; unlock so the waiter is not stuck.
-    } finally {
-      refreshingAfterSendKeys.remove(key);
-      refreshingAfterSendKeys.refresh();
+      // Keep optimistic row from Send.
     }
   }
 
@@ -1662,12 +1673,6 @@ class SessionController extends GetxController {
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) {
-    if (isRefreshingAfterSend(orderNumber)) {
-      logOrderFlow(
-        'openTableDetails BLOCKED (refreshing after send) table=$orderNumber',
-      );
-      return;
-    }
     logOrderFlow(
       'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
       'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',

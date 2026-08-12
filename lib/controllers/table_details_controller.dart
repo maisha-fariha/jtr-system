@@ -1919,6 +1919,7 @@ class TableDetailsController extends GetxController {
             labeled,
             replaceDetail: true,
             replaceLocalDraftNumber: orderNumber,
+            selectForActions: true,
           );
         }
         try {
@@ -2014,6 +2015,7 @@ class TableDetailsController extends GetxController {
               recoveredOrder,
               replaceDetail: true,
               replaceLocalDraftNumber: orderNumber,
+              selectForActions: true,
             );
           }
           return recoveredOrder;
@@ -2047,6 +2049,7 @@ class TableDetailsController extends GetxController {
               recoveredOrder,
               replaceDetail: true,
               replaceLocalDraftNumber: orderNumber,
+              selectForActions: true,
             );
           }
           completeSentOrderId(recoveredOrder.id);
@@ -2068,7 +2071,7 @@ class TableDetailsController extends GetxController {
     );
 
     if (Get.isRegistered<SessionController>()) {
-      // Lock only this table; refresh only this order from API (not full list).
+      // Background sync of that order only (no table lock — Ticket stays ready).
       unawaited(
         Get.find<SessionController>().refreshSentOrderFromApi(
           tableNumber: orderNumber,
@@ -2330,6 +2333,7 @@ class TableDetailsController extends GetxController {
         labeled,
         replaceDetail: true,
         replaceLocalDraftNumber: orderNumber,
+        selectForActions: true,
       );
     }
     try {

@@ -175,7 +175,7 @@ void logTicketPrint({
   debugPrint(text);
 }
 
-/// Payment trace (POST /api/orders/:id/pay) — always printed to the console.
+/// Payment trace (POST /api/payments/process) — always printed to the console.
 void logPaymentApi({
   required String method,
   required String path,

@@ -6407,7 +6407,7 @@ class OrderMapper {
     return [for (final m in matches) m.id];
   }
 
-  /// Courses that must be sent to the kitchen before POST /api/orders/:id/pay.
+  /// Courses that must be sent to the kitchen before POST /api/payments/process.
   ///
   /// Includes courses that were already demanded but later received new lines
   /// (common after DEMANDÉE when waiter adds more items).

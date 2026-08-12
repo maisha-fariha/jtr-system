@@ -451,13 +451,14 @@ class OrderRemoteDataSource {
     required double amount,
     required int paymentModeId,
   }) async {
-    final path = ApiEndpoints.payOrder(orderId);
+    const path = ApiEndpoints.processPayment;
     final body = {
+      'order_id': orderId,
       'amount': amount,
       'payment_mode_id': paymentModeId,
     };
     try {
-      // Use dynamic: Postman documents an empty 200 body for /pay.
+      // Use dynamic: payment responses may be empty or envelope-shaped.
       final response = await _client.post<dynamic>(
         path,
         data: body,
@@ -510,7 +511,7 @@ class OrderRemoteDataSource {
     }
   }
 
-  /// Accepts empty/null HTTP 2xx bodies (common for /pay) and tolerant envelopes.
+  /// Accepts empty/null HTTP 2xx bodies (common for payment process) and tolerant envelopes.
   void _ensureMutationSucceeded({
     required int? statusCode,
     required dynamic data,
@@ -540,7 +541,7 @@ class OrderRemoteDataSource {
         : Map<String, dynamic>.from(raw);
 
     // Only fail when the API explicitly reports failure.
-    // (Some /pay responses are 200 with a message but no `success` flag.)
+    // (Some payment responses are 200 with a message but no `success` flag.)
     if (map.containsKey('success') && map['success'] == false) {
       final envelope = ApiEnvelope.parseResponse(map);
       throw ApiException(

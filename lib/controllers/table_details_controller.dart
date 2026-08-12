@@ -2153,7 +2153,7 @@ class TableDetailsController extends GetxController {
         payingIsCash.value = isCash;
         try {
           var id = resolvedOrderId;
-          // false → pay before Send: push local draft to server, then /pay.
+          // false → pay before Send: push local draft to server, then process payment.
           final needsServerSync = id == null ||
               id <= 0 ||
               (!_didCompleteKitchenSend &&
@@ -2244,7 +2244,7 @@ class TableDetailsController extends GetxController {
     );
   }
 
-  /// Creates a local draft on the server so `/pay` has a real order id.
+  /// Creates a local draft on the server so `/api/payments/process` has a real order id.
   ///
   /// Used when [SalesZoneInfo.requireSendBeforePayment] is false — pay is
   /// allowed without an explicit kitchen Send, but the API still needs the

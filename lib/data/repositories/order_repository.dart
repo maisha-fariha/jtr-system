@@ -5376,9 +5376,10 @@ class OrderRepository {
       }
 
       apiLog.writeln('payment_mode_id=$paymentModeId');
-      apiLog.writeln('── POST /api/orders/$orderId/pay ──');
+      apiLog.writeln('── POST /api/payments/process ──');
       apiLog.writeln(
         formatApiPayload({
+          'order_id': orderId,
           'amount': payable,
           'payment_mode_id': paymentModeId,
         }),

@@ -35,7 +35,8 @@ class ApiEndpoints {
   static String requestCourses(int id) => '/api/orders/$id/request-courses';
   static String orderSeatOrderItems(int orderId, int seatNumber) =>
       '/api/orders/$orderId/seat-orders/$seatNumber/items';
-  static String payOrder(int id) => '/api/orders/$id/pay';
+  /// Process a payment (`order_id` in body — replaces legacy `/api/orders/{id}/pay`).
+  static const processPayment = '/api/payments/process';
   static const paymentModesForCheckout = '/api/payments/modes';
   static const activePaymentModes = '/api/payment-modes/active';
   static const paymentModesList = '/api/payment-modes';

@@ -380,16 +380,19 @@ class _LineEditor extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final mode in controller.modes)
+              for (var i = 0; i < controller.modes.length; i++)
                 Builder(
                   builder: (_) {
+                    final mode = controller.modes[i];
                     final id = OrderMapper.paymentModeId(mode) ?? 0;
                     final selected = line.modeId == id;
+                    final color = OrderMapper.paymentModeColorForIndex(i);
                     return ChoiceChip(
                       label: Text(mode['name']?.toString() ?? 'Mode'),
                       selected: selected,
                       showCheckmark: false,
-                      selectedColor: AppTheme.primary,
+                      selectedColor: color,
+                      backgroundColor: color.withValues(alpha: 0.12),
                       labelStyle: TextStyle(
                         color: selected ? Colors.white : AppTheme.darkText,
                         fontWeight: FontWeight.w600,

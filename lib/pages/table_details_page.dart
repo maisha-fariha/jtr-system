@@ -1253,8 +1253,6 @@ class _ToolbarIconButton extends StatelessWidget {
 class _PaymentButtons extends GetView<TableDetailsController> {
   const _PaymentButtons();
 
-  static const _cashGrey = Color(0xFFB8B8B8);
-
   @override
   Widget build(BuildContext context) {
     return Obx(() {
@@ -1326,25 +1324,28 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                     spacing: gap,
                     runSpacing: gap,
                     children: [
-                      for (final mode in modes)
+                      for (var i = 0; i < modes.length; i++)
                         SizedBox(
                           width: width,
                           child: _PaymentButton(
-                            label: (mode['name'] ?? mode['code'] ?? 'MODE')
+                            label: (modes[i]['name'] ??
+                                    modes[i]['code'] ??
+                                    'MODE')
                                 .toString()
                                 .toUpperCase(),
-                            backgroundColor: OrderMapper.isCashPaymentMode(mode)
-                                ? _cashGrey
-                                : AppTheme.primary,
+                            backgroundColor:
+                                OrderMapper.paymentModeColorForIndex(i),
                             enabled: canPay && !paying,
                             busy: controller.isPayingMode(
-                              OrderMapper.paymentModeId(mode) ?? 0,
+                              OrderMapper.paymentModeId(modes[i]) ?? 0,
                             ),
                             onTap: () => controller.payOrder(
                               context: context,
-                              isCash: OrderMapper.isCashPaymentMode(mode),
+                              isCash: OrderMapper.isCashPaymentMode(
+                                modes[i],
+                              ),
                               preferredModeId:
-                                  OrderMapper.paymentModeId(mode),
+                                  OrderMapper.paymentModeId(modes[i]),
                             ),
                           ),
                         ),

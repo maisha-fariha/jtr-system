@@ -7854,6 +7854,23 @@ class OrderMapper {
         blob.contains('liquide');
   }
 
+  /// Color from list position. API modes have no color field.
+  static Color paymentModeColorForIndex(int index) {
+    if (index < 0) return AppTheme.primary;
+    return _paymentModePalette[index % _paymentModePalette.length];
+  }
+
+  static const _paymentModePalette = <Color>[
+    Color(0xFF2E7D32),
+    Color(0xFF1E88E5),
+    Color(0xFF00897B),
+    Color(0xFF5C6BC0),
+    Color(0xFFE67E22),
+    Color(0xFF8E24AA),
+    Color(0xFFC62828),
+    Color(0xFF6D4C41),
+  ];
+
   static List<Map<String, dynamic>> paymentTransactionsFromSummary(
     Map<String, dynamic> summary,
   ) {

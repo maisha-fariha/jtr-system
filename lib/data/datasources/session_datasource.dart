@@ -15,6 +15,9 @@ import '../mappers/order_mapper.dart';
 class SessionRemoteDataSource {
   SessionRemoteDataSource(this._client);
 
+  /// Session list + swipe-refresh page size (`GET /api/orders`).
+  static const int ordersPageSize = 20;
+
   final ApiClient _client;
 
   Future<ActiveDayInfo> fetchActiveDay() async {
@@ -128,16 +131,18 @@ class SessionRemoteDataSource {
     );
   }
 
-  /// Single orders page (`per_page: 10`).
+  /// Single orders page (`per_page: [ordersPageSize]`).
   Future<({List<Map<String, dynamic>> orders, int lastPage})> fetchOrdersPage({
     required int page,
     int? waiterId,
     int? salesZoneId,
+    int perPage = ordersPageSize,
   }) {
     return _fetchOrdersPage(
       page: page,
       waiterId: waiterId,
       salesZoneId: salesZoneId,
+      perPage: perPage,
     );
   }
 
@@ -190,10 +195,11 @@ class SessionRemoteDataSource {
     int? waiterId,
     int? salesZoneId,
     String? status,
+    int perPage = ordersPageSize,
   }) async {
     final queryParameters = <String, dynamic>{
       'active_day': true,
-      'per_page': 10,
+      'per_page': perPage,
       'page': page,
     };
     if (waiterId != null && waiterId > 0) {

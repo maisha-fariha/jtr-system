@@ -91,6 +91,7 @@ class SessionController extends GetxController {
   final tableUiState = const SessionTableUiState().obs;
   final orders = <SessionOrder>[].obs;
   final isLoadingOrders = false.obs;
+  final isLoadingMoreOrders = false.obs;
   final loadingDetailOrderNumbers = <String>{}.obs;
   final ordersError = RxnString();
   final activeDay = ActiveDayInfo.fallback().obs;
@@ -126,6 +127,12 @@ class SessionController extends GetxController {
   /// Bumped on each list fetch so a late unscoped response cannot overwrite
   /// a newer zone-scoped list.
   int _ordersFetchGeneration = 0;
+
+  int _sessionOrdersLastPage = 1;
+  int _sessionOrdersNextPage = 2;
+
+  bool get hasMoreSessionOrders =>
+      _sessionOrdersNextPage <= _sessionOrdersLastPage;
 
   @override
   void onInit() {
@@ -555,27 +562,13 @@ class SessionController extends GetxController {
         }
       }
 
-      // Every page is fetched before this returns — the list is applied once,
-      // fully loaded, instead of appearing row-by-row.
-      final summaries = forceRefresh
-          ? await _sessionRepository.refreshSessionOrdersFromNetwork(
-              waiterId: _ordersListWaiterFilter,
-              salesZoneId: selectedSalesZoneId,
-            )
-          : await _sessionRepository.getSessionOrders(
-              forceRefresh: true,
-              waiterId: _ordersListWaiterFilter,
-              salesZoneId: selectedSalesZoneId,
-            );
-
-      if (fetchGen != _ordersFetchGeneration) return;
-
-      _applySessionOrderSummaries(
-        summaries,
+      // Page 1 only (`per_page` 20). Further pages load on scroll.
+      await _loadSessionOrdersPage1(
+        fetchGen: fetchGen,
         retainOrders: retainOrders,
         enrichDetails: enrichDetails,
-        replaceList: replaceExistingList || orders.isEmpty,
-        clearSuppressedMatches: forceRefresh,
+        replaceExistingList: replaceExistingList,
+        forceRefresh: forceRefresh,
       );
     } on ApiException catch (e) {
       if (fetchGen != _ordersFetchGeneration) return;
@@ -602,19 +595,12 @@ class SessionController extends GetxController {
   }) async {
     final fetchGen = ++_ordersFetchGeneration;
     try {
-      final summaries =
-          await _sessionRepository.refreshSessionOrdersFromNetwork(
-        waiterId: _ordersListWaiterFilter,
-        salesZoneId: selectedSalesZoneId,
-      );
-      if (fetchGen != _ordersFetchGeneration) return;
-      // Soft refresh: update fields in place — do not reshuffle the list.
-      _applySessionOrderSummaries(
-        summaries,
+      await _loadSessionOrdersPage1(
+        fetchGen: fetchGen,
         retainOrders: retainOrders,
         enrichDetails: enrichDetails,
-        replaceList: false,
-        clearSuppressedMatches: true,
+        replaceExistingList: true,
+        forceRefresh: true,
       );
     } catch (_) {
       // Keep the cached list already on screen.
@@ -629,23 +615,76 @@ class SessionController extends GetxController {
     ordersError.value = null;
     unawaited(loadActiveDay(forceRefresh: true));
     try {
-      final summaries =
-          await _sessionRepository.refreshSessionOrdersFromNetwork(
-        waiterId: _ordersListWaiterFilter,
-        salesZoneId: selectedSalesZoneId,
-      );
-      if (fetchGen != _ordersFetchGeneration) return;
-      _applySessionOrderSummaries(
-        summaries,
+      await _loadSessionOrdersPage1(
+        fetchGen: fetchGen,
         retainOrders: retainOrders,
         enrichDetails: false,
-        replaceList: true,
-        clearSuppressedMatches: true,
+        replaceExistingList: true,
+        forceRefresh: true,
       );
     } catch (_) {
       if (fetchGen != _ordersFetchGeneration) return;
       if (orders.isEmpty) {
         ordersError.value = 'Impossible de charger les commandes.';
+      }
+    }
+  }
+
+  Future<void> _loadSessionOrdersPage1({
+    required int fetchGen,
+    Iterable<SessionOrder>? retainOrders,
+    required bool enrichDetails,
+    required bool replaceExistingList,
+    required bool forceRefresh,
+  }) async {
+    isLoadingMoreOrders.value = false;
+    final first = await _sessionRepository.fetchSessionOrdersPage(
+      page: 1,
+      waiterId: _ordersListWaiterFilter,
+      salesZoneId: selectedSalesZoneId,
+    );
+    if (fetchGen != _ordersFetchGeneration) return;
+
+    _sessionOrdersLastPage = first.lastPage;
+    _sessionOrdersNextPage = 2;
+
+    _applySessionOrderSummaries(
+      first.orders,
+      retainOrders: retainOrders,
+      enrichDetails: enrichDetails,
+      replaceList: replaceExistingList || orders.isEmpty,
+      clearSuppressedMatches: forceRefresh,
+    );
+  }
+
+  /// Next page when the session list is scrolled near the bottom.
+  Future<void> loadMoreSessionOrders() async {
+    if (isLoadingMoreOrders.value) return;
+    if (_sessionOrdersNextPage > _sessionOrdersLastPage) return;
+
+    final fetchGen = _ordersFetchGeneration;
+    isLoadingMoreOrders.value = true;
+    try {
+      final pageNum = _sessionOrdersNextPage;
+      final result = await _sessionRepository.fetchSessionOrdersPage(
+        page: pageNum,
+        waiterId: _ordersListWaiterFilter,
+        salesZoneId: selectedSalesZoneId,
+      );
+      if (fetchGen != _ordersFetchGeneration) return;
+
+      _sessionOrdersLastPage = result.lastPage;
+      _sessionOrdersNextPage = pageNum + 1;
+      _applySessionOrderSummaries(
+        result.orders,
+        enrichDetails: false,
+        replaceList: false,
+      );
+    } catch (_) {
+      // Keep the pages already on screen.
+    } finally {
+      if (fetchGen == _ordersFetchGeneration) {
+        isLoadingMoreOrders.value = false;
       }
     }
   }

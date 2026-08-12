@@ -447,6 +447,7 @@ class SessionRepository {
     bool forceRefresh = false,
     int? waiterId,
     int? salesZoneId,
+    bool firstPageOnly = false,
     void Function(double fraction)? onProgress,
   }) async {
     if (!forceRefresh) {
@@ -461,6 +462,7 @@ class SessionRepository {
       return await _fetchSessionOrdersFromNetwork(
         waiterId: waiterId,
         salesZoneId: salesZoneId,
+        firstPageOnly: firstPageOnly,
         onProgress: onProgress,
       );
     } catch (_) {
@@ -474,6 +476,56 @@ class SessionRepository {
       }
       rethrow;
     }
+  }
+
+  /// One page of open orders (`per_page` 20). Session UI loads page 1, then
+  /// later pages on scroll.
+  Future<SessionOrdersPageResult> fetchSessionOrdersPage({
+    required int page,
+    int? waiterId,
+    int? salesZoneId,
+  }) async {
+    final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
+    final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
+
+    final raw = await _remote.fetchOrdersPage(
+      page: page,
+      waiterId: scopedId,
+      salesZoneId: zoneId,
+    );
+
+    if (page == 1) {
+      _openOrdersMemory = List<Map<String, dynamic>>.from(raw.orders);
+    } else {
+      final current = _openOrdersMemory ?? const <Map<String, dynamic>>[];
+      final seen = <int>{
+        for (final row in current) OrderMapper.orderIdFromDetail(row),
+      };
+      final merged = List<Map<String, dynamic>>.from(current);
+      for (final row in raw.orders) {
+        final id = OrderMapper.orderIdFromDetail(row);
+        if (id > 0 && seen.contains(id)) continue;
+        merged.add(row);
+        if (id > 0) seen.add(id);
+      }
+      _openOrdersMemory = merged;
+    }
+    await _local.saveOpenOrdersList(_openOrdersMemory ?? raw.orders);
+
+    final mapped = OrderMapper.sessionOrdersFromOrdersList(
+      raw.orders,
+      waiterId: scopedId,
+      lightweight: true,
+    );
+    if (page == 1) {
+      _rememberPreloadedOrders(mapped);
+    }
+
+    return SessionOrdersPageResult(
+      orders: mapped,
+      page: page,
+      lastPage: raw.lastPage < 1 ? 1 : raw.lastPage,
+    );
   }
 
   /// Network refresh: fetches every page before returning (see [getSessionOrders]).
@@ -506,6 +558,7 @@ class SessionRepository {
   Future<List<SessionOrder>> _fetchSessionOrdersFromNetwork({
     int? waiterId,
     int? salesZoneId,
+    bool firstPageOnly = false,
     void Function(double fraction)? onProgress,
   }) async {
     final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
@@ -538,7 +591,7 @@ class SessionRepository {
 
     reportPages(1, lastPage < 1 ? 1 : lastPage);
 
-    if (lastPage > 1) {
+    if (!firstPageOnly && lastPage > 1) {
       final extraMaps = await _remote.fetchOrdersRemainingPages(
         lastPage: lastPage,
         waiterId: effectiveWaiterId,
@@ -560,4 +613,17 @@ class SessionRepository {
     onProgress?.call(1.0);
     return mapped;
   }
+}
+
+/// One `GET /api/orders` page after waiter/zone mapping.
+class SessionOrdersPageResult {
+  const SessionOrdersPageResult({
+    required this.orders,
+    required this.page,
+    required this.lastPage,
+  });
+
+  final List<SessionOrder> orders;
+  final int page;
+  final int lastPage;
 }

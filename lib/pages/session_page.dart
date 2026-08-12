@@ -156,6 +156,7 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(_onScroll);
     _scrollWorker = ever<int>(controller.listScrollSignal, (_) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !_scrollController.hasClients) return;
@@ -168,8 +169,18 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
     });
   }
 
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    if (!controller.hasMoreSessionOrders) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 240) {
+      controller.loadMoreSessionOrders();
+    }
+  }
+
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _scrollWorker?.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -181,7 +192,14 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
       // toList() so in-place total/product updates rebuild rows
       // (length alone does not always notify Obx).
       controller.listScrollSignal.value;
+      controller.isLoadingMoreOrders.value;
       final visibleOrders = controller.orders.toList();
+      final loadingMore = controller.isLoadingMoreOrders.value;
+      if (controller.hasMoreSessionOrders) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _onScroll();
+        });
+      }
       return ListView.separated(
         controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
@@ -190,10 +208,22 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
           top: 8,
           bottom: 8,
         ),
-        itemCount: visibleOrders.length,
+        itemCount: visibleOrders.length + (loadingMore ? 1 : 0),
         separatorBuilder: (context, index) =>
             JtrResponsive.getResponsiveSpacing(context, 8),
         itemBuilder: (context, index) {
+          if (index >= visibleOrders.length) {
+            return const Padding(
+              padding: EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            );
+          }
           return _OrderRow(
             order: visibleOrders[index],
           );

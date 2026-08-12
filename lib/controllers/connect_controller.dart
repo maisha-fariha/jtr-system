@@ -94,6 +94,7 @@ class ConnectController extends GetxController {
             forceRefresh: true,
             waiterId: waiterId,
             salesZoneId: salesZoneId,
+            firstPageOnly: true,
             onProgress: (fraction) {
               _setProgress(_zonesEnd + fraction * (_ordersEnd - _zonesEnd));
             },
@@ -126,6 +127,7 @@ class ConnectController extends GetxController {
           forceRefresh: true,
           waiterId: waiterId,
           salesZoneId: zoneId,
+          firstPageOnly: true,
           onProgress: (fraction) {
             _setProgress(0.4 + fraction * 0.5);
           },

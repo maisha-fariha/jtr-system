@@ -20,6 +20,7 @@ import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../pages/paid_orders_page.dart';
 import '../controllers/table_details_controller.dart';
+import '../controllers/payment_controller.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/device_repository.dart';
@@ -27,6 +28,7 @@ import '../data/repositories/order_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../data/repositories/stock_repository.dart';
 import '../pages/table_details_page.dart';
+import '../pages/payment_page.dart';
 
 class AppRoutes {
   static const root = '/';
@@ -42,6 +44,7 @@ class AppRoutes {
   static const tableDetails = '/table-details';
   static const statistics = '/statistics';
   static const paidOrders = '/paid-orders';
+  static const payment = '/payment';
 }
 
 class AppPages {
@@ -171,6 +174,18 @@ class AppPages {
     GetPage(
       name: AppRoutes.paidOrders,
       page: () => const PaidOrdersPage(),
+    ),
+    GetPage(
+      name: AppRoutes.payment,
+      page: () => const PaymentPage(),
+      binding: BindingsBuilder(() {
+        Get.put(
+          PaymentController(
+            orderRepository: Get.find<OrderRepository>(),
+            authRepository: Get.find<AuthRepository>(),
+          ),
+        );
+      }),
     ),
   ];
 }

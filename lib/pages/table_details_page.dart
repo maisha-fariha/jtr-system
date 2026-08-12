@@ -1261,9 +1261,9 @@ class _PaymentButtons extends GetView<TableDetailsController> {
       final loading = controller.paymentModesLoading.value;
       final error = controller.paymentModesError.value;
       controller.payingIsCash.value;
+      controller.payingModeId.value;
+      controller.paymentModes.length;
       final paying = controller.isPaying;
-      final cashBusy = controller.isPayingCash;
-      final cardBusy = controller.isPayingCard;
       final canPay = controller.canPay;
 
       return Padding(
@@ -1313,32 +1313,44 @@ class _PaymentButtons extends GetView<TableDetailsController> {
                 onPressed: paying ? null : () => controller.reloadPaymentModes(),
                 child: const Text('Réessayer'),
               ),
-            ] else ...[
+            ]             else ...[
               JtrResponsive.getResponsiveSpacing(context, 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: _PaymentButton(
-                      label: 'ESPECE',
-                      backgroundColor: _cashGrey,
-                      enabled: canPay && !paying,
-                      busy: cashBusy,
-                      onTap: () =>
-                          controller.payOrder(context: context, isCash: true),
-                    ),
-                  ),
-                  JtrResponsive.getResponsiveHorizontalSpacing(context, 12),
-                  Expanded(
-                    child: _PaymentButton(
-                      label: 'CARTE DE CREDIT',
-                      backgroundColor: AppTheme.primary,
-                      enabled: canPay && !paying,
-                      busy: cardBusy,
-                      onTap: () =>
-                          controller.payOrder(context: context, isCash: false),
-                    ),
-                  ),
-                ],
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final gap = JtrResponsive.getResponsiveWidth(context, 12);
+                  final modes = controller.paymentModes.toList();
+                  final width = modes.length <= 1
+                      ? constraints.maxWidth
+                      : (constraints.maxWidth - gap) / 2;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: [
+                      for (final mode in modes)
+                        SizedBox(
+                          width: width,
+                          child: _PaymentButton(
+                            label: (mode['name'] ?? mode['code'] ?? 'MODE')
+                                .toString()
+                                .toUpperCase(),
+                            backgroundColor: OrderMapper.isCashPaymentMode(mode)
+                                ? _cashGrey
+                                : AppTheme.primary,
+                            enabled: canPay && !paying,
+                            busy: controller.isPayingMode(
+                              OrderMapper.paymentModeId(mode) ?? 0,
+                            ),
+                            onTap: () => controller.payOrder(
+                              context: context,
+                              isCash: OrderMapper.isCashPaymentMode(mode),
+                              preferredModeId:
+                                  OrderMapper.paymentModeId(mode),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
             ],
           ],

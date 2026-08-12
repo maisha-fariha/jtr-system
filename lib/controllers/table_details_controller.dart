@@ -68,6 +68,8 @@ class TableDetailsController extends GetxController {
   final isAddingProduct = false.obs;
   /// `true` = cash payment in progress, `false` = card, `null` = idle.
   final payingIsCash = Rxn<bool>();
+  final payingModeId = RxnInt();
+  final paymentModes = <Map<String, dynamic>>[].obs;
   final paymentModesLoading = false.obs;
   final paymentModesReady = false.obs;
   final paymentModesError = RxnString();
@@ -1224,7 +1226,7 @@ class TableDetailsController extends GetxController {
       stockVisual.isStockVisualMode.value = false;
       isBottomPanelExpanded.value = false;
       activeToolbarIcon.value = Icons.payments_outlined;
-      unawaited(_loadPaymentModes());
+      unawaited(_loadPaymentModes(forceRefresh: true));
     } else {
       isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = Icons.grid_view;
@@ -1238,16 +1240,19 @@ class TableDetailsController extends GetxController {
       final modes = await _orderRepository.getPaymentModes(
         forceRefresh: forceRefresh,
       );
+      paymentModes.assignAll(modes);
       paymentModesReady.value = modes.isNotEmpty;
       if (modes.isEmpty) {
         paymentModesError.value = 'Aucun mode de paiement configuré.';
       }
     } on ApiException catch (e) {
       paymentModesReady.value = false;
+      paymentModes.clear();
       paymentModesError.value = e.message;
       lastPaymentModesLoadLog = _orderRepository.lastPaymentModesLog;
     } catch (e) {
       paymentModesReady.value = false;
+      paymentModes.clear();
       paymentModesError.value =
           'Impossible de charger les modes de paiement.';
       lastPaymentModesLoadLog =
@@ -1271,11 +1276,14 @@ class TableDetailsController extends GetxController {
     return order?.total ?? '—';
   }
 
-  bool get isPaying => payingIsCash.value != null;
+  bool get isPaying =>
+      payingIsCash.value != null || payingModeId.value != null;
 
   bool get isPayingCash => payingIsCash.value == true;
 
   bool get isPayingCard => payingIsCash.value == false;
+
+  bool isPayingMode(int modeId) => payingModeId.value == modeId;
 
   /// Cash/Card enabled when there is a sent/server ticket, or a local draft in a
   /// zone that allows pay without Send (`require_send_before_payment: false`).
@@ -2071,7 +2079,11 @@ class TableDetailsController extends GetxController {
     _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
   }
 
-  Future<void> payOrder({required BuildContext context, required bool isCash}) async {
+  Future<void> payOrder({
+    required BuildContext context,
+    bool isCash = true,
+    int? preferredModeId,
+  }) async {
     final entries = order?.displayEntries ?? const <OrderDisplayEntry>[];
     final notSentToKitchen =
         !_didCompleteKitchenSend && !_layoutHasServerItemIds(entries);
@@ -2119,8 +2131,6 @@ class TableDetailsController extends GetxController {
 
     if (!context.mounted) return;
 
-    final label = isCash ? 'espèces' : 'carte de crédit';
-    final amountLabel = payableTotalLabel;
     final existingId = resolvedOrderId;
     final ticketLabel = OrderMapper.ticketDisplayLabel(
       id: existingId ?? 0,
@@ -2144,104 +2154,88 @@ class TableDetailsController extends GetxController {
       );
       return;
     }
-    AppConfirmDialog.show(
-      context: context,
-      title: 'Paiement',
-      message:
-          'Encaisser $amountLabel pour $ticketLabel en $label ?',
-      onConfirm: () async {
-        payingIsCash.value = isCash;
-        try {
-          var id = resolvedOrderId;
-          // false → pay before Send: push local draft to server, then process payment.
-          final needsServerSync = id == null ||
-              id <= 0 ||
-              (!_didCompleteKitchenSend &&
-                  !_layoutHasServerItemIds(
-                    order?.displayEntries ?? currentOrder.displayEntries,
-                  ));
-          if (needsServerSync) {
-            if (requireSend) {
-              AppSnackbar.show(
-                'Paiement indisponible',
-                'Envoyez la commande en cuisine avant le paiement.',
-                snackPosition: SnackPosition.BOTTOM,
-                margin: const EdgeInsets.all(16),
-              );
-              return;
-            }
-            id = await _createLocalDraftOnServerForPayment(currentOrder);
-            if (id == null || id <= 0) {
-              AppSnackbar.show(
-                'Erreur',
-                'Impossible de créer la commande pour le paiement.',
-                snackPosition: SnackPosition.BOTTOM,
-                margin: const EdgeInsets.all(16),
-              );
-              return;
-            }
-          }
-          final liveForPay = order ?? currentOrder;
-          final result = await _orderRepository.payOrder(
-            orderId: id,
-            isCash: isCash,
-            amount: amount,
-            previousDisplayEntries: liveForPay.displayEntries,
-            localSnapshot: liveForPay,
-          );
-          final updated = result.order;
-          if (result.fullyPaid) {
-            if (Get.isRegistered<SessionController>()) {
-              Get.find<SessionController>().removePaidOrderFromOpenList(updated);
-            }
-          } else {
-            _syncOrderInSession(updated, orderNumber);
-          }
-          showPaymentOptions.value = false;
-          isBottomPanelExpanded.value = true;
-          activeToolbarIcon.value = Icons.grid_view;
 
-          // Navigate first — showing Get.snackbar before Get.back() only
-          // dismisses the snackbar and leaves the waiter on this page.
-          if (Get.isSnackbarOpen) {
-            Get.closeCurrentSnackbar();
-          }
-          _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
-
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            AppSnackbar.show(
-              'Paiement enregistré',
-              result.fullyPaid
-                  ? 'Table payée — retirée de la liste des tables ouvertes.'
-                  : 'Le paiement en $label a été enregistré.',
-              snackPosition: SnackPosition.BOTTOM,
-              duration: const Duration(seconds: 2),
-              margin: const EdgeInsets.all(16),
-            );
-          });
-        } on ApiException catch (e) {
+    payingIsCash.value = isCash;
+    payingModeId.value = preferredModeId;
+    try {
+      var id = existingId;
+      final needsServerSync = id == null ||
+          id <= 0 ||
+          (!_didCompleteKitchenSend &&
+              !_layoutHasServerItemIds(
+                order?.displayEntries ?? currentOrder.displayEntries,
+              ));
+      if (needsServerSync) {
+        if (requireSend) {
           AppSnackbar.show(
-            'Erreur paiement',
-            e.message,
+            'Paiement indisponible',
+            'Envoyez la commande en cuisine avant le paiement.',
             snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 4),
             margin: const EdgeInsets.all(16),
           );
-          debugPrint(_orderRepository.lastPaymentLog);
-        } catch (e) {
+          return;
+        }
+        id = await _createLocalDraftOnServerForPayment(currentOrder);
+        if (id == null || id <= 0) {
           AppSnackbar.show(
             'Erreur',
-            'Impossible d\'enregistrer le paiement.',
+            'Impossible de créer la commande pour le paiement.',
             snackPosition: SnackPosition.BOTTOM,
             margin: const EdgeInsets.all(16),
           );
-          debugPrint(_orderRepository.lastPaymentLog);
-          debugPrint('payOrder unexpected: $e');
-        } finally {
-          payingIsCash.value = null;
+          return;
         }
-      },
-    );
+      }
+      if (!context.mounted) return;
+      final result = await Get.toNamed(
+        AppRoutes.payment,
+        arguments: {
+          'orderId': id,
+          'ticketLabel': ticketLabel,
+          'preferCash': isCash,
+          'preferredModeId': preferredModeId,
+          'localSnapshot': order ?? currentOrder,
+        },
+      );
+      if (result == 'fully_paid') {
+        showPaymentOptions.value = false;
+        isBottomPanelExpanded.value = true;
+        activeToolbarIcon.value = Icons.grid_view;
+        if (Get.isSnackbarOpen) {
+          Get.closeCurrentSnackbar();
+        }
+        _returnToSessionPage(skipOrderSnapshot: true, scrollListToTop: true);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          AppSnackbar.show(
+            'Paiement enregistré',
+            'Table payée — retirée de la liste des tables ouvertes.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+            margin: const EdgeInsets.all(16),
+          );
+        });
+      } else if (result == 'updated') {
+        showPaymentOptions.value = true;
+      }
+    } on ApiException catch (e) {
+      AppSnackbar.show(
+        'Erreur paiement',
+        e.message,
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 4),
+        margin: const EdgeInsets.all(16),
+      );
+    } catch (e) {
+      AppSnackbar.show(
+        'Erreur',
+        'Impossible d\'ouvrir le paiement.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+    } finally {
+      payingIsCash.value = null;
+      payingModeId.value = null;
+    }
   }
 
   /// Creates a local draft on the server so `/api/payments/process` has a real order id.

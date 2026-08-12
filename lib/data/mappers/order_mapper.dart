@@ -7706,6 +7706,216 @@ class OrderMapper {
   static Map<String, dynamic> copyOrderDetail(Map<String, dynamic> source) =>
       _deepCopyOrderMap(source);
 
+  /// Remaining to pay from `GET /api/payments/summary/{id}`.
+  static double parsePaymentSummaryRemaining(Map<String, dynamic> summary) {
+    double? parseMoney(dynamic raw) {
+      if (raw is num) return raw.toDouble();
+      if (raw is String) {
+        return double.tryParse(
+          raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+        );
+      }
+      return null;
+    }
+
+    final remaining = parseMoney(summary['remaining_amount']);
+    if (remaining != null) return remaining < 0 ? 0 : remaining;
+
+    final nested = summary['order'];
+    if (nested is Map) {
+      return parseOrderPayableAmount(
+        nested is Map<String, dynamic>
+            ? nested
+            : Map<String, dynamic>.from(nested),
+      );
+    }
+    return parseOrderPayableAmount(summary);
+  }
+
+  static Map<String, dynamic>? paymentSummaryOrderMap(
+    Map<String, dynamic> summary,
+  ) {
+    final nested = summary['order'];
+    if (nested is! Map) return null;
+    return unwrapOrderDetail(
+      nested is Map<String, dynamic>
+          ? nested
+          : Map<String, dynamic>.from(nested),
+    );
+  }
+
+  /// Docs: `require_receipt_before_payment` on settings,
+  /// `requires_receipt_before_payment` on summary.settings.
+  static bool requiresReceiptBeforePayment(Map<String, dynamic>? source) {
+    if (source == null) return false;
+    final nested = source['settings'];
+    final map = nested is Map
+        ? (nested is Map<String, dynamic>
+            ? nested
+            : Map<String, dynamic>.from(nested))
+        : source;
+    final raw = map['requires_receipt_before_payment'] ??
+        map['require_receipt_before_payment'];
+    if (raw == true || raw == 1) return true;
+    if (raw is String) {
+      final v = raw.trim().toLowerCase();
+      return v == 'true' || v == '1';
+    }
+    return false;
+  }
+
+  static bool allowsMultiplePaymentModes(Map<String, dynamic>? source) {
+    return _flagFromPaymentSource(
+      source,
+      keys: const [
+        'allows_multiple_payment_modes',
+        'allow_multiple_payment_modes',
+      ],
+      defaultValue: true,
+    );
+  }
+
+  static bool allowsPerSeatPayment(Map<String, dynamic>? source) {
+    return _flagFromPaymentSource(
+      source,
+      keys: const [
+        'allows_per_seat_payment',
+        'allow_per_seat_payment',
+      ],
+      defaultValue: false,
+    );
+  }
+
+  static bool _flagFromPaymentSource(
+    Map<String, dynamic>? source, {
+    required List<String> keys,
+    required bool defaultValue,
+  }) {
+    if (source == null) return defaultValue;
+    final nested = source['settings'];
+    final map = nested is Map
+        ? (nested is Map<String, dynamic>
+            ? nested
+            : Map<String, dynamic>.from(nested))
+        : source;
+    for (final key in keys) {
+      final raw = map[key];
+      if (raw == true || raw == 1) return true;
+      if (raw == false || raw == 0) return false;
+      if (raw is String) {
+        final v = raw.trim().toLowerCase();
+        if (v == 'true' || v == '1') return true;
+        if (v == 'false' || v == '0') return false;
+      }
+    }
+    return defaultValue;
+  }
+
+  static bool isCashPaymentMode(Map<String, dynamic> mode) {
+    if (mode['is_cash'] == true) return true;
+    if (mode['is_cash'] == false) return false;
+    final type = mode['type']?.toString().toLowerCase() ?? '';
+    if (type == 'cash') return true;
+    if (type == 'digital' || type == 'card' || type == 'credit') return false;
+    final code = mode['code']?.toString().toLowerCase() ?? '';
+    final name = mode['name']?.toString().toLowerCase() ?? '';
+    final blob = '$code $name $type';
+    return blob.contains('esp') ||
+        blob.contains('cash') ||
+        blob.contains('liquide');
+  }
+
+  static List<Map<String, dynamic>> paymentTransactionsFromSummary(
+    Map<String, dynamic> summary,
+  ) {
+    final raw = summary['payment_transactions'] ?? summary['transactions'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map(
+          (row) => row is Map<String, dynamic>
+              ? row
+              : Map<String, dynamic>.from(row),
+        )
+        .toList();
+  }
+
+  static List<Map<String, dynamic>> seatBreakdownFromPayload(
+    Map<String, dynamic> payload,
+  ) {
+    final summary = payload['seat_summary'] ?? payload['seats'];
+    if (summary is Map) {
+      final rows = <Map<String, dynamic>>[];
+      for (final entry in summary.entries) {
+        final value = entry.value;
+        if (value is! Map) continue;
+        final map = value is Map<String, dynamic>
+            ? Map<String, dynamic>.from(value)
+            : Map<String, dynamic>.from(value);
+        map['seat_number'] ??= int.tryParse(entry.key.toString()) ?? entry.key;
+        rows.add(map);
+      }
+      rows.sort((a, b) {
+        final aa = (a['seat_number'] as num?)?.toInt() ?? 0;
+        final bb = (b['seat_number'] as num?)?.toInt() ?? 0;
+        return aa.compareTo(bb);
+      });
+      return rows;
+    }
+    if (summary is List) {
+      return summary
+          .whereType<Map>()
+          .map(
+            (row) => row is Map<String, dynamic>
+                ? row
+                : Map<String, dynamic>.from(row),
+          )
+          .toList();
+    }
+    return const [];
+  }
+
+  static bool? parseProcessIsFullyPaid(Map<String, dynamic>? payload) {
+    if (payload == null) return null;
+    final data = payload['data'];
+    final map = data is Map
+        ? (data is Map<String, dynamic>
+            ? data
+            : Map<String, dynamic>.from(data))
+        : payload;
+    final raw = map['is_fully_paid'] ?? map['isFullyPaid'];
+    if (raw is bool) return raw;
+    if (raw == 1) return true;
+    if (raw == 0) return false;
+    if (raw is String) {
+      final v = raw.trim().toLowerCase();
+      if (v == 'true' || v == '1') return true;
+      if (v == 'false' || v == '0') return false;
+    }
+    final remaining = map['remaining_amount'];
+    if (remaining is num) return remaining.toDouble() <= 0.001;
+    return null;
+  }
+
+  static Map<String, dynamic>? parseProcessOrderMap(
+    Map<String, dynamic>? payload,
+  ) {
+    if (payload == null) return null;
+    final data = payload['data'];
+    final map = data is Map
+        ? (data is Map<String, dynamic>
+            ? data
+            : Map<String, dynamic>.from(data))
+        : payload;
+    final order = map['order'];
+    if (order is! Map) return null;
+    return unwrapOrderDetail(
+      order is Map<String, dynamic>
+          ? order
+          : Map<String, dynamic>.from(order),
+    );
+  }
+
   static double parseOrderPayableAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
 

@@ -6,6 +6,9 @@ class PosPermissions {
 
   // Payment
   static const accessPaymentButton = 'access-payment-button';
+  static const accessEditPaymentTransaction = 'access-edit-payment-transaction';
+  static const accessDeletePaymentTransaction =
+      'access-delete-payment-transaction';
 
   // Order
   static const accessStockVisual = 'access-stock-visual';
@@ -82,6 +85,18 @@ class PosPermissions {
     if (user.isSuperuser == true) return true;
 
     return keysFromUser(user).contains(accessPaymentButton);
+  }
+
+  static bool canEditPaymentTransaction(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+    return keysFromUser(user).contains(accessEditPaymentTransaction);
+  }
+
+  static bool canDeletePaymentTransaction(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+    return keysFromUser(user).contains(accessDeletePaymentTransaction);
   }
 
   /// True when the user may offer a line or table (offert).

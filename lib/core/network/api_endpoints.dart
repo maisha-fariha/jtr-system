@@ -37,6 +37,12 @@ class ApiEndpoints {
       '/api/orders/$orderId/seat-orders/$seatNumber/items';
   /// Process a payment (`order_id` in body — replaces legacy `/api/orders/{id}/pay`).
   static const processPayment = '/api/payments/process';
+  static const processMultiplePayments = '/api/payments/process-multiple';
+  static const processPerSeatPayments = '/api/payments/process-per-seat';
+  static const syncPaymentTransactions = '/api/payments/transactions/sync';
+  static String paymentSummary(int orderId) => '/api/payments/summary/$orderId';
+  static String paymentSeatBreakdown(int orderId) =>
+      '/api/payments/seat-breakdown/$orderId';
   static const paymentModesForCheckout = '/api/payments/modes';
   static const activePaymentModes = '/api/payment-modes/active';
   static const paymentModesList = '/api/payment-modes';

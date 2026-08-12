@@ -446,23 +446,129 @@ class OrderRemoteDataSource {
     }
   }
 
-  Future<void> payOrder({
+  Future<Map<String, dynamic>> fetchPaymentSummary(int orderId) async {
+    final path = ApiEndpoints.paymentSummary(orderId);
+    final response = await _client.get<Map<String, dynamic>>(path);
+    final raw = response.data;
+    if (raw is! Map<String, dynamic>) {
+      throw ApiException(
+        message: 'Réponse résumé paiement invalide.',
+        statusCode: response.statusCode,
+      );
+    }
+
+    final envelope = ApiEnvelope.parseResponse(
+      raw,
+      fromJsonT: (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success || envelope.data == null) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load payment summary.',
+        statusCode: envelope.status,
+      );
+    }
+
+    _recordApiLog(
+      method: 'GET',
+      path: path,
+      response: raw,
+      statusCode: response.statusCode,
+    );
+    return envelope.data!;
+  }
+
+  /// Single-mode payment. Cash must send [amountGiven] >= [amount].
+  Future<Map<String, dynamic>?> payOrder({
     required int orderId,
     required double amount,
     required int paymentModeId,
-  }) async {
-    const path = ApiEndpoints.processPayment;
-    final body = {
+    double? amountGiven,
+    String? referenceNumber,
+    int? seatNumber,
+  }) {
+    final body = <String, dynamic>{
       'order_id': orderId,
       'amount': amount,
       'payment_mode_id': paymentModeId,
     };
-    try {
-      // Use dynamic: payment responses may be empty or envelope-shaped.
-      final response = await _client.post<dynamic>(
-        path,
-        data: body,
+    if (amountGiven != null) body['amount_given'] = amountGiven;
+    if (referenceNumber != null && referenceNumber.isNotEmpty) {
+      body['reference_number'] = referenceNumber;
+    }
+    if (seatNumber != null && seatNumber > 0) {
+      body['seat_number'] = seatNumber;
+    }
+    return _postPayment(ApiEndpoints.processPayment, body);
+  }
+
+  Future<Map<String, dynamic>?> processMultiplePayments({
+    required int orderId,
+    required List<Map<String, dynamic>> payments,
+  }) {
+    return _postPayment(ApiEndpoints.processMultiplePayments, {
+      'order_id': orderId,
+      'payments': payments,
+    });
+  }
+
+  Future<Map<String, dynamic>?> processPerSeatPayments({
+    required int orderId,
+    required Map<String, dynamic> seatPayments,
+  }) {
+    return _postPayment(ApiEndpoints.processPerSeatPayments, {
+      'order_id': orderId,
+      'seat_payments': seatPayments,
+    });
+  }
+
+  Future<Map<String, dynamic>?> syncPaymentTransactions({
+    required int orderId,
+    List<Map<String, dynamic>> modeUpdates = const [],
+    List<int> cancellations = const [],
+  }) {
+    return _postPayment(ApiEndpoints.syncPaymentTransactions, {
+      'order_id': orderId,
+      'mode_updates': modeUpdates,
+      'cancellations': cancellations,
+    });
+  }
+
+  Future<Map<String, dynamic>> fetchSeatBreakdown(int orderId) async {
+    final path = ApiEndpoints.paymentSeatBreakdown(orderId);
+    final response = await _client.get<Map<String, dynamic>>(path);
+    final raw = response.data;
+    if (raw is! Map<String, dynamic>) {
+      throw ApiException(
+        message: 'Réponse répartition sièges invalide.',
+        statusCode: response.statusCode,
       );
+    }
+    final envelope = ApiEnvelope.parseResponse(
+      raw,
+      fromJsonT: (json) => json as Map<String, dynamic>,
+    );
+    if (!envelope.success || envelope.data == null) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to load seat breakdown.',
+        statusCode: envelope.status,
+      );
+    }
+    _recordApiLog(
+      method: 'GET',
+      path: path,
+      response: raw,
+      statusCode: response.statusCode,
+    );
+    return envelope.data!;
+  }
+
+  Future<Map<String, dynamic>?> _postPayment(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      final response = await _client.post<dynamic>(path, data: body);
       _recordApiLog(
         method: 'POST',
         path: path,
@@ -477,12 +583,15 @@ class OrderRemoteDataSource {
         response: response.data,
         statusCode: response.statusCode,
       );
-
       _ensureMutationSucceeded(
         statusCode: response.statusCode,
         data: response.data,
         fallbackMessage: 'Failed to pay order.',
       );
+      final raw = response.data;
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return null;
     } on ApiException catch (error) {
       logPaymentApi(
         method: 'POST',
@@ -564,9 +673,9 @@ class OrderRemoteDataSource {
     final attempts = <String>[];
 
     for (final path in [
+      ApiEndpoints.paymentModesForCheckout,
       ApiEndpoints.activePaymentModes,
       ApiEndpoints.paymentModesList,
-      ApiEndpoints.paymentModesForCheckout,
     ]) {
       try {
         final response = await _client.get<dynamic>(path);

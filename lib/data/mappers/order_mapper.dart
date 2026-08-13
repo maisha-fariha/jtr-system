@@ -187,13 +187,15 @@ class OrderMapper {
 
   /// Builds session rows from [GET /api/orders] (active-day open orders).
   ///
+  /// Preserves API page order — no client time sort. When the backend sorts
+  /// by `updated_at`, the app list matches automatically.
+  ///
   /// [lightweight] skips product/seat parsing — use for the session list.
   static List<SessionOrder> sessionOrdersFromOrdersList(
     List<Map<String, dynamic>> orders, {
     int? waiterId,
     bool lightweight = false,
   }) {
-    final sortMillisById = <int, int>{};
     final rows = <SessionOrder>[];
     final seenOrderIds = <int>{};
 
@@ -214,13 +216,8 @@ class OrderMapper {
             ? sessionOrderSummaryFromListMap(order)
             : fromOrderDetail(order),
       );
-      sortMillisById[orderId] = _orderSortMillis(order);
     }
 
-    rows.sort(
-      (a, b) =>
-          (sortMillisById[b.id] ?? 0).compareTo(sortMillisById[a.id] ?? 0),
-    );
     return rows;
   }
 
@@ -351,7 +348,7 @@ class OrderMapper {
       }
       if (raw is num && raw > 0) return raw.toInt();
     }
-    return _orderSortMillis(order);
+    return 0;
   }
 
   /// Stamp used when a payment just completed on this device.
@@ -545,24 +542,6 @@ class OrderMapper {
       if (id > 0) byId[id] = order;
     }
     return byId.values.toList(growable: false);
-  }
-
-  static int _orderSortMillis(Map<String, dynamic> order) {
-    // Prefer activity time so Send / edits float to the top after refresh.
-    for (final key in [
-      'updated_at',
-      'last_updated_at',
-      'modified_at',
-      'created_at',
-    ]) {
-      final raw = order[key];
-      if (raw is String) {
-        final ms = DateTime.tryParse(raw)?.millisecondsSinceEpoch;
-        if (ms != null && ms > 0) return ms;
-      }
-      if (raw is num && raw > 0) return raw.toInt();
-    }
-    return 0;
   }
 
   static bool _hasOpenSession(Map<String, dynamic> table) {

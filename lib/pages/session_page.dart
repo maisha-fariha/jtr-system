@@ -689,8 +689,11 @@ class _OrderRow extends GetView<SessionController> {
           controller.findOrder(orderNumber: this.order.number) ?? this.order;
       final state = controller.tableUiState.value;
       final isExpanded = state.expandedOrderNumber == order.number;
-      final isRowSelected = state.selectedRow?.orderNumber == order.number &&
-          state.selectedRow?.productIndex == null;
+      final selectedNumber = state.selectedRow?.orderNumber;
+      final isRowSelected = selectedNumber != null &&
+          state.selectedRow?.productIndex == null &&
+          SessionController.normalizeTableKey(selectedNumber) ==
+              SessionController.normalizeTableKey(order.number);
       final cardRadius = JtrResponsive.getResponsiveRadius(context, 12);
 
       return Padding(

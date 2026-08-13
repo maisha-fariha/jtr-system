@@ -903,8 +903,7 @@ class SessionController extends GetxController {
       }
     }
 
-    // Keep API / mapper order for remote tickets (updated_at). Only float
-    // unsent local drafts above them.
+    // Keep API list order for remote tickets. Only float unsent local drafts.
     final remotes = <SessionOrder>[];
     final locals = <SessionOrder>[];
     for (final order in orders) {
@@ -1323,10 +1322,10 @@ class SessionController extends GetxController {
   void updateOrderRow(SessionOrder order, {bool replaceDetail = false}) =>
       _upsertOrderInList(order, replaceDetail: replaceDetail);
 
-  /// Moves [order] to the top of the session list and asks the UI to scroll up.
+  /// Patches [order] in the session list **in place**.
   ///
-  /// Used after Send All so the waiter sees the newly created/updated table
-  /// without manually scrolling.
+  /// The orders API has no reliable updated-at sort, so Send / edit must not
+  /// move the row to the top — keep the API list position.
   ///
   /// [replaceLocalDraftNumber] — free-zone: drop the pre-Send `C#` row when the
   /// ticket becomes `C{orderId}`.
@@ -1349,17 +1348,6 @@ class SessionController extends GetxController {
       );
     }
     _upsertOrderInList(order, replaceDetail: replaceDetail);
-
-    final idx = orders.indexWhere((item) {
-      if (order.id > 0 && item.id == order.id) return true;
-      return _tableKeysMatch(item.number, order.number);
-    });
-    if (idx > 0) {
-      final row = orders.removeAt(idx);
-      orders.insert(0, row);
-      orders.refresh();
-    }
-    listScrollSignal.value++;
 
     if (selectForActions) {
       tableUiState.value = tableUiState.value.copyWith(

@@ -229,9 +229,53 @@ class SessionRemoteDataSource {
     }
 
     return (
-      orders: _extractOrdersFromPayload(envelope.data),
+      orders: _slimOpenOrdersForList(_extractOrdersFromPayload(envelope.data)),
       lastPage: _readLastPage(envelope.data),
     );
+  }
+
+  /// Drop nested seat/course trees. List UI only needs header fields; keeping
+  /// full tickets makes decode + Hive encode far slower than Postman.
+  List<Map<String, dynamic>> _slimOpenOrdersForList(
+    List<Map<String, dynamic>> orders,
+  ) {
+    return [for (final order in orders) _slimOpenOrderForList(order)];
+  }
+
+  Map<String, dynamic> _slimOpenOrderForList(Map<String, dynamic> order) {
+    final waiter = order['waiter'];
+    final zone = order['sales_zone'];
+    return <String, dynamic>{
+      'id': order['id'],
+      'order_number': order['order_number'],
+      'table_id': order['table_id'],
+      'table_number': order['table_number'],
+      'status': order['status'],
+      'payment_status': order['payment_status'],
+      'payment_status_detailed': order['payment_status_detailed'],
+      'total_price': order['total_price'],
+      'remaining_amount': order['remaining_amount'],
+      'total_paid': order['total_paid'],
+      'number_of_guests': order['number_of_guests'] ?? order['guests'],
+      'receipt_print_count': order['receipt_print_count'],
+      'waiter_id': order['waiter_id'],
+      'sales_zone_id': order['sales_zone_id'],
+      'sales_zone_name': order['sales_zone_name'],
+      'created_at': order['created_at'],
+      'updated_at': order['updated_at'],
+      'items_count': order['items_count'],
+      'customer_id': order['customer_id'],
+      if (waiter is Map)
+        'waiter': {
+          'id': waiter['id'],
+          'name': waiter['name'],
+        },
+      if (zone is Map)
+        'sales_zone': {
+          'id': zone['id'],
+          'name': zone['name'],
+        },
+    };
   }
 
   /// Completed + paid orders for the statistics list (latest paid first).

@@ -545,45 +545,6 @@ class SessionRepository {
     );
   }
 
-  /// Pages 2..[lastPage] in parallel batches. Page 1 must already be on screen.
-  Future<List<SessionOrder>> fetchSessionOrdersRemainingPages({
-    required int lastPage,
-    int? waiterId,
-    int? salesZoneId,
-  }) async {
-    if (lastPage <= 1) return const [];
-    final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
-    final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
-    final epoch = _openOrdersEpoch;
-
-    final extraMaps = await _remote.fetchOrdersRemainingPages(
-      lastPage: lastPage,
-      waiterId: scopedId,
-      salesZoneId: zoneId,
-    );
-    if (epoch != _openOrdersEpoch) return const [];
-
-    final current = _openOrdersMemory ?? const <Map<String, dynamic>>[];
-    final seen = <int>{
-      for (final row in current) OrderMapper.orderIdFromDetail(row),
-    };
-    final merged = List<Map<String, dynamic>>.from(current);
-    for (final row in extraMaps) {
-      final id = OrderMapper.orderIdFromDetail(row);
-      if (id > 0 && seen.contains(id)) continue;
-      merged.add(row);
-      if (id > 0) seen.add(id);
-    }
-    _openOrdersMemory = merged;
-    unawaited(_local.saveOpenOrdersList(merged));
-
-    return OrderMapper.sessionOrdersFromOrdersList(
-      extraMaps,
-      waiterId: scopedId,
-      lightweight: true,
-    );
-  }
-
   /// Network refresh: fetches every page before returning (see [getSessionOrders]).
   Future<List<SessionOrder>> refreshSessionOrdersFromNetwork({
     int? waiterId,

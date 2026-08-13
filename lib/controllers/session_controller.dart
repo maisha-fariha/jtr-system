@@ -667,37 +667,6 @@ class SessionController extends GetxController {
     if (replace) {
       resetSessionListToTop.value = true;
     }
-    // Page 1 is already on screen; remaining pages load in parallel batches.
-    if (fetchGen == _ordersFetchGeneration && hasMoreSessionOrders) {
-      unawaited(_pageInRemainingSessionOrders(fetchGen));
-    }
-  }
-
-  Future<void> _pageInRemainingSessionOrders(int fetchGen) async {
-    final lastPage = _sessionOrdersLastPage;
-    if (lastPage <= 1) return;
-    isLoadingMoreOrders.value = true;
-    try {
-      final extra = await _sessionRepository.fetchSessionOrdersRemainingPages(
-        lastPage: lastPage,
-        waiterId: _ordersListWaiterFilter,
-        salesZoneId: selectedSalesZoneId,
-      );
-      if (fetchGen != _ordersFetchGeneration) return;
-      _sessionOrdersNextPage = lastPage + 1;
-      if (extra.isEmpty) return;
-      _applySessionOrderSummaries(
-        extra,
-        enrichDetails: false,
-        replaceList: false,
-      );
-    } catch (_) {
-      // Keep page 1; scroll can still request the next page.
-    } finally {
-      if (fetchGen == _ordersFetchGeneration) {
-        isLoadingMoreOrders.value = false;
-      }
-    }
   }
 
   /// Next page when the session list is scrolled near the bottom.

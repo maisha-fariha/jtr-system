@@ -27,6 +27,9 @@ class SessionRepository {
   /// right after the post-login sync screen, without waiting on Hive I/O.
   List<Map<String, dynamic>>? _openOrdersMemory;
 
+  /// Bumped on page-1 fetch so a late page-2+ response cannot merge into it.
+  int _openOrdersEpoch = 0;
+
   /// Already-mapped rows from the last connect preload (avoids empty flash).
   List<SessionOrder>? _preloadedSessionOrders;
 
@@ -487,12 +490,25 @@ class SessionRepository {
   }) async {
     final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
     final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
+    final epochAtStart = page == 1 ? ++_openOrdersEpoch : _openOrdersEpoch;
 
     final raw = await _remote.fetchOrdersPage(
       page: page,
       waiterId: scopedId,
       salesZoneId: zoneId,
     );
+
+    if (epochAtStart != _openOrdersEpoch) {
+      return SessionOrdersPageResult(
+        orders: OrderMapper.sessionOrdersFromOrdersList(
+          raw.orders,
+          waiterId: scopedId,
+          lightweight: true,
+        ),
+        page: page,
+        lastPage: raw.lastPage < 1 ? 1 : raw.lastPage,
+      );
+    }
 
     if (page == 1) {
       _openOrdersMemory = List<Map<String, dynamic>>.from(raw.orders);
@@ -510,7 +526,8 @@ class SessionRepository {
       }
       _openOrdersMemory = merged;
     }
-    await _local.saveOpenOrdersList(_openOrdersMemory ?? raw.orders);
+    final snapshot = _openOrdersMemory ?? raw.orders;
+    unawaited(_local.saveOpenOrdersList(snapshot));
 
     final mapped = OrderMapper.sessionOrdersFromOrdersList(
       raw.orders,
@@ -525,6 +542,45 @@ class SessionRepository {
       orders: mapped,
       page: page,
       lastPage: raw.lastPage < 1 ? 1 : raw.lastPage,
+    );
+  }
+
+  /// Pages 2..[lastPage] in parallel batches. Page 1 must already be on screen.
+  Future<List<SessionOrder>> fetchSessionOrdersRemainingPages({
+    required int lastPage,
+    int? waiterId,
+    int? salesZoneId,
+  }) async {
+    if (lastPage <= 1) return const [];
+    final scopedId = (waiterId != null && waiterId > 0) ? waiterId : null;
+    final zoneId = (salesZoneId != null && salesZoneId > 0) ? salesZoneId : null;
+    final epoch = _openOrdersEpoch;
+
+    final extraMaps = await _remote.fetchOrdersRemainingPages(
+      lastPage: lastPage,
+      waiterId: scopedId,
+      salesZoneId: zoneId,
+    );
+    if (epoch != _openOrdersEpoch) return const [];
+
+    final current = _openOrdersMemory ?? const <Map<String, dynamic>>[];
+    final seen = <int>{
+      for (final row in current) OrderMapper.orderIdFromDetail(row),
+    };
+    final merged = List<Map<String, dynamic>>.from(current);
+    for (final row in extraMaps) {
+      final id = OrderMapper.orderIdFromDetail(row);
+      if (id > 0 && seen.contains(id)) continue;
+      merged.add(row);
+      if (id > 0) seen.add(id);
+    }
+    _openOrdersMemory = merged;
+    unawaited(_local.saveOpenOrdersList(merged));
+
+    return OrderMapper.sessionOrdersFromOrdersList(
+      extraMaps,
+      waiterId: scopedId,
+      lightweight: true,
     );
   }
 

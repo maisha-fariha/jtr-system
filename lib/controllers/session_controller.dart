@@ -134,6 +134,10 @@ class SessionController extends GetxController {
   bool get hasMoreSessionOrders =>
       _sessionOrdersNextPage <= _sessionOrdersLastPage;
 
+  /// After page-1 replace (first load / swipe refresh), jump the list to top
+  /// so a leftover scroll offset cannot auto-fetch the next pages.
+  final resetSessionListToTop = false.obs;
+
   @override
   void onInit() {
     super.onInit();
@@ -638,6 +642,10 @@ class SessionController extends GetxController {
     required bool forceRefresh,
   }) async {
     isLoadingMoreOrders.value = false;
+    // Same as first load: only page 1 is valid until the user scrolls.
+    _sessionOrdersLastPage = 1;
+    _sessionOrdersNextPage = 2;
+
     final first = await _sessionRepository.fetchSessionOrdersPage(
       page: 1,
       waiterId: _ordersListWaiterFilter,
@@ -648,13 +656,48 @@ class SessionController extends GetxController {
     _sessionOrdersLastPage = first.lastPage;
     _sessionOrdersNextPage = 2;
 
+    final replace = replaceExistingList || orders.isEmpty;
     _applySessionOrderSummaries(
       first.orders,
       retainOrders: retainOrders,
       enrichDetails: enrichDetails,
-      replaceList: replaceExistingList || orders.isEmpty,
+      replaceList: replace,
       clearSuppressedMatches: forceRefresh,
     );
+    if (replace) {
+      resetSessionListToTop.value = true;
+    }
+    // Page 1 is already on screen; remaining pages load in parallel batches.
+    if (fetchGen == _ordersFetchGeneration && hasMoreSessionOrders) {
+      unawaited(_pageInRemainingSessionOrders(fetchGen));
+    }
+  }
+
+  Future<void> _pageInRemainingSessionOrders(int fetchGen) async {
+    final lastPage = _sessionOrdersLastPage;
+    if (lastPage <= 1) return;
+    isLoadingMoreOrders.value = true;
+    try {
+      final extra = await _sessionRepository.fetchSessionOrdersRemainingPages(
+        lastPage: lastPage,
+        waiterId: _ordersListWaiterFilter,
+        salesZoneId: selectedSalesZoneId,
+      );
+      if (fetchGen != _ordersFetchGeneration) return;
+      _sessionOrdersNextPage = lastPage + 1;
+      if (extra.isEmpty) return;
+      _applySessionOrderSummaries(
+        extra,
+        enrichDetails: false,
+        replaceList: false,
+      );
+    } catch (_) {
+      // Keep page 1; scroll can still request the next page.
+    } finally {
+      if (fetchGen == _ordersFetchGeneration) {
+        isLoadingMoreOrders.value = false;
+      }
+    }
   }
 
   /// Next page when the session list is scrolled near the bottom.
@@ -745,14 +788,18 @@ class SessionController extends GetxController {
         _upsertOrderInList(order);
       }
     }
-    for (final empty in emptyShellsToKeep) {
-      final stillPresent = orders.any(
-        (o) =>
-            (empty.id > 0 && o.id == empty.id) ||
-            _tableKeysMatch(o.number, empty.number),
-      );
-      if (!stillPresent) {
-        _upsertOrderInList(empty);
+    // Page-1 replace must not glue previous pages back. Lightweight list
+    // rows have empty `products`, so they would look like empty shells.
+    if (!replaceList) {
+      for (final empty in emptyShellsToKeep) {
+        final stillPresent = orders.any(
+          (o) =>
+              (empty.id > 0 && o.id == empty.id) ||
+              _tableKeysMatch(o.number, empty.number),
+        );
+        if (!stillPresent) {
+          _upsertOrderInList(empty);
+        }
       }
     }
     _dedupeOrdersByTableKeyInPlace();

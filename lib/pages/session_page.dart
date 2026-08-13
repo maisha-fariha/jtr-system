@@ -193,11 +193,18 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
       // (length alone does not always notify Obx).
       controller.listScrollSignal.value;
       controller.isLoadingMoreOrders.value;
+      controller.resetSessionListToTop.value;
       final visibleOrders = controller.orders.toList();
       final loadingMore = controller.isLoadingMoreOrders.value;
-      if (controller.hasMoreSessionOrders) {
+      final resetToTop = controller.resetSessionListToTop.value;
+      if (resetToTop || controller.hasMoreSessionOrders) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _onScroll();
+          if (!mounted || !_scrollController.hasClients) return;
+          if (controller.resetSessionListToTop.value) {
+            _scrollController.jumpTo(0);
+            controller.resetSessionListToTop.value = false;
+          }
+          _onScroll();
         });
       }
       return ListView.separated(

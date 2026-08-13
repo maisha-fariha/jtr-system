@@ -241,10 +241,6 @@ class OrderMapper {
         ? (waiter['name'] as String? ?? '—')
         : (data['waiter_name'] as String? ?? '—');
 
-    final products = data.containsKey('seat_orders')
-        ? extractProducts(data)
-        : const <OrderProduct>[];
-
     return SessionOrder(
       id: orderId,
       number: displayNumberFromDetail(data),
@@ -258,8 +254,8 @@ class OrderMapper {
       total: formatPrice(
         '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
       ),
-      products: products,
-      itemCount: _itemCountFromListMap(data, products.length),
+      products: const [],
+      itemCount: _itemCountFromListMap(data, 0),
       displayEntries: const [],
       waiterId: waiterIdFromOrderMap(data),
       isPartiallyPaid: isOrderPartiallyPaid(data),

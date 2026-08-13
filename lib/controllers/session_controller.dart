@@ -667,6 +667,15 @@ class SessionController extends GetxController {
     if (replace) {
       resetSessionListToTop.value = true;
     }
+    if (fetchGen == _ordersFetchGeneration && hasMoreSessionOrders) {
+      unawaited(_loadRemainingSessionOrderPages(fetchGen));
+    }
+  }
+
+  Future<void> _loadRemainingSessionOrderPages(int fetchGen) async {
+    while (fetchGen == _ordersFetchGeneration && hasMoreSessionOrders) {
+      await loadMoreSessionOrders();
+    }
   }
 
   /// Next page when the session list is scrolled near the bottom.
@@ -822,16 +831,8 @@ class SessionController extends GetxController {
       if (draftIdx >= 0) {
         orders[draftIdx] = _preferDetailedOrder(order, orders[draftIdx]);
       } else {
-        // Same table may already have another positive id (rare race) — replace.
-        final sameTableIdx = orders.indexWhere(
-          (item) => _tableKeysMatch(item.number, order.number),
-        );
-        if (sameTableIdx >= 0) {
-          orders[sameTableIdx] =
-              _preferDetailedOrder(order, orders[sameTableIdx]);
-        } else {
-          orders.add(order);
-        }
+        // Split/separated tickets share a table number but are distinct orders.
+        orders.add(order);
       }
       existingIds.add(order.id);
     }
@@ -843,7 +844,9 @@ class SessionController extends GetxController {
     final orderOfKeys = <String>[];
 
     for (final order in orders) {
-      final key = normalizeTableKey(order.number);
+      final key = order.id > 0
+          ? 'id:${order.id}'
+          : normalizeTableKey(order.number);
       if (key.isEmpty) continue;
       final existing = bestByTable[key];
       if (existing == null) {
@@ -1294,7 +1297,9 @@ class SessionController extends GetxController {
     }
 
     final byNumber = orders.indexWhere(
-      (item) => _tableKeysMatch(item.number, safeOrder.number),
+      (item) =>
+          _tableKeysMatch(item.number, safeOrder.number) &&
+          (item.id <= 0 || item.id == safeOrder.id),
     );
     if (byNumber >= 0) {
       orders[byNumber] = merged(safeOrder, orders[byNumber]);
@@ -1308,9 +1313,16 @@ class SessionController extends GetxController {
   }
 
   void _removeOtherRowsForTable(String tableNumber, {required int keepIndex}) {
+    final keep = orders[keepIndex];
     for (var i = orders.length - 1; i >= 0; i--) {
       if (i == keepIndex) continue;
-      if (_tableKeysMatch(orders[i].number, tableNumber)) {
+      if (!_tableKeysMatch(orders[i].number, tableNumber)) continue;
+      final other = orders[i];
+      if (other.id <= 0) {
+        orders.removeAt(i);
+        continue;
+      }
+      if (keep.id > 0 && other.id == keep.id) {
         orders.removeAt(i);
       }
     }

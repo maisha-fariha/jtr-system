@@ -172,8 +172,12 @@ class _SessionOrdersListState extends State<_SessionOrdersList> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     if (!controller.hasMoreSessionOrders) return;
+    if (controller.isLoadingMoreOrders.value) return;
     final position = _scrollController.position;
-    if (position.pixels >= position.maxScrollExtent - 240) {
+    if (!position.hasContentDimensions) return;
+    final fitsOnScreen = position.maxScrollExtent <= 0;
+    final nearBottom = position.pixels >= position.maxScrollExtent - 400;
+    if (fitsOnScreen || nearBottom) {
       controller.loadMoreSessionOrders();
     }
   }

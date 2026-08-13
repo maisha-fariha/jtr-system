@@ -96,7 +96,7 @@ class SessionRemoteDataSource {
     return DayStatisticsInfo.fromJson(envelope.data!);
   }
 
-  /// Open orders for the active business day only ([active_day]=true).
+  /// Open unpaid orders ([GET /api/orders], `active_day=false` like Postman).
   ///
   /// When [firstPageOnly] is true, returns after page 1 so the session list
   /// can paint without waiting on further pagination.
@@ -198,7 +198,10 @@ class SessionRemoteDataSource {
     int perPage = ordersPageSize,
   }) async {
     final queryParameters = <String, dynamic>{
-      'active_day': true,
+      // Same as Postman list: do not restrict to the POS "active day".
+      // T25 (pending, created later than the displayed day) is omitted when
+      // `active_day=true`, so it never appears and later pages never load.
+      'active_day': false,
       'per_page': perPage,
       'page': page,
     };

@@ -313,7 +313,9 @@ class _SeatPaymentCard extends StatelessWidget {
                 Text(
                   paid
                       ? 'Payé'
-                      : 'Part ${_euro(controller.guestCount.value > 0 ? controller.remaining.value / controller.guestCount.value : 0)}',
+                      : (input.suggestedAmount > 0
+                          ? 'Part ${_euro(input.suggestedAmount)}'
+                          : ''),
                   style: TextStyle(
                     color: paid ? AppTheme.textSecondary : AppTheme.primary,
                     fontWeight: FontWeight.w700,

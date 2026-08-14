@@ -42,6 +42,7 @@ class SeatPaymentInput {
     required this.modeId,
     required this.remaining,
     this.kitchenRemaining = 0,
+    this.suggestedAmount = 0,
     required this.isFullyPaid,
     double? initialAmount,
   })  : amountController = TextEditingController(
@@ -61,6 +62,8 @@ class SeatPaymentInput {
   final double remaining;
   /// Remaining from GET seat-breakdown for this seat (may be 0).
   final double kitchenRemaining;
+  /// Prefill share for this guest (cent-safe equal split).
+  final double suggestedAmount;
   final bool isFullyPaid;
   int modeId;
   final TextEditingController amountController;
@@ -263,9 +266,14 @@ class PaymentController extends GetxController {
     // Free cover split: every guest can pay. Suggest equal share of order remaining
     // when items are not assigned per seat (kitchen total ≈ all on one seat).
     final orderRemain = OrderMapper.formatPaymentAmount(remaining.value);
-    final equalShare = OrderMapper.formatPaymentAmount(orderRemain / count);
-    final useEqualShare =
-        orderRemain > 0.001 && (kitchenTotal <= 0.001 || kitchenTotal + 0.05 < orderRemain || byNumber.length < count);
+    final useEqualShare = orderRemain > 0.001 &&
+        (kitchenTotal <= 0.001 ||
+            kitchenTotal + 0.05 < orderRemain ||
+            byNumber.length < count);
+    // Avoid 130.03 / 5 → 26.01×5 = 130.05: first N-1 get floor share,
+    // last guest gets the residual so sum == order remaining.
+    final equalShares =
+        useEqualShare ? _splitAmountEvenly(orderRemain, count) : const <double>[];
 
     final built = <SeatPaymentInput>[];
     for (var i = 1; i <= count; i++) {
@@ -284,7 +292,7 @@ class PaymentController extends GetxController {
       final initial = paid
           ? null
           : (useEqualShare
-              ? equalShare
+              ? equalShares[i - 1]
               : (kitchen > 0.001 ? kitchen : null));
 
       built.add(
@@ -293,12 +301,29 @@ class PaymentController extends GetxController {
           modeId: defaultMode,
           remaining: guestCap,
           kitchenRemaining: kitchen,
+          suggestedAmount: initial ?? 0,
           isFullyPaid: paid,
           initialAmount: initial,
         ),
       );
     }
     seatInputs.assignAll(built);
+  }
+
+  /// Split [total] into [parts] amounts that sum exactly (cent-safe).
+  /// Example: 130.03 / 5 → [26.00, 26.00, 26.00, 26.00, 26.03].
+  static List<double> _splitAmountEvenly(double total, int parts) {
+    if (parts <= 0) return const [];
+    final cents = (OrderMapper.formatPaymentAmount(total) * 100).round();
+    final base = cents ~/ parts;
+    final remainder = cents % parts;
+    return [
+      for (var i = 0; i < parts; i++)
+        OrderMapper.formatPaymentAmount(
+          // Put leftover cents on the last guest(s).
+          (base + (i >= parts - remainder ? 1 : 0)) / 100.0,
+        ),
+    ];
   }
 
   void _resetLinesToRemaining() {

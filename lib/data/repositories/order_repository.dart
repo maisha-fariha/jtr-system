@@ -5582,9 +5582,24 @@ class OrderRepository {
     return _remote.fetchPaymentSummary(orderId);
   }
 
-  Future<List<Map<String, dynamic>>> getSeatBreakdown(int orderId) async {
+  Future<Map<String, dynamic>> getPaymentSettings() {
+    return _remote.fetchPaymentSettings();
+  }
+
+  Future<({List<Map<String, dynamic>> seats, int numberOfGuests})>
+      getSeatBreakdown(int orderId) async {
     final payload = await _remote.fetchSeatBreakdown(orderId);
-    return OrderMapper.seatBreakdownFromPayload(payload);
+    final seats = OrderMapper.seatBreakdownFromPayload(payload);
+    var guests = OrderMapper.numberOfGuestsFromSeatBreakdown(payload);
+    if (guests < 1) {
+      var maxSeat = 0;
+      for (final seat in seats) {
+        final n = (seat['seat_number'] as num?)?.toInt() ?? 0;
+        if (n > maxSeat) maxSeat = n;
+      }
+      guests = maxSeat > 0 ? maxSeat : seats.length;
+    }
+    return (seats: seats, numberOfGuests: guests);
   }
 
   Future<({SessionOrder order, bool fullyPaid})> processCheckout({
@@ -5652,32 +5667,106 @@ class OrderRepository {
       }
 
       _remote.lastApiLog = null;
-      final seated = payments.any((p) => p.seatNumber != null && p.seatNumber! > 0);
+      final seated =
+          payments.any((p) => p.seatNumber != null && p.seatNumber! > 0);
       late final Map<String, dynamic>? processResponse;
       if (seated) {
-        final seatPayments = <String, dynamic>{};
-        for (final payment in payments) {
-          final seat = '${payment.seatNumber ?? 0}';
-          final list = (seatPayments[seat] as List<Map<String, dynamic>>?) ??
-              <Map<String, dynamic>>[];
-          list.add(payment.toApiMap());
-          seatPayments[seat] = list;
+        // Use Case D process-per-seat only when each amount fits that seat's
+        // kitchen remaining_amount from seat-breakdown.
+        // Otherwise free cover split: process / process-multiple WITHOUT
+        // seat_number — sending seat_number still triggers
+        // "exceeds remaining balance for this seat" on the backend.
+        var usePerSeatApi = true;
+        try {
+          final breakdown = await getSeatBreakdown(orderId);
+          final bySeat = <int, double>{};
+          for (final seat in breakdown.seats) {
+            final n = (seat['seat_number'] as num?)?.toInt() ?? 0;
+            if (n <= 0) continue;
+            // Only trust explicit remaining_amount (do not fall back to order total).
+            final raw = seat['remaining_amount'];
+            if (raw is num) {
+              bySeat[n] = raw.toDouble();
+            } else if (raw is String) {
+              bySeat[n] = double.tryParse(
+                    raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+                  ) ??
+                  0;
+            } else {
+              bySeat[n] = 0;
+            }
+          }
+          for (final payment in payments) {
+            final seatNo = payment.seatNumber ?? 0;
+            if (!bySeat.containsKey(seatNo)) {
+              usePerSeatApi = false;
+              break;
+            }
+            final seatRemain = bySeat[seatNo] ?? 0.0;
+            if (payment.amount > seatRemain + 0.001) {
+              usePerSeatApi = false;
+              break;
+            }
+          }
+        } catch (_) {
+          usePerSeatApi = false;
         }
-        apiLog.writeln('── POST /api/payments/process-per-seat ──');
-        apiLog.writeln(formatApiPayload({
-          'order_id': orderId,
-          'seat_payments': seatPayments,
-        }));
-        processResponse = await _remote.processPerSeatPayments(
-          orderId: orderId,
-          seatPayments: seatPayments,
-        );
+
+        if (usePerSeatApi) {
+          final seatPayments = <String, dynamic>{};
+          for (final payment in payments) {
+            final seat = '${payment.seatNumber ?? 0}';
+            final list = (seatPayments[seat] as List<Map<String, dynamic>>?) ??
+                <Map<String, dynamic>>[];
+            list.add(payment.toApiMap());
+            seatPayments[seat] = list;
+          }
+          apiLog.writeln('── POST /api/payments/process-per-seat ──');
+          apiLog.writeln(formatApiPayload({
+            'order_id': orderId,
+            'seat_payments': seatPayments,
+          }));
+          processResponse = await _remote.processPerSeatPayments(
+            orderId: orderId,
+            seatPayments: seatPayments,
+          );
+        } else if (payments.length == 1) {
+          final payment = payments.first;
+          // Cover split: do NOT send seat_number (order-level remaining).
+          apiLog.writeln('── POST /api/payments/process (cover split) ──');
+          apiLog.writeln(formatApiPayload({
+            'order_id': orderId,
+            ...payment.toApiMap(includeSeat: false),
+          }));
+          processResponse = await _remote.payOrder(
+            orderId: orderId,
+            amount: payment.amount,
+            paymentModeId: payment.paymentModeId,
+            amountGiven: payment.amountGiven,
+            referenceNumber: payment.referenceNumber,
+            seatNumber: null,
+          );
+        } else {
+          final payload =
+              payments.map((p) => p.toApiMap(includeSeat: false)).toList();
+          apiLog.writeln(
+            '── POST /api/payments/process-multiple (cover split) ──',
+          );
+          apiLog.writeln(formatApiPayload({
+            'order_id': orderId,
+            'payments': payload,
+          }));
+          processResponse = await _remote.processMultiplePayments(
+            orderId: orderId,
+            payments: payload,
+          );
+        }
       } else if (payments.length == 1) {
         final payment = payments.first;
         apiLog.writeln('── POST /api/payments/process ──');
         apiLog.writeln(formatApiPayload({
           'order_id': orderId,
-          ...payment.toApiMap(includeSeat: true),
+          ...payment.toApiMap(includeSeat: false),
         }));
         processResponse = await _remote.payOrder(
           orderId: orderId,
@@ -5685,7 +5774,7 @@ class OrderRepository {
           paymentModeId: payment.paymentModeId,
           amountGiven: payment.amountGiven,
           referenceNumber: payment.referenceNumber,
-          seatNumber: payment.seatNumber,
+          seatNumber: null,
         );
       } else {
         final payload = payments.map((p) => p.toApiMap()).toList();

@@ -2205,6 +2205,9 @@ class TableDetailsController extends GetxController {
           'preferCash': isCash,
           'preferredModeId': preferredModeId,
           'localSnapshot': order ?? currentOrder,
+          'usesTableFlow': Get.isRegistered<SessionController>()
+              ? Get.find<SessionController>().selectedZoneUsesTableFlow
+              : false,
         },
       );
       if (result == 'fully_paid') {

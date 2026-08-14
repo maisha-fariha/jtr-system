@@ -7874,7 +7874,8 @@ class OrderMapper {
   static List<Map<String, dynamic>> seatBreakdownFromPayload(
     Map<String, dynamic> payload,
   ) {
-    final summary = payload['seat_summary'] ?? payload['seats'];
+    final root = _seatBreakdownRoot(payload);
+    final summary = root['seat_summary'] ?? root['seats'] ?? payload['seat_summary'] ?? payload['seats'];
     if (summary is Map) {
       final rows = <Map<String, dynamic>>[];
       for (final entry in summary.entries) {
@@ -7904,6 +7905,25 @@ class OrderMapper {
           .toList();
     }
     return const [];
+  }
+
+  /// Guest count from Use Case D seat-breakdown (`number_of_guests`).
+  static int numberOfGuestsFromSeatBreakdown(Map<String, dynamic> payload) {
+    final root = _seatBreakdownRoot(payload);
+    final raw = root['number_of_guests'] ??
+        root['guests'] ??
+        payload['number_of_guests'] ??
+        payload['guests'];
+    if (raw is num) return raw.toInt();
+    if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+    return 0;
+  }
+
+  static Map<String, dynamic> _seatBreakdownRoot(Map<String, dynamic> payload) {
+    final data = payload['data'];
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return payload;
   }
 
   static bool? parseProcessIsFullyPaid(Map<String, dynamic>? payload) {

@@ -247,59 +247,160 @@ class _SeatList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      if (controller.seats.isEmpty) {
+      if (controller.seatInputs.isEmpty) {
         return Text(
-          'Aucun détail par couvert.',
+          'Aucun couvert dans le détail de paiement.',
           style: TextStyle(color: AppTheme.textSecondary),
         );
       }
       return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ...controller.seats.map((seat) {
-            final number = (seat['seat_number'] as num?)?.toInt() ?? 0;
-            final remain = OrderMapper.parsePaymentSummaryRemaining(seat);
-            final selected = controller.selectedSeat.value == number;
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Material(
-                color: selected ? AppTheme.lightButton : AppTheme.background,
-                borderRadius: BorderRadius.circular(12),
-                child: InkWell(
-                  onTap: remain > 0 ? () => controller.selectSeat(number) : null,
-                  borderRadius: BorderRadius.circular(12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      children: [
-                        Text(
-                          'Couverts $number',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.darkText,
+          Text(
+            'Chaque couvert a son montant et son mode. '
+            'Laissez vide si ce couvert ne paie pas. '
+            'Le total ne doit pas dépasser le reste à payer.',
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+            ),
+          ),
+          JtrResponsive.getResponsiveSpacing(context, 8),
+          for (final input in controller.seatInputs)
+            _SeatPaymentCard(controller: controller, input: input),
+        ],
+      );
+    });
+  }
+}
+
+class _SeatPaymentCard extends StatelessWidget {
+  const _SeatPaymentCard({
+    required this.controller,
+    required this.input,
+  });
+
+  final PaymentController controller;
+  final SeatPaymentInput input;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      controller.seatInputs.length;
+      final cash = controller.isCashSeat(input);
+      final paid = input.isFullyPaid;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppTheme.background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppTheme.cardBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Text(
+                  'Couvert ${input.seatNumber}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.darkText,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  paid
+                      ? 'Payé'
+                      : 'Part ${_euro(controller.guestCount.value > 0 ? controller.remaining.value / controller.guestCount.value : 0)}',
+                  style: TextStyle(
+                    color: paid ? AppTheme.textSecondary : AppTheme.primary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                  ),
+                ),
+              ],
+            ),
+            if (!paid) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (var i = 0; i < controller.modes.length; i++)
+                    Builder(
+                      builder: (_) {
+                        final mode = controller.modes[i];
+                        final id = OrderMapper.paymentModeId(mode) ?? 0;
+                        final selected = input.modeId == id;
+                        final color = OrderMapper.paymentModeColorForIndex(i);
+                        return ChoiceChip(
+                          label: Text(mode['name']?.toString() ?? 'Mode'),
+                          selected: selected,
+                          showCheckmark: false,
+                          selectedColor: color,
+                          backgroundColor: color.withValues(alpha: 0.12),
+                          labelStyle: TextStyle(
+                            color: selected ? Colors.white : AppTheme.darkText,
+                            fontWeight: FontWeight.w600,
                           ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          remain <= 0 ? 'Payé' : _euro(remain),
-                          style: TextStyle(
-                            color: remain <= 0
-                                ? AppTheme.textSecondary
-                                : AppTheme.primary,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                          onSelected: (_) =>
+                              controller.setSeatMode(input.seatNumber, id),
+                        );
+                      },
                     ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: input.amountController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+                ],
+                decoration: InputDecoration(
+                  labelText: 'Montant',
+                  hintText: 'Vide = ne paie pas',
+                  suffixText: '€',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
               ),
-            );
-          }),
-          if (controller.selectedSeat.value != null) ...[
-            JtrResponsive.getResponsiveSpacing(context, 8),
-            _LinesCard(controller: controller),
+              if (cash) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: input.givenController,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: 'Montant donné',
+                    suffixText: '€',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: input.referenceController,
+                  decoration: InputDecoration(
+                    labelText: 'Référence (optionnel)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ],
-        ],
+        ),
       );
     });
   }

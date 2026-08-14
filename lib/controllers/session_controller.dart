@@ -1059,16 +1059,26 @@ class SessionController extends GetxController {
         displayEntries: keptDisplay.isNotEmpty
             ? keptDisplay
             : previous.displayEntries,
+        total: _higherTotalLabel(previous.total, incoming.total),
       );
     }
 
-    // Lightweight row may carry an items_count hint — keep the higher count.
+    // Lightweight row may carry an items_count hint — keep richer total/lines.
     if (incoming.products.isEmpty &&
         previous.itemCount > incoming.itemCount &&
         previous.itemCount > 0) {
-      return incoming.copyWith(
-        itemCount: previous.itemCount,
+      return previous.copyWith(
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
         isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
+        itemCount: previous.itemCount,
+        total: _higherTotalLabel(previous.total, incoming.total),
       );
     }
 
@@ -1083,9 +1093,38 @@ class SessionController extends GetxController {
       );
     }
 
+    // Same line count but lower total → stale GET/list after Send.
+    if (incomingLines > 0 &&
+        incomingLines == previousLines &&
+        _sessionTotalValue(incoming.total) + 0.009 <
+            _sessionTotalValue(previous.total)) {
+      return previous.copyWith(
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
+      );
+    }
+
     return incoming.isPartiallyPaid || !previous.isPartiallyPaid
         ? incoming
         : incoming.copyWith(isPartiallyPaid: true);
+  }
+
+  double _sessionTotalValue(String total) {
+    return double.tryParse(
+          total.replaceAll('€', '').replaceAll(',', '.').trim(),
+        ) ??
+        0;
+  }
+
+  String _higherTotalLabel(String a, String b) {
+    return _sessionTotalValue(a) >= _sessionTotalValue(b) ? a : b;
   }
 
   /// Reloads open orders for the session screen after create/edit on a table.
@@ -1197,7 +1236,11 @@ class SessionController extends GetxController {
         previous.products.isNotEmpty) {
       return true;
     }
-    // Fatter server snapshot during local delete undo / cancel — keep thinner.
+    if (_sessionTotalValue(incoming.total) + 0.009 <
+            _sessionTotalValue(previous.total) &&
+        incoming.products.length <= previous.products.length) {
+      return true;
+    }
     if (previous.id > 0 &&
         _orderRepository.hasPendingLocalDelete(previous.id) &&
         OrderMapper.productEntryCount(incoming.displayEntries) >
@@ -1388,20 +1431,55 @@ class SessionController extends GetxController {
     required Future<int?> orderIdFuture,
   }) async {
     final key = OrderMapper.normalizeTableKey(tableNumber);
-    if (key.isEmpty) return;
+    if (key.isEmpty &&
+        !OrderMapper.isFreeZoneTicketOrDraftLabel(tableNumber)) {
+      return;
+    }
 
     try {
       final orderId = await orderIdFuture;
       if (orderId == null || orderId <= 0) return;
 
-      var detail = await _orderRepository.getOrderDetail(orderId);
+      final current = findOrder(orderId: orderId, orderNumber: tableNumber);
+      var detail = await _orderRepository.getOrderDetail(
+        orderId,
+        previousDisplayEntries: current?.displayEntries,
+      );
       if (!selectedZoneUsesTableFlow) {
         final label = OrderMapper.freeZoneTicketLabelForOrderId(orderId);
         _freeTicketByOrderId[orderId] = label;
         detail = detail.copyWith(number: label);
       }
+
+      // Never let a stale GET wipe the Send total / remove the free-zone row.
+      final merged =
+          current == null ? detail : _preferDetailedOrder(detail, current);
+      if (current != null &&
+          (_wouldDowngradeDetail(merged, current) ||
+              _sessionTotalValue(merged.total) + 0.009 <
+                  _sessionTotalValue(current.total))) {
+        promoteOrderToTop(
+          current.copyWith(
+            impressionCount: detail.impressionCount,
+            impressionColor: detail.impressionColor,
+            poste: detail.poste,
+            profitCenter: detail.profitCenter,
+            couverts: detail.couverts.isNotEmpty
+                ? detail.couverts
+                : current.couverts,
+            total: _higherTotalLabel(current.total, detail.total),
+            isPartiallyPaid:
+                detail.isPartiallyPaid || current.isPartiallyPaid,
+          ),
+          replaceDetail: true,
+          replaceLocalDraftNumber: tableNumber,
+          selectForActions: true,
+        );
+        return;
+      }
+
       promoteOrderToTop(
-        detail,
+        merged,
         replaceDetail: true,
         replaceLocalDraftNumber: tableNumber,
         selectForActions: true,

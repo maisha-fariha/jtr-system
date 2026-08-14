@@ -2072,13 +2072,13 @@ class TableDetailsController extends GetxController {
 
     if (Get.isRegistered<SessionController>()) {
       final session = Get.find<SessionController>();
-      // Highlight the ticket immediately — don't wait for kitchen / list refresh.
+      // Highlight + keep local total immediately (free-zone included).
       session.promoteOrderToTop(
         order ?? live,
         replaceDetail: true,
+        replaceLocalDraftNumber: orderNumber,
         selectForActions: true,
       );
-      // Background sync of that order only (no table lock — Ticket stays ready).
       unawaited(
         session.refreshSentOrderFromApi(
           tableNumber: orderNumber,

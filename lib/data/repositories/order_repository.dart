@@ -1031,6 +1031,7 @@ class OrderRepository {
             previousDisplayEntries: previousDisplayEntries,
             localTicketBeforeSend: localTicketBeforeSend,
             apiLog: apiLog,
+            skipTableOpen: skipTableOpen,
           );
         } finally {
           _sendPutBudget = -1;
@@ -1244,6 +1245,8 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
     SessionOrder? localTicketBeforeSend,
     required StringBuffer apiLog,
+    /// Emporter / livraison: no real table_id — still PUT the ticket.
+    bool skipTableOpen = false,
   }) async {
     Map<String, dynamic> detail;
     try {
@@ -1267,7 +1270,13 @@ class OrderRepository {
       final tableId = table.id > 0
           ? table.id
           : ((detail['table_id'] as num?)?.toInt() ?? 0);
-      if (tableId <= 0) {
+      final freeZone = skipTableOpen ||
+          OrderMapper.isFreeZoneTicketOrDraftLabel(tableNumber) ||
+          OrderMapper.normalizeFreeZoneTicketLabel(
+                detail['table_number']?.toString(),
+              ) !=
+              null;
+      if (tableId <= 0 && !freeZone) {
         lastCreateOrderLog = apiLog.toString();
         throw ApiException(
           message: 'Impossible de créer la commande sur la table $tableNumber.',
@@ -1294,6 +1303,10 @@ class OrderRepository {
       }
       if (tableId > 0) {
         payload['table_id'] = tableId;
+      }
+      if (freeZone) {
+        final freeLabel = OrderMapper.freeZoneTicketLabelForOrderId(orderId);
+        payload['table_number'] = freeLabel;
       }
 
       apiLog.writeln(
@@ -1355,6 +1368,8 @@ class OrderRepository {
       previousDisplayEntries: previousDisplayEntries,
       localTicketBeforeSend: localTicketBeforeSend,
       apiLog: apiLog,
+      assignFreeZoneOrderIdLabel: skipTableOpen ||
+          OrderMapper.isFreeZoneTicketOrDraftLabel(tableNumber),
     );
   }
 

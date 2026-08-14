@@ -742,7 +742,7 @@ class _OrderRow extends GetView<SessionController> {
             ],
           ),
           child: GestureDetector(
-            onDoubleTap: () => controller.openTableDetails(
+            onDoubleTap: () => controller.openTableDetailsEnsuringLines(
                       order.number,
                       orderId: order.id > 0 ? order.id : null,
                       deferDetailFetch: order.isLocalOnly,

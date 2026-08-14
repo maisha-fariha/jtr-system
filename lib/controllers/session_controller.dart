@@ -694,7 +694,15 @@ class SessionController extends GetxController {
       );
       if (fetchGen != _ordersFetchGeneration) return;
 
-      _sessionOrdersLastPage = result.lastPage;
+      // Empty page = end of list (stop spinner / further fetches even if
+      // last_page meta is missing or stale).
+      if (result.orders.isEmpty) {
+        _sessionOrdersLastPage = pageNum > 1 ? pageNum - 1 : 1;
+        _sessionOrdersNextPage = _sessionOrdersLastPage + 1;
+        return;
+      }
+
+      _sessionOrdersLastPage = result.lastPage < 1 ? 1 : result.lastPage;
       _sessionOrdersNextPage = pageNum + 1;
       _applySessionOrderSummaries(
         result.orders,
@@ -704,9 +712,8 @@ class SessionController extends GetxController {
     } catch (_) {
       // Keep the pages already on screen.
     } finally {
-      if (fetchGen == _ordersFetchGeneration) {
-        isLoadingMoreOrders.value = false;
-      }
+      // Always clear — otherwise a generation bump leaves the footer spinner on.
+      isLoadingMoreOrders.value = false;
     }
   }
 
@@ -1792,6 +1799,56 @@ class SessionController extends GetxController {
     );
   }
 
+  /// Same as [openTableDetails], but if the seed is a lightweight list row
+  /// (no lines), waits for one GET detail first. Used after login / other
+  /// manager so the ticket is not empty. Does not change Send/POST/PUT.
+  Future<void> openTableDetailsEnsuringLines(
+    String orderNumber, {
+    int? orderId,
+    bool deferDetailFetch = false,
+    SessionOrder? seedOrder,
+  }) async {
+    var seed =
+        seedOrder ?? findOrder(orderNumber: orderNumber, orderId: orderId);
+    if (seed != null && !deferDetailFetch && !seed.isLocalOnly) {
+      seed = await _withFetchedLinesIfNeeded(seed);
+    }
+    openTableDetails(
+      seed?.number ?? orderNumber,
+      orderId: orderId ?? (seed != null && seed.id > 0 ? seed.id : null),
+      deferDetailFetch: deferDetailFetch,
+      seedOrder: seed,
+    );
+  }
+
+  /// List API rows often have total only. Prefetch GET /api/orders/:id when
+  /// lines are missing (fresh login / other device). No Send side effects.
+  Future<SessionOrder> _withFetchedLinesIfNeeded(SessionOrder order) async {
+    if (order.id <= 0 || order.isLocalOnly) return order;
+    if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
+      return order;
+    }
+
+    final cached = _orderRepository.cachedOrderDetail(order.id);
+    if (cached != null) {
+      final fromCache =
+          OrderMapper.fromOrderDetail(cached).copyWith(id: order.id);
+      if (fromCache.products.isNotEmpty ||
+          fromCache.displayEntries.isNotEmpty) {
+        _upsertOrderInList(fromCache);
+        return fromCache;
+      }
+    }
+
+    try {
+      final detail = await _orderRepository.getOrderDetail(order.id);
+      _upsertOrderInList(detail);
+      return detail;
+    } catch (_) {
+      return order;
+    }
+  }
+
   Future<void> _onTableNumberConfirmed(
     BuildContext context,
     String tableNumber,
@@ -1808,7 +1865,7 @@ class SessionController extends GetxController {
     // Fast path: own order already in session list — no tables API wait.
     final existingOwn = _findOwnOpenOrderForTable(normalized);
     if (existingOwn != null) {
-      _reopenOwnOrderWithoutGuestPrompt(existingOwn);
+      await _reopenOwnOrderWithoutGuestPrompt(existingOwn);
       return;
     }
 
@@ -1831,7 +1888,7 @@ class SessionController extends GetxController {
       waiterId: waiterId,
     );
     if (ownActiveOrderId != null && ownActiveOrderId > 0) {
-      _reopenServerOwnedOrderWithoutGuestPrompt(
+      await _reopenServerOwnedOrderWithoutGuestPrompt(
         orderId: ownActiveOrderId,
         tableNumber: normalized,
       );
@@ -2087,21 +2144,13 @@ class SessionController extends GetxController {
     return null;
   }
 
-  void _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) {
+  Future<void> _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) async {
     logOrderFlow(
       '_reopenOwnOrderWithoutGuestPrompt '
       'table=${existing.number} orderId=${existing.id}',
     );
 
-    // Prefer cached detail for instant paint; table-details loads the rest.
-    var target = existing;
-    if (target.id > 0 && target.products.isEmpty) {
-      final cached = _orderRepository.cachedOrderDetail(target.id);
-      if (cached != null) {
-        target = OrderMapper.fromOrderDetail(cached).copyWith(id: target.id);
-        _upsertOrderInList(target);
-      }
-    }
+    final target = await _withFetchedLinesIfNeeded(existing);
 
     openTableDetails(
       target.number,
@@ -2111,16 +2160,15 @@ class SessionController extends GetxController {
     );
   }
 
-  void _reopenServerOwnedOrderWithoutGuestPrompt({
+  Future<void> _reopenServerOwnedOrderWithoutGuestPrompt({
     required int orderId,
     required String tableNumber,
-  }) {
+  }) async {
     logOrderFlow(
       '_reopenServerOwnedOrderWithoutGuestPrompt '
       'table=$tableNumber orderId=$orderId',
     );
 
-    // Open immediately with cache/seed; details page fetches if needed.
     SessionOrder seed;
     final cached = _orderRepository.cachedOrderDetail(orderId);
     if (cached != null) {
@@ -2135,6 +2183,8 @@ class SessionController extends GetxController {
         numberOfGuests: 1,
       ).copyWith(id: orderId);
     }
+
+    seed = await _withFetchedLinesIfNeeded(seed);
 
     _clearSuppressedTable(seed.number);
     _upsertOrderInList(seed);

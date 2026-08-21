@@ -492,6 +492,16 @@ class TableDetailsController extends GetxController {
     BuildContext? context,
   }) async {
     if (_blockIfOrderOffered()) return;
+    if (!canEditOrderLineComment(lineIndex)) {
+      AppSnackbar.show(
+        'Message verrouillé',
+        'Le message ne peut plus être modifié après l\'envoi en cuisine.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 3),
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
 
     final current = order;
     if (current == null ||
@@ -515,6 +525,7 @@ class TableDetailsController extends GetxController {
     required int lineIndex,
     required String comment,
   }) async {
+    if (!canEditOrderLineComment(lineIndex)) return;
     final current = order;
     if (current == null ||
         lineIndex < 0 ||
@@ -1412,6 +1423,13 @@ class TableDetailsController extends GetxController {
   bool canDeleteOrDecreaseLine(int productIndex) {
     if (hasEditTableDetailsAccess) return true;
     if (!orderSentToKitchen) return true;
+    return !_isSentKitchenLine(productIndex);
+  }
+
+  /// Message add/edit only for lines not yet sent to kitchen.
+  /// Editing a sent line's comment reprints the product on the POS ticket.
+  bool canEditOrderLineComment(int productIndex) {
+    if (_orderOfferedCached) return false;
     return !_isSentKitchenLine(productIndex);
   }
 

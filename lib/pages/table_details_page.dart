@@ -793,6 +793,8 @@ class _ProductLine extends GetView<TableDetailsController> {
       controller.orderUiRevision.value;
       final canDeleteLine =
           canModify && controller.canDeleteOrDecreaseLine(productIndex);
+      final canEditMessage =
+          canModify && controller.canEditOrderLineComment(productIndex);
       final hasMenuItems = product.hasMenuItems;
       final isMenuExpanded = hasMenuItems &&
           controller.isMenuLineExpanded(productIndex);
@@ -824,13 +826,16 @@ class _ProductLine extends GetView<TableDetailsController> {
           children: [
             _ProductSlidableAction(
               icon: Icons.edit_outlined,
-              backgroundColor:
-                  (product.message?.trim().isNotEmpty ?? false)
-                      ? AppTheme.lightButton
-                      : null,
-              iconColor: (product.message?.trim().isNotEmpty ?? false)
-                  ? AppTheme.primary
+              backgroundColor: canEditMessage &&
+                      (product.message?.trim().isNotEmpty ?? false)
+                  ? AppTheme.lightButton
                   : null,
+              iconColor: !canEditMessage
+                  ? AppTheme.darkText.withValues(alpha: 0.25)
+                  : ((product.message?.trim().isNotEmpty ?? false)
+                      ? AppTheme.primary
+                      : null),
+              enabled: canEditMessage,
               onPressed: () => controller.editOrderLineComment(
                 productIndex,
                 context: context,

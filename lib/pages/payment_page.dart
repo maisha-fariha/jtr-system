@@ -382,7 +382,9 @@ class _SeatPaymentCard extends StatelessWidget {
                   ],
                   decoration: InputDecoration(
                     labelText: 'Montant donné',
+                    hintText: 'Espèces reçues',
                     suffixText: '€',
+                    helperText: 'Moins = partiel · Plus = rendu',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -531,7 +533,11 @@ class _LineEditor extends StatelessWidget {
               ],
               decoration: InputDecoration(
                 labelText: 'Montant donné',
+                hintText: 'Espèces reçues (ex. 50 si rendu)',
                 suffixText: '€',
+                helperText:
+                    'Si moins que le montant → paiement partiel. '
+                    'Si plus → rendu (change).',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),

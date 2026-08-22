@@ -16,19 +16,44 @@ class PaymentLineInput {
     required this.modeId,
     required double amount,
   })  : amountController = TextEditingController(
-          text: amount.toStringAsFixed(2).replaceAll('.', ','),
+          text: _formatCashInput(amount),
         ),
         givenController = TextEditingController(
-          text: amount.toStringAsFixed(2).replaceAll('.', ','),
+          text: _formatCashInput(amount),
         ),
-        referenceController = TextEditingController();
+        referenceController = TextEditingController() {
+    _lastSyncedAmount = OrderMapper.formatPaymentAmount(amount);
+    amountController.addListener(_onAmountEdited);
+  }
 
   int modeId;
   final TextEditingController amountController;
   final TextEditingController givenController;
   final TextEditingController referenceController;
+  double? _lastSyncedAmount;
+  bool _syncingGiven = false;
+
+  /// Keep "Montant donné" aligned with Montant unless the waiter already
+  /// entered a higher tender (change). Prevents stale full-remaining given.
+  void _onAmountEdited() {
+    if (_syncingGiven) return;
+    final amount = PaymentController.parseAmount(amountController.text);
+    if (amount == null || amount < 0) return;
+    final given = PaymentController.parseAmount(givenController.text);
+    final prev = _lastSyncedAmount;
+    final shouldSync = given == null ||
+        given <= 0 ||
+        (prev != null && (given - prev).abs() < 0.011) ||
+        given + 0.001 < amount;
+    _lastSyncedAmount = OrderMapper.formatPaymentAmount(amount);
+    if (!shouldSync) return;
+    _syncingGiven = true;
+    givenController.text = _formatCashInput(amount);
+    _syncingGiven = false;
+  }
 
   void dispose() {
+    amountController.removeListener(_onAmountEdited);
     amountController.dispose();
     givenController.dispose();
     referenceController.dispose();
@@ -47,15 +72,20 @@ class SeatPaymentInput {
     double? initialAmount,
   })  : amountController = TextEditingController(
           text: initialAmount != null && initialAmount > 0
-              ? initialAmount.toStringAsFixed(2).replaceAll('.', ',')
+              ? _formatCashInput(initialAmount)
               : '',
         ),
         givenController = TextEditingController(
           text: initialAmount != null && initialAmount > 0
-              ? initialAmount.toStringAsFixed(2).replaceAll('.', ',')
+              ? _formatCashInput(initialAmount)
               : '',
         ),
-        referenceController = TextEditingController();
+        referenceController = TextEditingController() {
+    if (initialAmount != null && initialAmount > 0) {
+      _lastSyncedAmount = OrderMapper.formatPaymentAmount(initialAmount);
+    }
+    amountController.addListener(_onAmountEdited);
+  }
 
   final int seatNumber;
   /// Max suggested for UI (order remaining or kitchen seat remaining).
@@ -69,13 +99,45 @@ class SeatPaymentInput {
   final TextEditingController amountController;
   final TextEditingController givenController;
   final TextEditingController referenceController;
+  double? _lastSyncedAmount;
+  bool _syncingGiven = false;
+
+  void _onAmountEdited() {
+    if (_syncingGiven) return;
+    final raw = amountController.text.trim();
+    if (raw.isEmpty) {
+      _lastSyncedAmount = null;
+      _syncingGiven = true;
+      givenController.clear();
+      _syncingGiven = false;
+      return;
+    }
+    final amount = PaymentController.parseAmount(raw);
+    if (amount == null || amount < 0) return;
+    final given = PaymentController.parseAmount(givenController.text);
+    final prev = _lastSyncedAmount;
+    final shouldSync = given == null ||
+        given <= 0 ||
+        (prev != null && (given - prev).abs() < 0.011) ||
+        given + 0.001 < amount;
+    _lastSyncedAmount = OrderMapper.formatPaymentAmount(amount);
+    if (!shouldSync) return;
+    _syncingGiven = true;
+    givenController.text = _formatCashInput(amount);
+    _syncingGiven = false;
+  }
 
   void dispose() {
+    amountController.removeListener(_onAmountEdited);
     amountController.dispose();
     givenController.dispose();
     referenceController.dispose();
   }
 }
+
+String _formatCashInput(double value) =>
+    value.toStringAsFixed(2).replaceAll('.', ',');
+
 
 class PaymentController extends GetxController {
   PaymentController({
@@ -412,12 +474,12 @@ class PaymentController extends GetxController {
   double _sumLineAmounts() {
     var sum = 0.0;
     for (final line in lines) {
-      sum += _parseAmount(line.amountController.text) ?? 0;
+      sum += parseAmount(line.amountController.text) ?? 0;
     }
     return OrderMapper.formatPaymentAmount(sum);
   }
 
-  static double? _parseAmount(String raw) {
+  static double? parseAmount(String raw) {
     final cleaned =
         raw.replaceAll('€', '').replaceAll(' ', '').replaceAll(',', '.').trim();
     if (cleaned.isEmpty) return null;
@@ -478,29 +540,44 @@ class PaymentController extends GetxController {
   List<PaymentDraft>? _draftsFromCommande() {
     final drafts = <PaymentDraft>[];
     for (final line in lines) {
-      final amount = _parseAmount(line.amountController.text);
-      if (amount == null || amount <= 0) {
+      final typedAmount = parseAmount(line.amountController.text);
+      if (typedAmount == null || typedAmount <= 0) {
         AppSnackbar.show('Paiement', 'Saisissez un montant valide.');
         return null;
       }
       final cash = isCashLine(line);
-      double? given;
+      late final double amount;
+      double? amountGiven;
       if (cash) {
-        given = _parseAmount(line.givenController.text) ?? amount;
-        if (given < amount) {
+        final cashPair = _resolveCashAmountAndGiven(
+          typedAmount: typedAmount,
+          givenRaw: line.givenController.text,
+        );
+        if (cashPair == null) {
           AppSnackbar.show(
             'Paiement',
-            'Le montant donné doit être au moins égal au montant à encaisser.',
+            'Saisissez le montant donné par le client.',
           );
           return null;
         }
+        amount = cashPair.amount;
+        amountGiven = cashPair.amountGiven;
+      } else {
+        amount = OrderMapper.formatPaymentAmount(typedAmount);
+      }
+      if (amount > remaining.value + 0.001) {
+        AppSnackbar.show(
+          'Paiement',
+          'Le montant dépasse le reste à payer '
+              '(${remaining.value.toStringAsFixed(2).replaceAll('.', ',')} €).',
+        );
+        return null;
       }
       drafts.add(
         PaymentDraft(
           paymentModeId: line.modeId,
-          amount: OrderMapper.formatPaymentAmount(amount),
-          amountGiven:
-              cash ? OrderMapper.formatPaymentAmount(given ?? amount) : null,
+          amount: amount,
+          amountGiven: amountGiven,
           referenceNumber: cash ? null : line.referenceController.text.trim(),
         ),
       );
@@ -509,8 +586,6 @@ class PaymentController extends GetxController {
   }
 
   /// Par couvert — every guest can pay; empty = skip.
-  /// Sum must be ≤ order remaining. Uses process-per-seat only when each
-  /// amount fits that seat's kitchen balance; otherwise process-multiple.
   List<PaymentDraft>? _draftsFromSeats() {
     final drafts = <PaymentDraft>[];
     for (final input in seatInputs) {
@@ -518,15 +593,15 @@ class PaymentController extends GetxController {
       final raw = input.amountController.text.trim();
       if (raw.isEmpty) continue;
 
-      final amount = _parseAmount(raw);
-      if (amount == null || amount < 0) {
+      final typedAmount = parseAmount(raw);
+      if (typedAmount == null || typedAmount < 0) {
         AppSnackbar.show(
           'Paiement',
           'Montant invalide pour le couvert ${input.seatNumber}.',
         );
         return null;
       }
-      if (amount == 0) continue;
+      if (typedAmount == 0) continue;
 
       if (input.modeId <= 0) {
         AppSnackbar.show(
@@ -537,25 +612,31 @@ class PaymentController extends GetxController {
       }
 
       final cash = isCashSeat(input);
-      double? given;
+      late final double amount;
+      double? amountGiven;
       if (cash) {
-        given = _parseAmount(input.givenController.text) ?? amount;
-        if (given < amount) {
+        final cashPair = _resolveCashAmountAndGiven(
+          typedAmount: typedAmount,
+          givenRaw: input.givenController.text,
+        );
+        if (cashPair == null) {
           AppSnackbar.show(
             'Paiement',
-            'Couvert ${input.seatNumber}: le montant donné doit être '
-                'au moins égal au montant à encaisser.',
+            'Couvert ${input.seatNumber}: saisissez le montant donné.',
           );
           return null;
         }
+        amount = cashPair.amount;
+        amountGiven = cashPair.amountGiven;
+      } else {
+        amount = OrderMapper.formatPaymentAmount(typedAmount);
       }
 
       drafts.add(
         PaymentDraft(
           paymentModeId: input.modeId,
-          amount: OrderMapper.formatPaymentAmount(amount),
-          amountGiven:
-              cash ? OrderMapper.formatPaymentAmount(given ?? amount) : null,
+          amount: amount,
+          amountGiven: amountGiven,
           referenceNumber:
               cash ? null : input.referenceController.text.trim(),
           seatNumber: input.seatNumber,
@@ -584,6 +665,30 @@ class PaymentController extends GetxController {
     }
 
     return drafts;
+  }
+
+  /// Client cash rules for `amount` / `amount_given` (RENDU = given − amount):
+  /// - given ≥ amount → collect typed amount, amount_given = cash given
+  /// - 0 < given < amount → partial: both = given
+  /// - empty given → exact tender (both = amount)
+  static ({double amount, double amountGiven})? _resolveCashAmountAndGiven({
+    required double typedAmount,
+    required String givenRaw,
+  }) {
+    final given = parseAmount(givenRaw);
+    if (given == null) {
+      final exact = OrderMapper.formatPaymentAmount(typedAmount);
+      return (amount: exact, amountGiven: exact);
+    }
+    if (given <= 0) return null;
+    if (given + 0.001 < typedAmount) {
+      final partial = OrderMapper.formatPaymentAmount(given);
+      return (amount: partial, amountGiven: partial);
+    }
+    return (
+      amount: OrderMapper.formatPaymentAmount(typedAmount),
+      amountGiven: OrderMapper.formatPaymentAmount(given),
+    );
   }
 
   Future<void> cancelTransaction(int transactionId) async {

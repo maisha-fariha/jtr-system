@@ -101,6 +101,7 @@ class TableDetailsController extends GetxController {
 
   /// After a successful kitchen Send, further sends use PUT (not POST create).
   bool _didCompleteKitchenSend = false;
+  bool _isNavigatingBack = false;
 
   /// Lines present at last kitchen sync / remote open — waiters without
   /// `access-edit-table-details` cannot delete/decrease these. Newly added
@@ -1181,23 +1182,36 @@ class TableDetailsController extends GetxController {
     );
   }
 
+  /// Android system back — return to session list (not category navigation).
+  /// Menu category up uses the toolbar ↩ icon only.
   Future<void> navigateBackOrExitTable() async {
-    if (canNavigateCategoryBack) {
-      navigateCategoryBack();
+    if (_isNavigatingBack) return;
+
+    if (showPaymentOptions.value) {
+      showPaymentOptions.value = false;
+      isBottomPanelExpanded.value = true;
       activeToolbarIcon.value = Icons.grid_view;
       return;
     }
 
-    final currentOrder = order;
-    if (Get.isRegistered<SessionController>() && currentOrder != null) {
-      // Sync this table's row only — do not force-refresh the whole session
-      // list (that re-sorts and moves rows when returning from details).
-      Get.find<SessionController>().updateOrderRow(
-        currentOrder,
-        replaceDetail: true,
-      );
-    }
+    _isNavigatingBack = true;
+    final snapshot = order;
+    FocusManager.instance.primaryFocus?.unfocus();
     Get.back();
+    _isNavigatingBack = false;
+
+    // Order lines are synced on each edit via [_syncOrderInSession]. Patch the
+    // session row after navigation so Android back is not blocked by a heavy
+    // list rebuild while the table page is still mounted.
+    if (snapshot != null && Get.isRegistered<SessionController>()) {
+      scheduleMicrotask(() {
+        if (!Get.isRegistered<SessionController>()) return;
+        Get.find<SessionController>().updateOrderRow(
+          snapshot,
+          replaceDetail: true,
+        );
+      });
+    }
   }
 
   /// After a successful kitchen send / payment, return to the session list.

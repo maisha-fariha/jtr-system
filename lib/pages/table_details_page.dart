@@ -20,9 +20,9 @@ class TableDetailsPage extends GetView<TableDetailsController> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: false,
-      onPopInvokedWithResult: (didPop, result) async {
+      onPopInvokedWithResult: (didPop, result) {
         if (didPop) return;
-        await controller.navigateBackOrExitTable();
+        controller.navigateBackOrExitTable();
       },
       child: Scaffold(
         backgroundColor: AppTheme.background,

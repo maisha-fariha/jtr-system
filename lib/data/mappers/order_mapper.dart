@@ -4316,6 +4316,7 @@ class OrderMapper {
     String status = 'to_be_continued',
     List<Map<String, dynamic>> menuSelections = const [],
     bool isStillMenuMissing = false,
+    double? enteredPrice,
   }) {
     const seatNumber = 1;
     final item = _buildNewItemPayload(
@@ -4329,6 +4330,7 @@ class OrderMapper {
       menuSelections: menuSelections,
       isStillMenuMissing: isStillMenuMissing,
       forCreate: true,
+      enteredPrice: enteredPrice,
     );
 
     final payload = <String, dynamic>{
@@ -4427,6 +4429,7 @@ class OrderMapper {
                 menuSelections: line.menuSelections,
                 forCreate: true,
                 isOffer: line.isOffered,
+                enteredPrice: line.enteredPrice,
               ),
           ],
         },
@@ -4589,6 +4592,10 @@ class OrderMapper {
             _markItemAsOffer(item);
           } else {
             item['sub_total'] = draft.unitPrice * qty;
+            if (draft.enteredPrice != null && draft.enteredPrice! > 0) {
+              item['entered_price'] =
+                  formatPaymentAmount(draft.enteredPrice!);
+            }
           }
           final comment = draft.comment.trim();
           if (comment.isNotEmpty) {
@@ -4624,6 +4631,7 @@ class OrderMapper {
           isStillMenuMissing: false,
           forCreate: false,
           isOffer: draft.isOffered,
+          enteredPrice: draft.enteredPrice,
         ),
       );
     }
@@ -4659,6 +4667,7 @@ class OrderMapper {
           isStillMenuMissing: false,
           forCreate: false,
           isOffer: draft.isOffered,
+          enteredPrice: draft.enteredPrice,
         ),
       );
     }
@@ -7033,6 +7042,11 @@ class OrderMapper {
   }
 
   static double _itemUnitPrice(Map<String, dynamic> item) {
+    final entered = item['entered_price'];
+    if (entered != null) {
+      final parsed = _parseMoney(entered);
+      if (parsed > 0) return parsed;
+    }
     final qty = (item['qty'] as num?)?.toInt() ?? 1;
     if (qty <= 0) return 0;
     return _parseMoney(item['sub_total']) / qty;
@@ -8401,6 +8415,7 @@ class OrderMapper {
           unitPrice: unitPrice,
           qty: qty,
           comment: comment,
+          enteredPrice: null,
         ),
       ],
       suivreSectionCount: suivreSectionCount,
@@ -8419,6 +8434,7 @@ class OrderMapper {
               double unitPrice,
               int qty,
               String comment,
+              double? enteredPrice,
             })>
         items,
     int suivreSectionCount = 0,
@@ -8466,6 +8482,7 @@ class OrderMapper {
         status: itemStatus,
         comment: line.comment,
         forCreate: false,
+        enteredPrice: line.enteredPrice,
       );
 
       _appendItemToSeatOrders(
@@ -9075,6 +9092,7 @@ class OrderMapper {
     bool forCreate = false,
     String? uid,
     bool isOffer = false,
+    double? enteredPrice,
   }) {
     final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
     final effectiveSubTotal = isOffer ? 0.0 : subTotal;
@@ -9095,6 +9113,9 @@ class OrderMapper {
       // Stable sort key before the API assigns a real timestamp/id.
       'created_at': DateTime.now().toUtc().toIso8601String(),
     };
+    if (enteredPrice != null && enteredPrice > 0 && !isOffer) {
+      payload['entered_price'] = formatPaymentAmount(enteredPrice);
+    }
     if (isOffer) {
       _markItemAsOffer(payload);
     }

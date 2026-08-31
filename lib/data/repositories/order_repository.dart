@@ -25,12 +25,15 @@ class SimpleProductBatchLine {
   const SimpleProductBatchLine({
     required this.productId,
     required this.unitPrice,
+    this.enteredPrice,
     this.qty = 1,
     this.comment = '',
   });
 
   final int productId;
   final double unitPrice;
+  /// When set, sent as `entered_price` (prix libre).
+  final double? enteredPrice;
   final int qty;
   final String comment;
 }
@@ -1873,6 +1876,7 @@ class OrderRepository {
     required int waiterId,
     required int productId,
     required double unitPrice,
+    double? enteredPrice,
     int qty = 1,
     String comment = '',
     int? numberOfGuests,
@@ -1910,6 +1914,7 @@ class OrderRepository {
       salesZoneId: salesZoneId,
       qty: qty,
       comment: comment,
+      enteredPrice: enteredPrice,
     );
 
     if (kDebugMode) {
@@ -2992,6 +2997,7 @@ class OrderRepository {
                 unitPrice: line.unitPrice,
                 qty: line.qty,
                 comment: line.comment,
+                enteredPrice: line.enteredPrice,
               ),
           ],
           suivreSectionCount: suivreHints.count,

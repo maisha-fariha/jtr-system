@@ -7,6 +7,7 @@ class CatalogProductModel {
     required this.categoryName,
     required this.isComposed,
     required this.isActive,
+    this.priceType,
     this.description,
     this.image,
     this.menuCategories = const [],
@@ -19,15 +20,81 @@ class CatalogProductModel {
   final String categoryName;
   final bool isComposed;
   final bool isActive;
+  /// Backend `price_type` — `free` means prix libre (cashier enters price).
+  final String? priceType;
   final String? description;
   final String? image;
   final List<ProductMenuCategoryModel> menuCategories;
+
+  /// Prix libre — catalog [price] is usually 0; cashier must enter unit price.
+  bool get isPrixLibre {
+    final normalized = priceType?.trim().toLowerCase();
+    return normalized == 'free' ||
+        normalized == 'prix_libre' ||
+        normalized == 'libre' ||
+        normalized == 'open';
+  }
+
+  /// True when the cashier must enter a unit price before adding (prix libre).
+  /// List API often omits [priceType]; zero-price simple products still qualify.
+  bool get requiresCashierPrice {
+    if (isComposed) return false;
+    if (isPrixLibre) return true;
+    return unitPrice <= 0.0001;
+  }
 
   double get unitPrice =>
       double.tryParse(price.replaceAll(',', '.')) ?? 0;
 
   String get formattedPrice =>
       '${unitPrice.toStringAsFixed(2).replaceAll('.', ',')} €';
+
+  CatalogProductModel copyWith({
+    int? id,
+    String? name,
+    String? price,
+    int? categoryId,
+    String? categoryName,
+    bool? isComposed,
+    bool? isActive,
+    String? priceType,
+    String? description,
+    String? image,
+    List<ProductMenuCategoryModel>? menuCategories,
+  }) {
+    return CatalogProductModel(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      price: price ?? this.price,
+      categoryId: categoryId ?? this.categoryId,
+      categoryName: categoryName ?? this.categoryName,
+      isComposed: isComposed ?? this.isComposed,
+      isActive: isActive ?? this.isActive,
+      priceType: priceType ?? this.priceType,
+      description: description ?? this.description,
+      image: image ?? this.image,
+      menuCategories: menuCategories ?? this.menuCategories,
+    );
+  }
+
+  /// Keep detail-only fields when a list refresh omits them.
+  CatalogProductModel mergePreservingDetailFields(CatalogProductModel? previous) {
+    if (previous == null || previous.id != id) return this;
+    return copyWith(
+      priceType: priceType ?? previous.priceType,
+      menuCategories: menuCategories.isNotEmpty
+          ? menuCategories
+          : previous.menuCategories,
+      description: description ?? previous.description,
+    );
+  }
+
+  static String? _priceTypeFromJson(Map<String, dynamic> json) {
+    final raw = json['price_type'] ?? json['priceType'];
+    if (raw == null) return null;
+    final value = raw.toString().trim();
+    return value.isEmpty ? null : value;
+  }
 
   factory CatalogProductModel.fromJson(Map<String, dynamic> json) {
     final category = json['category'];
@@ -54,6 +121,7 @@ class CatalogProductModel {
       categoryName: categoryName,
       isComposed: json['is_composed'] == true,
       isActive: json['is_active'] != false,
+      priceType: _priceTypeFromJson(json),
       description: json['description'] as String?,
       image: json['image'] as String?,
       menuCategories: menus,
@@ -67,6 +135,7 @@ class CatalogProductModel {
         'category': {'id': categoryId, 'name': categoryName},
         'is_composed': isComposed,
         'is_active': isActive,
+        if (priceType != null) 'price_type': priceType,
         'description': description,
         'image': image,
         'menu_categories':

@@ -26,6 +26,7 @@ import '../utils/app_snackbar.dart';
 import '../widgets/api_debug_dialog.dart';
 import '../widgets/app_confirm_dialog.dart';
 import '../widgets/menu_message_typing_dialog.dart';
+import '../widgets/prix_libre_price_dialog.dart';
 import '../widgets/stock_define_dialog.dart';
 import '../widgets/stock_exhausted_dialog.dart';
 import '../widgets/table_number_dialog.dart';
@@ -33,6 +34,16 @@ import '../widgets/ticket_loading_dialog.dart';
 import '../widgets/ticket_success_dialog.dart';
 import 'session_controller.dart';
 import 'stock_visual_state.dart';
+
+class _QueuedSimpleAdd {
+  const _QueuedSimpleAdd({
+    required this.product,
+    this.enteredUnitPrice,
+  });
+
+  final CatalogProductModel product;
+  final double? enteredUnitPrice;
+}
 
 class TableDetailsController extends GetxController {
   TableDetailsController({
@@ -120,10 +131,11 @@ class TableDetailsController extends GetxController {
 
   /// Rapid simple-product taps are UI-immediate; network uses one coalesced
   /// `PUT` with every line queued since the last flush (not one PUT per tap).
-  final List<CatalogProductModel> _queuedSimpleAdds = [];
+  final List<_QueuedSimpleAdd> _queuedSimpleAdds = [];
   Timer? _simpleAddBatchTimer;
   SessionOrder? _simpleAddBatchRollback;
   bool _simpleAddSyncEnqueued = false;
+  bool _prixLibrePromptOpen = false;
   /// Coalesce rapid taps into **one** PUT. Do not shorten this — flushing on
   /// every tap while a sync is pending causes N API calls and ANRs.
   static const _simpleAddBatchWindow = Duration(milliseconds: 400);
@@ -2665,20 +2677,72 @@ class TableDetailsController extends GetxController {
       return;
     }
 
-    unawaited(_addSimpleProductWithStockGate(product));
+    unawaited(_handleSimpleProductTap(product));
+  }
+
+  Future<void> _handleSimpleProductTap(CatalogProductModel product) async {
+    final resolved = await _resolveProductForAdd(product);
+    if (resolved.requiresCashierPrice) {
+      await _addPrixLibreSimpleProduct(resolved);
+      return;
+    }
+    await _addSimpleProductWithStockGate(resolved);
+  }
+
+  /// List cache may omit `price_type`; fetch detail for zero-price simple items.
+  Future<CatalogProductModel> _resolveProductForAdd(
+    CatalogProductModel product,
+  ) async {
+    if (product.isComposed) return product;
+    if (product.isPrixLibre) return product;
+    if (product.unitPrice > 0.0001) return product;
+
+    try {
+      final detailed =
+          await _catalogRepository.getProductDetail(product.id);
+      _upsertCatalogProduct(detailed);
+      return detailed;
+    } catch (_) {
+      return product;
+    }
+  }
+
+  void _upsertCatalogProduct(CatalogProductModel product) {
+    final index = products.indexWhere((p) => p.id == product.id);
+    if (index >= 0) {
+      products[index] = product;
+    }
+  }
+
+  Future<void> _addPrixLibreSimpleProduct(CatalogProductModel product) async {
+    if (_prixLibrePromptOpen) return;
+    _prixLibrePromptOpen = true;
+    try {
+      final entered = await PrixLibrePriceDialog.askUnitPrice(
+        productName: product.name,
+      );
+      if (entered == null || entered <= 0) return;
+      await _addSimpleProductWithStockGate(
+        product,
+        enteredUnitPrice: entered,
+      );
+    } finally {
+      _prixLibrePromptOpen = false;
+    }
   }
 
   Future<void> _addSimpleProductWithStockGate(
     CatalogProductModel product, {
     int qty = 1,
+    double? enteredUnitPrice,
   }) async {
     final allowed = await _ensureStockAllowsAdd(product, qty: qty);
     if (!allowed) return;
-    _queueSimpleProductAdd(product);
+    _queueSimpleProductAdd(product, enteredUnitPrice: enteredUnitPrice);
     if (qty > 1) {
       // Extra units beyond the first queued add.
       for (var i = 1; i < qty; i++) {
-        _queueSimpleProductAdd(product);
+        _queueSimpleProductAdd(product, enteredUnitPrice: enteredUnitPrice);
       }
     }
     stockVisual.consumeLocally(product.id, qty);
@@ -2757,22 +2821,34 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  void _queueSimpleProductAdd(CatalogProductModel product) {
+  void _queueSimpleProductAdd(
+    CatalogProductModel product, {
+    double? enteredUnitPrice,
+  }) {
+    final unitPrice = _resolveSimpleAddUnitPrice(product, enteredUnitPrice);
     // Snapshot once per burst — empty-shell must not poison rollback.
     _simpleAddBatchRollback ??= _rawSessionOrder != null
         ? OrderOptimisticSync.deepSnapshot(_rawSessionOrder!)
         : null;
-    _applyAddSimpleProductToUi(product);
+    _applyAddSimpleProductToUi(product, unitPrice: unitPrice);
     if (isProductInOrder(product, source: _rawSessionOrder)) {
       selectedProductId.value = product.id;
       selectedOrderLineIndex.value = null;
     }
-    _trackLocalDraftAddSimple(product);
+    _trackLocalDraftAddSimple(
+      product,
+      enteredUnitPrice: enteredUnitPrice,
+    );
     if (_mutationsAreLocalOnly) return;
     if (_isLocalDraft) {
       return;
     }
-    _queuedSimpleAdds.add(product);
+    _queuedSimpleAdds.add(
+      _QueuedSimpleAdd(
+        product: product,
+        enteredUnitPrice: enteredUnitPrice,
+      ),
+    );
     // Always debounce. Never flush-on-pending — that spawned one sync job per
     // tap and froze the UI. One in-flight batch drains the whole queue after.
     if (!_simpleAddSyncEnqueued) {
@@ -2877,20 +2953,27 @@ class TableDetailsController extends GetxController {
               }
             }
 
-            final batch = List<CatalogProductModel>.from(_queuedSimpleAdds);
+            final batch = List<_QueuedSimpleAdd>.from(_queuedSimpleAdds);
             _queuedSimpleAdds.clear();
             if (batch.isEmpty) break;
 
             logOrderFlow(
               'coalescedSimpleBatch count=${batch.length} '
-              'products=${batch.map((p) => p.id).join(',')}',
+              'products=${batch.map((a) => a.product.id).join(',')}',
             );
 
             final lines = [
-              for (final product in batch)
+              for (final add in batch)
                 SimpleProductBatchLine(
-                  productId: product.id,
-                  unitPrice: product.unitPrice,
+                  productId: add.product.id,
+                  unitPrice: _resolveSimpleAddUnitPrice(
+                    add.product,
+                    add.enteredUnitPrice,
+                  ),
+                  enteredPrice: _enteredPriceFor(
+                    add.product,
+                    add.enteredUnitPrice,
+                  ),
                 ),
             ];
             final live = _rawSessionOrder;
@@ -2919,8 +3002,15 @@ class TableDetailsController extends GetxController {
                   await _orderRepository.createOrderWithFirstSimpleProduct(
                 tableNumber: orderNumber,
                 waiterId: _currentWaiterId,
-                productId: first.id,
-                unitPrice: first.unitPrice,
+                productId: first.product.id,
+                unitPrice: _resolveSimpleAddUnitPrice(
+                  first.product,
+                  first.enteredUnitPrice,
+                ),
+                enteredPrice: _enteredPriceFor(
+                  first.product,
+                  first.enteredUnitPrice,
+                ),
                 qty: 1,
                 numberOfGuests: int.tryParse(snapshot.couverts),
               );
@@ -3089,7 +3179,10 @@ class TableDetailsController extends GetxController {
     }
   }
 
-  void _applyAddSimpleProductToUi(CatalogProductModel product) {
+  void _applyAddSimpleProductToUi(
+    CatalogProductModel product, {
+    required double unitPrice,
+  }) {
     _prepareForNewAdd();
     var current = _rawSessionOrder ?? order;
     if (current == null) {
@@ -3110,7 +3203,7 @@ class TableDetailsController extends GetxController {
     final predicted = OrderMapper.predictAppendSimpleProductFast(
       current: current,
       productName: product.name,
-      unitPrice: product.unitPrice,
+      unitPrice: unitPrice,
       selectedSuivreSectionIndex: selectedSuivreSection.value,
     );
     _syncOrderInSession(
@@ -4350,14 +4443,37 @@ class TableDetailsController extends GetxController {
     return double.tryParse(normalized) ?? 0;
   }
 
-  void _trackLocalDraftAddSimple(CatalogProductModel product) {
+  void _trackLocalDraftAddSimple(
+    CatalogProductModel product, {
+    double? enteredUnitPrice,
+  }) {
     _localDraftLines.add(
       LocalDraftLine(
         productId: product.id,
-        unitPrice: product.unitPrice,
+        unitPrice: _resolveSimpleAddUnitPrice(product, enteredUnitPrice),
+        enteredPrice: _enteredPriceFor(product, enteredUnitPrice),
         courseNumber: _resolveDraftCourseNumber(),
       ),
     );
+  }
+
+  double _resolveSimpleAddUnitPrice(
+    CatalogProductModel product,
+    double? enteredUnitPrice,
+  ) {
+    if (enteredUnitPrice != null && enteredUnitPrice > 0) {
+      return enteredUnitPrice;
+    }
+    return product.unitPrice;
+  }
+
+  double? _enteredPriceFor(
+    CatalogProductModel product,
+    double? enteredUnitPrice,
+  ) {
+    if (enteredUnitPrice == null || enteredUnitPrice <= 0) return null;
+    if (product.requiresCashierPrice) return enteredUnitPrice;
+    return null;
   }
 
   void _trackLocalDraftAddComposed({
@@ -4483,15 +4599,23 @@ class TableDetailsController extends GetxController {
 
       final qty = int.tryParse(line.quantity) ?? 1;
       final lineTotal = _parseFormattedLineTotal(line.price);
+      final resolvedUnit = line.isOffered
+          ? 0.0
+          : (qty > 0
+              ? lineTotal / qty
+              : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0));
+      final enteredPrice = tracked?.enteredPrice ??
+          (catalog?.requiresCashierPrice == true &&
+                  !line.isOffered &&
+                  resolvedUnit > 0
+              ? resolvedUnit
+              : null);
 
       rebuilt.add(
         LocalDraftLine(
           productId: productId,
-          unitPrice: line.isOffered
-              ? 0
-              : (qty > 0
-                  ? lineTotal / qty
-                  : (tracked?.unitPrice ?? catalog?.unitPrice ?? 0)),
+          unitPrice: resolvedUnit,
+          enteredPrice: enteredPrice,
           qty: qty,
           courseNumber: course > 0 ? course : 1,
           menuSelections: tracked?.menuSelections ?? const [],

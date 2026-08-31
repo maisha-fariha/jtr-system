@@ -114,16 +114,41 @@ class CatalogRepository {
     }
 
     final products = await _remote.fetchAllProducts();
-    await _local.saveProducts(products);
-    return products;
+    final merged = _mergeWithCachedProducts(products);
+    await _local.saveProducts(merged);
+    return merged;
   }
 
   Future<void> _refreshProductsInBackground() async {
     try {
       if (!await _connectivity.isOnline) return;
       final products = await _remote.fetchAllProducts();
-      await _local.saveProducts(products);
+      await _saveProductsMergedWithCache(products);
     } catch (_) {}
+  }
+
+  /// List rows may omit `price_type`; keep detail fields from prior cache.
+  Future<void> _saveProductsMergedWithCache(
+    List<CatalogProductModel> fresh,
+  ) async {
+    final previous = _local.readProducts() ?? <CatalogProductModel>[];
+    final previousById = {for (final p in previous) p.id: p};
+    final merged = [
+      for (final product in fresh)
+        product.mergePreservingDetailFields(previousById[product.id]),
+    ];
+    await _local.saveProducts(merged);
+  }
+
+  List<CatalogProductModel> _mergeWithCachedProducts(
+    List<CatalogProductModel> fresh,
+  ) {
+    final previous = _local.readProducts() ?? <CatalogProductModel>[];
+    final previousById = {for (final p in previous) p.id: p};
+    return [
+      for (final product in fresh)
+        product.mergePreservingDetailFields(previousById[product.id]),
+    ];
   }
 
   Future<CatalogProductModel> getProductDetail(
@@ -181,8 +206,10 @@ class CatalogRepository {
 
   Future<void> _mergeProductIntoCache(CatalogProductModel product) async {
     final cached = _local.readProducts() ?? <CatalogProductModel>[];
+    final previous = cached.where((item) => item.id == product.id).firstOrNull;
+    final merged = product.mergePreservingDetailFields(previous);
     final updated = [
-      product,
+      merged,
       ...cached.where((item) => item.id != product.id),
     ];
     await _local.saveProducts(updated);

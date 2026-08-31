@@ -37,7 +37,15 @@ class PaymentLineInput {
   /// entered a higher tender (change). Prevents stale full-remaining given.
   void _onAmountEdited() {
     if (_syncingGiven) return;
-    final amount = PaymentController.parseAmount(amountController.text);
+    final raw = amountController.text.trim();
+    if (raw.isEmpty) {
+      _lastSyncedAmount = null;
+      _syncingGiven = true;
+      givenController.clear();
+      _syncingGiven = false;
+      return;
+    }
+    final amount = PaymentController.parseAmount(raw);
     if (amount == null || amount < 0) return;
     final given = PaymentController.parseAmount(givenController.text);
     final prev = _lastSyncedAmount;
@@ -226,7 +234,11 @@ class PaymentController extends GetxController {
     isLoading.value = true;
     error.value = null;
     try {
-      final summary = await _orderRepository.getPaymentSummary(orderId);
+      // Summary and modes are always fetched — run in parallel (same data, less wait).
+      final summaryFuture = _orderRepository.getPaymentSummary(orderId);
+      final modesFuture = _orderRepository.getPaymentModes();
+
+      final summary = await summaryFuture;
       remaining.value = OrderMapper.parsePaymentSummaryRemaining(summary);
       totalAmount.value = _money(summary['total_amount']) ?? remaining.value;
       totalPaid.value = _money(summary['total_paid']) ?? 0;
@@ -239,14 +251,17 @@ class PaymentController extends GetxController {
 
       var perSeatFlag = OrderMapper.allowsPerSeatPayment(summary);
       if (!perSeatFlag) {
+        final settingsFuture = _orderRepository.getPaymentSettings();
+        final loadedModes = await modesFuture;
+        modes.assignAll(loadedModes);
         try {
-          final settings = await _orderRepository.getPaymentSettings();
+          final settings = await settingsFuture;
           perSeatFlag = OrderMapper.allowsPerSeatPayment(settings);
         } catch (_) {}
+      } else {
+        final loadedModes = await modesFuture;
+        modes.assignAll(loadedModes);
       }
-
-      final loadedModes = await _orderRepository.getPaymentModes();
-      modes.assignAll(loadedModes);
 
       // Use Case D: Par couvert only for table zones + allow_per_seat_payment.
       // No-table zones → Commande only.

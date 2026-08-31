@@ -5,6 +5,7 @@ import 'package:get/get.dart';
 import '../controllers/payment_controller.dart';
 import '../data/mappers/order_mapper.dart';
 import '../utils/app_theme.dart';
+import '../utils/cash_amount_input_formatter.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_confirm_dialog.dart';
 
@@ -361,6 +362,7 @@ class _SeatPaymentCard extends StatelessWidget {
                     const TextInputType.numberWithOptions(decimal: true),
                 inputFormatters: [
                   FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+                  ZeroAmountBackspaceClearFormatter(),
                 ],
                 decoration: InputDecoration(
                   labelText: 'Montant',
@@ -379,6 +381,7 @@ class _SeatPaymentCard extends StatelessWidget {
                       const TextInputType.numberWithOptions(decimal: true),
                   inputFormatters: [
                     FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+                    ZeroAmountBackspaceClearFormatter(),
                   ],
                   decoration: InputDecoration(
                     labelText: 'Montant donné',
@@ -514,6 +517,7 @@ class _LineEditor extends StatelessWidget {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: [
               FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+              ZeroAmountBackspaceClearFormatter(),
             ],
             decoration: InputDecoration(
               labelText: 'Montant',
@@ -530,6 +534,7 @@ class _LineEditor extends StatelessWidget {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]')),
+                ZeroAmountBackspaceClearFormatter(),
               ],
               decoration: InputDecoration(
                 labelText: 'Montant donné',

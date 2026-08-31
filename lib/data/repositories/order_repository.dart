@@ -5361,8 +5361,11 @@ class OrderRepository {
     Map<String, dynamic>? summary;
     var requireReceipt = false;
 
+    final summaryFuture = _remote.fetchPaymentSummary(orderId);
+    final modesFuture = getPaymentModes();
+    Future<Map<String, dynamic>>? settingsFuture;
     try {
-      summary = await _remote.fetchPaymentSummary(orderId);
+      summary = await summaryFuture;
       apiLog.writeln('── GET /api/payments/summary/$orderId ──');
       apiLog.writeln(
         'total_amount=${summary['total_amount']} '
@@ -5371,6 +5374,9 @@ class OrderRepository {
         'is_fully_paid=${summary['is_fully_paid']}',
       );
       requireReceipt = OrderMapper.requiresReceiptBeforePayment(summary);
+      if (!requireReceipt) {
+        settingsFuture = _remote.fetchPaymentSettings();
+      }
       final fromSummary = OrderMapper.paymentSummaryOrderMap(summary);
       if (fromSummary != null) {
         detail = fromSummary;
@@ -5398,7 +5404,8 @@ class OrderRepository {
 
     if (!requireReceipt) {
       try {
-        final settings = await _remote.fetchPaymentSettings();
+        final settings =
+            await (settingsFuture ?? _remote.fetchPaymentSettings());
         requireReceipt = OrderMapper.requiresReceiptBeforePayment(settings);
       } catch (_) {}
     }
@@ -5415,7 +5422,7 @@ class OrderRepository {
         await _remote.generateReceipt(orderId, type: 'preview');
       }
 
-      final modes = await getPaymentModes();
+      final modes = await modesFuture;
       final paymentModeId =
           OrderMapper.resolvePaymentModeId(modes, isCash: isCash);
       if (paymentModeId == null) {
@@ -5629,11 +5636,15 @@ class OrderRepository {
     Map<String, dynamic> detail;
     Map<String, dynamic>? summary;
     var requireReceipt = false;
+    Future<Map<String, dynamic>>? settingsFuture;
     try {
       summary = await _remote.fetchPaymentSummary(orderId);
       requireReceipt = OrderMapper.requiresReceiptBeforePayment(summary);
       apiLog.writeln('── GET /api/payments/summary/$orderId ──');
       apiLog.writeln('remaining_amount=${summary['remaining_amount']}');
+      if (!requireReceipt) {
+        settingsFuture = _remote.fetchPaymentSettings();
+      }
       detail = OrderMapper.paymentSummaryOrderMap(summary) ??
           await _loadOrderDetailForPay(orderId, apiLog);
     } catch (e) {
@@ -5643,7 +5654,8 @@ class OrderRepository {
 
     if (!requireReceipt) {
       try {
-        final settings = await _remote.fetchPaymentSettings();
+        final settings =
+            await (settingsFuture ?? _remote.fetchPaymentSettings());
         requireReceipt = OrderMapper.requiresReceiptBeforePayment(settings);
       } catch (_) {}
     }

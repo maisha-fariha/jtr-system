@@ -76,7 +76,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                       hPad / 2,
                       JtrResponsive.getResponsiveHeight(context, 8),
                       hPad / 2,
-                      JtrResponsive.getResponsiveHeight(context, 32),
+                      JtrResponsive.getResponsiveHeight(context, 8),
                     ),
                     child: Align(
                       alignment: Alignment.topCenter,

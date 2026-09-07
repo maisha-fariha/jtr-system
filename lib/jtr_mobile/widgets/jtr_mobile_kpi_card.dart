@@ -13,6 +13,9 @@ class JtrMobileKpiCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final trendColor =
+        kpis.trendPositive ? JtrMobileTheme.success : JtrMobileTheme.danger;
+
     return JtrMobileCard(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -46,7 +49,7 @@ class JtrMobileKpiCard extends StatelessWidget {
                           ? Icons.trending_up_rounded
                           : Icons.trending_down_rounded,
                       size: JtrResponsive.getResponsiveSize(context, 14),
-                      color: JtrMobileTheme.success,
+                      color: trendColor,
                     ),
                     SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
                     Text(
@@ -54,7 +57,7 @@ class JtrMobileKpiCard extends StatelessWidget {
                       style: TextStyle(
                         fontSize:
                             JtrResponsive.getResponsiveFontSize(context, 12),
-                        color: JtrMobileTheme.success,
+                        color: trendColor,
                       ),
                     ),
                   ],

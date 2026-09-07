@@ -146,6 +146,12 @@ class JtrMobileHeader extends StatelessWidget {
                 ),
               ),
             ),
+            SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: JtrMobileTheme.textMuted,
+              size: JtrResponsive.getResponsiveSize(context, 18),
+            ),
           ],
         ),
       );

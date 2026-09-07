@@ -74,7 +74,7 @@ class _FamilyTrailing extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          '$quantity pcs',
+          '${JtrMobileFormatters.integer(quantity)} pcs',
           style: TextStyle(
             fontSize: JtrResponsive.getResponsiveFontSize(context, 11),
             color: JtrMobileTheme.textSecondary,

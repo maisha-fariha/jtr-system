@@ -82,7 +82,7 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              'non encaissé',
+                              'DH non encaissé',
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                 fontSize: JtrResponsive.getResponsiveFontSize(

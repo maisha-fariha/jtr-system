@@ -23,8 +23,9 @@ class JtrMobileActivityTiles extends StatelessWidget {
             child: _ActivityTile(
               icon: Icons.receipt_long_outlined,
               label: 'Tickets',
-              value: '${activity.tickets}',
-              sub: '· ${JtrMobileFormatters.decimal(activity.avgTicket)} moy.',
+              value: JtrMobileFormatters.integer(activity.tickets),
+              sub:
+                  '· ${JtrMobileFormatters.decimal(activity.avgTicket)} moy.',
             ),
           ),
           SizedBox(width: gap),
@@ -32,7 +33,7 @@ class JtrMobileActivityTiles extends StatelessWidget {
             child: _ActivityTile(
               icon: Icons.people_outline_rounded,
               label: 'Couverts',
-              value: '${activity.covers}',
+              value: JtrMobileFormatters.integer(activity.covers),
               sub: '· ${JtrMobileFormatters.decimal(activity.avgCover)} moy.',
             ),
           ),

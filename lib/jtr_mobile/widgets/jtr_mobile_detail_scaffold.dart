@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../utils/responsive.dart';
+import '../../widgets/app_footer.dart';
 import '../theme/jtr_mobile_theme.dart';
 import 'jtr_mobile_theme_scope.dart';
 
@@ -53,13 +54,22 @@ class JtrMobileDetailScaffold extends StatelessWidget {
                   hPad / 2,
                   0,
                   hPad / 2,
-                  JtrResponsive.getResponsiveHeight(context, 24),
+                  JtrResponsive.getResponsiveHeight(context, 8),
                 ),
                 child: Align(
                   alignment: Alignment.topCenter,
                   child: ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: maxW),
-                    child: child,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        child,
+                        SizedBox(
+                          height: JtrResponsive.getResponsiveHeight(context, 20),
+                        ),
+                        const AppFooter(),
+                      ],
+                    ),
                   ),
                 ),
               ),

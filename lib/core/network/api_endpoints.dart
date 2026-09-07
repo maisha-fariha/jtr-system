@@ -15,6 +15,14 @@ class ApiEndpoints {
 
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';
+  static const dashboardOrderSummary = '/api/dashboard/order-summary';
+  static const dashboardRevenueByHour = '/api/dashboard/revenue-by-hour';
+  static const dashboardRevenueBySalesZone =
+      '/api/dashboard/revenue-by-sales-zone';
+  static const dashboardProductFamilySummary =
+      '/api/dashboard/product-family-summary';
+  static const dashboardEventList = '/api/dashboard/event-list';
+  static const dashboardEventListExport = '/api/dashboard/event-list/export';
   static const salesZonesShortlist = '/api/sales-zones/shortlist';
   static const customersShortlist = '/api/customers/shortlist';
   static const customers = '/api/customers';

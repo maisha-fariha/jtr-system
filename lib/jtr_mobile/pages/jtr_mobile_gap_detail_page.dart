@@ -2,34 +2,75 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/jtr_mobile_dashboard_controller.dart';
-import '../data/dummy_detail_data.dart';
 import '../models/detail_models.dart';
 import '../theme/jtr_mobile_theme.dart';
 import '../utils/jtr_mobile_formatters.dart';
 import '../widgets/jtr_mobile_detail_scaffold.dart';
+import '../../utils/app_theme.dart';
 import '../../utils/responsive.dart';
 
-class JtrMobileGapDetailPage extends GetView<JtrMobileDashboardController> {
+class JtrMobileGapDetailPage extends StatefulWidget {
   const JtrMobileGapDetailPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final periodLabel = controller.data.value.periodLabel;
-    final categories = JtrMobileDummyDetailData.gapCategories();
+  State<JtrMobileGapDetailPage> createState() => _JtrMobileGapDetailPageState();
+}
 
-    return JtrMobileDetailScaffold(
-      title: "Détail de l'écart",
-      subtitle: periodLabel,
-      child: Column(
-        children: [
-          for (var i = 0; i < categories.length; i++)
-            _GapCategoryCard(
-              category: categories[i],
-              initiallyExpanded: i == 0,
-            ),
-        ],
-      ),
-    );
+class _JtrMobileGapDetailPageState extends State<JtrMobileGapDetailPage> {
+  JtrMobileDashboardController get controller =>
+      Get.find<JtrMobileDashboardController>();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      controller.loadGapCategories();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final periodLabel = controller.data.value?.periodLabel ?? '';
+      final loading = controller.isGapLoading.value;
+      final categories = controller.gapCategories;
+
+      return JtrMobileDetailScaffold(
+        title: "Détail de l'écart",
+        subtitle: periodLabel,
+        child: loading && categories.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(
+                  child: CircularProgressIndicator(color: AppTheme.primary),
+                ),
+              )
+            : categories.isEmpty
+                ? Padding(
+                    padding: EdgeInsets.symmetric(
+                      vertical: JtrResponsive.getResponsiveHeight(context, 32),
+                    ),
+                    child: Text(
+                      'Aucune opération pour cette période.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize:
+                            JtrResponsive.getResponsiveFontSize(context, 13),
+                        color: JtrMobileTheme.textMuted,
+                      ),
+                    ),
+                  )
+                : Column(
+                    children: [
+                      for (var i = 0; i < categories.length; i++)
+                        _GapCategoryCard(
+                          category: categories[i],
+                          initiallyExpanded: i == 0,
+                        ),
+                    ],
+                  ),
+      );
+    });
   }
 }
 

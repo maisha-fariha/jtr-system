@@ -1,19 +1,69 @@
+import 'dart:async';
+
 import 'package:get/get.dart';
 
 import '../../controllers/theme_controller.dart';
-import '../data/dummy_dashboard_data.dart';
+import '../../core/network/api_exception.dart';
+import '../../utils/app_snackbar.dart';
+import '../data/jtr_mobile_dashboard_filters.dart';
+import '../data/repositories/jtr_mobile_dashboard_repository.dart';
 import '../models/dashboard_models.dart';
+import '../models/detail_models.dart';
 import '../pages/jtr_mobile_family_sales_page.dart';
 import '../pages/jtr_mobile_gap_detail_page.dart';
 
 class JtrMobileDashboardController extends GetxController {
-  final data = JtrMobileDummyData.dashboard().obs;
+  JtrMobileDashboardController({
+    required JtrMobileDashboardRepository repository,
+  }) : _repository = repository;
+
+  final JtrMobileDashboardRepository _repository;
+
+  final data = Rxn<JtrDashboardData>();
+  final productFamilies = <JtrProductFamily>[].obs;
+  final gapCategories = <JtrGapCategoryDetail>[].obs;
+
   final chatOpen = false.obs;
   final periodOpen = false.obs;
+  final isLoading = false.obs;
   final isRefreshing = false.obs;
+  final isFamiliesLoading = false.obs;
+  final isGapLoading = false.obs;
 
-  DateTime get periodFrom => data.value.periodFrom;
-  DateTime get periodTo => data.value.periodTo;
+  JtrMobileDashboardFilters? _filters;
+
+  DateTime get periodFrom =>
+      _filters?.dateFrom ?? data.value?.periodFrom ?? DateTime.now();
+  DateTime get periodTo =>
+      _filters?.dateTo ?? data.value?.periodTo ?? DateTime.now();
+
+  @override
+  void onInit() {
+    super.onInit();
+    unawaited(_loadInitial());
+  }
+
+  Future<void> _loadInitial() async {
+    isLoading.value = true;
+    try {
+      _filters = await _repository.resolveDefaultFilters();
+      data.value = await _repository.fetchDashboard(filters: _filters!);
+    } on ApiException catch (e) {
+      _showError(e.message);
+    } catch (_) {
+      _showError('Impossible de charger le tableau de bord.');
+    } finally {
+      isLoading.value = false;
+    }
+  }
+
+  JtrMobileDashboardFilters _currentFilters() {
+    return _filters ??
+        JtrMobileDashboardFilters(
+          dateFrom: periodFrom,
+          dateTo: periodTo,
+        );
+  }
 
   void toggleChat() => chatOpen.value = !chatOpen.value;
 
@@ -21,64 +71,78 @@ class JtrMobileDashboardController extends GetxController {
 
   void toggleTheme() => ThemeController.to.toggle();
 
-  void onGapDetailTap() {
-    Get.to(() => const JtrMobileGapDetailPage());
+  Future<void> onGapDetailTap() async {
+    await Get.to(() => const JtrMobileGapDetailPage());
   }
 
-  void onFamilyDetailTap() {
-    Get.to(() => const JtrMobileFamilySalesPage());
+  Future<void> onFamilyDetailTap() async {
+    await Get.to(() => const JtrMobileFamilySalesPage());
   }
 
   Future<void> applyPeriod(DateTime from, DateTime to) async {
-    isRefreshing.value = true;
     periodOpen.value = false;
-    await Future<void>.delayed(const Duration(milliseconds: 400));
-    final current = data.value;
-    data.value = JtrDashboardData(
-      storeName: current.storeName,
-      dateLabel: current.dateLabel,
-      periodLabel: _formatPeriodLabel(from, to),
-      kpis: current.kpis,
-      payments: current.payments,
-      gapSegments: current.gapSegments,
-      gapTotal: current.gapTotal,
-      categories: current.categories,
-      zones: current.zones,
-      activity: current.activity,
-      movements: current.movements,
-      hourlyBars: current.hourlyBars,
-      peakCaption: current.peakCaption,
-      periodFrom: from,
-      periodTo: to,
+    _filters = JtrMobileDashboardFilters(
+      dateFrom: DateTime(from.year, from.month, from.day),
+      dateTo: DateTime(to.year, to.month, to.day),
     );
-    isRefreshing.value = false;
+    await refreshDashboard();
   }
 
   Future<void> refreshDashboard() async {
+    if (isRefreshing.value) return;
+    final showFullLoader = data.value == null;
+    if (showFullLoader) isLoading.value = true;
     isRefreshing.value = true;
-    await Future<void>.delayed(const Duration(milliseconds: 600));
-    data.value = JtrMobileDummyData.dashboard();
-    isRefreshing.value = false;
+    try {
+      _filters ??= await _repository.resolveDefaultFilters();
+      final filters = _currentFilters();
+      data.value = await _repository.fetchDashboard(filters: filters);
+      _filters = filters;
+    } on ApiException catch (e) {
+      _showError(e.message);
+    } catch (_) {
+      _showError('Impossible de rafraîchir le tableau de bord.');
+    } finally {
+      isRefreshing.value = false;
+      if (showFullLoader) isLoading.value = false;
+    }
   }
 
-  static String _formatPeriodLabel(DateTime from, DateTime to) {
-    const months = [
-      'janvier',
-      'février',
-      'mars',
-      'avril',
-      'mai',
-      'juin',
-      'juillet',
-      'août',
-      'septembre',
-      'octobre',
-      'novembre',
-      'décembre',
-    ];
-    if (from.year == to.year && from.month == to.month) {
-      return '${months[from.month - 1]} ${from.year}';
+  Future<void> loadProductFamilies() async {
+    isFamiliesLoading.value = true;
+    productFamilies.clear();
+    try {
+      final families = await _repository.fetchProductFamilies(
+        filters: _currentFilters(),
+      );
+      productFamilies.assignAll(families);
+    } on ApiException catch (e) {
+      _showError(e.message);
+    } catch (_) {
+      _showError('Impossible de charger les ventes par famille.');
+    } finally {
+      isFamiliesLoading.value = false;
     }
-    return '${from.day}/${from.month} – ${to.day}/${to.month} ${to.year}';
+  }
+
+  Future<void> loadGapCategories() async {
+    isGapLoading.value = true;
+    gapCategories.clear();
+    try {
+      final categories = await _repository.fetchGapCategories(
+        filters: _currentFilters(),
+      );
+      gapCategories.assignAll(categories);
+    } on ApiException catch (e) {
+      _showError(e.message);
+    } catch (_) {
+      _showError("Impossible de charger le détail de l'écart.");
+    } finally {
+      isGapLoading.value = false;
+    }
+  }
+
+  void _showError(String message) {
+    AppSnackbar.show('Tableau de bord', message);
   }
 }

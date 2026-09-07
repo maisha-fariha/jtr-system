@@ -53,9 +53,51 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
       ),
       body: Obx(() {
         final data = controller.data.value;
+        final loading = controller.isLoading.value;
         final refreshing = controller.isRefreshing.value;
         final chatOpen = controller.chatOpen.value;
         final periodOpen = controller.periodOpen.value;
+
+        if (loading && data == null) {
+          return const Center(
+            child: CircularProgressIndicator(color: AppTheme.primary),
+          );
+        }
+
+        if (data == null) {
+          return Center(
+            child: Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 24,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Impossible de charger le tableau de bord.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 14),
+                      color: JtrMobileTheme.textSecondary,
+                    ),
+                  ),
+                  SizedBox(
+                    height: JtrResponsive.getResponsiveHeight(context, 16),
+                  ),
+                  FilledButton(
+                    onPressed: controller.refreshDashboard,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppTheme.primary,
+                    ),
+                    child: const Text('Réessayer'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
 
         return Stack(
           children: [

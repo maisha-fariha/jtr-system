@@ -1195,9 +1195,9 @@ class _ActionButtons extends GetView<SessionController> {
     ),
     (
       action: SessionAction.demanderSuite,
-      label: 'DEMANDER\nLA SUITE',
+      label: 'DEMAND.\nSUITE',
       icon: Icons.restaurant,
-      iconSize: 32.0,
+      iconSize: 28.0,
     ),
     (
       action: SessionAction.ticket,
@@ -1207,11 +1207,41 @@ class _ActionButtons extends GetView<SessionController> {
     ),
     (
       action: SessionAction.statistics,
-      label: 'STATISTICS',
+      label: 'STATS',
       icon: Icons.bar_chart_rounded,
-      iconSize: 32.0,
+      iconSize: 28.0,
+    ),
+    (
+      action: SessionAction.dashboard,
+      label: 'DASH',
+      icon: Icons.insights_rounded,
+      iconSize: 28.0,
     ),
   ];
+
+  static double _buttonGap(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    if (width < 360) return 3;
+    if (width < 420) return 4;
+    return 6;
+  }
+
+  static double _labelFontSize(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final gap = _buttonGap(context);
+    final perButton = (width - 24 - gap * (_actions.length - 1)) / _actions.length;
+    if (perButton < 56) return 6.5;
+    if (perButton < 64) return 7;
+    if (perButton < 72) return 7.5;
+    if (perButton < 80) return 8;
+    return 9;
+  }
+
+  static double _scaledIconSize(BuildContext context, double base) {
+    final width = MediaQuery.sizeOf(context).width;
+    final scale = width < 400 ? 0.82 : (width < 440 ? 0.9 : 1.0);
+    return base * scale;
+  }
 
   bool _isActionEnabled(SessionAction action) {
     switch (action) {
@@ -1219,6 +1249,8 @@ class _ActionButtons extends GetView<SessionController> {
         return controller.canPrintTicket;
       case SessionAction.statistics:
         return controller.canAccessStatistics;
+      case SessionAction.dashboard:
+        return controller.canAccessDashboard;
       case SessionAction.nouvelleCommande:
       case SessionAction.demanderSuite:
         return true;
@@ -1244,12 +1276,13 @@ class _ActionButtons extends GetView<SessionController> {
             children: [
               for (var i = 0; i < _actions.length; i++) ...[
                 if (i > 0)
-                  JtrResponsive.getResponsiveHorizontalSpacing(context, 8),
+                  SizedBox(width: _buttonGap(context)),
                 Expanded(
                   child: _ActionButton(
                     label: _actions[i].label,
                     icon: _actions[i].icon,
-                    iconSize: _actions[i].iconSize,
+                    iconSize: _scaledIconSize(context, _actions[i].iconSize),
+                    labelFontSize: _labelFontSize(context),
                     isActive: controller.selectedAction.value ==
                             _actions[i].action &&
                         _isActionEnabled(_actions[i].action),
@@ -1265,6 +1298,8 @@ class _ActionButtons extends GetView<SessionController> {
                         controller.requestNextCourse(context: context);
                       } else if (action == SessionAction.statistics) {
                         controller.openStatistics();
+                      } else if (action == SessionAction.dashboard) {
+                        controller.openJtrMobileDashboard();
                       } else {
                         controller.selectAction(action);
                       }
@@ -1285,6 +1320,7 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.iconSize,
+    required this.labelFontSize,
     required this.isActive,
     required this.onTap,
     this.isEnabled = true,
@@ -1293,6 +1329,7 @@ class _ActionButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final double iconSize;
+  final double labelFontSize;
   final bool isActive;
   final bool isEnabled;
   final VoidCallback onTap;
@@ -1316,16 +1353,16 @@ class _ActionButton extends StatelessWidget {
             : AppTheme.toolbarIconColor(icon);
     final responsiveIconSize =
         JtrResponsive.getResponsiveSize(context, iconSize);
+    final hPad = MediaQuery.sizeOf(context).width < 400 ? 3.0 : 4.0;
 
     return GestureDetector(
       onTap: isEnabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         height: JtrResponsive.adaptiveHeight(context, 110, compact: 78),
-        padding: JtrResponsive.getResponsivePadding(
-          context,
-          horizontal: 6,
-          vertical: 10,
+        padding: EdgeInsets.symmetric(
+          horizontal: JtrResponsive.getResponsiveWidth(context, hPad),
+          vertical: JtrResponsive.getResponsiveHeight(context, 8),
         ),
         decoration: BoxDecoration(
           color: backgroundColor,
@@ -1355,8 +1392,8 @@ class _ActionButton extends StatelessWidget {
           children: [
             if (isActive && isEnabled)
               Container(
-                width: JtrResponsive.getResponsiveSize(context, 44),
-                height: JtrResponsive.getResponsiveSize(context, 44),
+                width: JtrResponsive.getResponsiveSize(context, 40),
+                height: JtrResponsive.getResponsiveSize(context, 40),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(
@@ -1367,16 +1404,27 @@ class _ActionButton extends StatelessWidget {
               )
             else
               Icon(icon, color: iconColor, size: responsiveIconSize),
-            JtrResponsive.getResponsiveSpacing(context, 8),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 9),
-                fontWeight: FontWeight.bold,
-                height: 1.2,
-                letterSpacing: 0.3,
-                color: labelColor,
+            SizedBox(height: JtrResponsive.getResponsiveHeight(context, 6)),
+            SizedBox(
+              width: double.infinity,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  softWrap: true,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(
+                      context,
+                      labelFontSize,
+                    ),
+                    fontWeight: FontWeight.bold,
+                    height: 1.15,
+                    letterSpacing: 0.2,
+                    color: labelColor,
+                  ),
+                ),
               ),
             ),
           ],

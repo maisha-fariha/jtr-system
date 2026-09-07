@@ -36,6 +36,7 @@ enum SessionAction {
   demanderSuite,
   ticket,
   statistics,
+  dashboard,
 }
 
 class SessionRowSelection {
@@ -447,6 +448,12 @@ class SessionController extends GetxController {
     // Warm paid-orders cache while the user views KPIs (non-blocking).
     _prefetchPaidOrdersInBackground();
     await Get.toNamed(AppRoutes.statistics);
+  }
+
+  Future<void> openJtrMobileDashboard() async {
+    if (!canAccessDashboard) return;
+    selectAction(SessionAction.dashboard);
+    await Get.toNamed(AppRoutes.jtrMobileDashboard);
   }
 
   /// Remove a fully paid table from the open session list.
@@ -1652,6 +1659,9 @@ class SessionController extends GetxController {
   bool get canAccessStatistics => PosPermissions.canAccessStatistics(
         _authRepository.cachedSession?.user,
       );
+
+  /// JTR Mobile manager dashboard (`access-dashboard`).
+  bool get canAccessDashboard => canAccessStatistics;
 
   /// `access-offert` — table / line offer actions.
   bool get canAccessOffert => PosPermissions.canAccessOffert(

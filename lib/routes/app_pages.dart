@@ -19,6 +19,8 @@ import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../pages/paid_orders_page.dart';
+import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
+import '../jtr_mobile/pages/jtr_mobile_dashboard_page.dart';
 import '../controllers/table_details_controller.dart';
 import '../controllers/payment_controller.dart';
 import '../data/repositories/auth_repository.dart';
@@ -43,6 +45,7 @@ class AppRoutes {
   static const menuSelection = '/menu-selection';
   static const tableDetails = '/table-details';
   static const statistics = '/statistics';
+  static const jtrMobileDashboard = '/jtr-mobile-dashboard';
   static const paidOrders = '/paid-orders';
   static const payment = '/payment';
 }
@@ -170,6 +173,13 @@ class AppPages {
     GetPage(
       name: AppRoutes.statistics,
       page: () => const StatisticsPage(),
+    ),
+    GetPage(
+      name: AppRoutes.jtrMobileDashboard,
+      page: () => const JtrMobileDashboardPage(),
+      binding: BindingsBuilder(() {
+        Get.put(JtrMobileDashboardController());
+      }),
     ),
     GetPage(
       name: AppRoutes.paidOrders,

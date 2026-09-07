@@ -22,7 +22,9 @@ class JtrMobileGapDonutCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final donutSize = JtrResponsive.getResponsiveSize(context, 100);
+    final donutSize = JtrResponsive.getResponsiveSize(context, 108);
+    const stroke = 12.0;
+    final holeSize = donutSize - stroke * 2.4;
 
     return JtrMobileCard(
       child: Column(
@@ -43,34 +45,59 @@ class JtrMobileGapDonutCard extends StatelessWidget {
               SizedBox(
                 width: donutSize,
                 height: donutSize,
-                child: CustomPaint(
-                  painter: _DonutPainter(segments: segments),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          JtrMobileFormatters.currency(total, compact: true)
-                              .replaceAll(' DH', ''),
-                          style: TextStyle(
-                            fontSize:
-                                JtrResponsive.getResponsiveFontSize(context, 14),
-                            fontWeight: FontWeight.w600,
-                            color: JtrMobileTheme.textPrimary,
-                          ),
-                        ),
-                        Text(
-                          'DH non encaissé',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize:
-                                JtrResponsive.getResponsiveFontSize(context, 10),
-                            color: JtrMobileTheme.textMuted,
-                          ),
-                        ),
-                      ],
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CustomPaint(
+                      size: Size.square(donutSize),
+                      painter: _DonutPainter(segments: segments, stroke: stroke),
                     ),
-                  ),
+                    Container(
+                      width: holeSize,
+                      height: holeSize,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: JtrMobileTheme.surfaceCard,
+                      ),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: JtrResponsive.getResponsiveWidth(context, 4),
+                      ),
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              JtrMobileFormatters.currency(total, compact: true)
+                                  .replaceAll(' DH', ''),
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  13,
+                                ),
+                                fontWeight: FontWeight.w600,
+                                color: JtrMobileTheme.textPrimary,
+                                height: 1.1,
+                              ),
+                            ),
+                            Text(
+                              'non encaissé',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: JtrResponsive.getResponsiveFontSize(
+                                  context,
+                                  8.5,
+                                ),
+                                color: JtrMobileTheme.textMuted,
+                                height: 1.1,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               SizedBox(width: JtrResponsive.getResponsiveWidth(context, 16)),
@@ -155,9 +182,10 @@ class JtrMobileGapDonutCard extends StatelessWidget {
 }
 
 class _DonutPainter extends CustomPainter {
-  _DonutPainter({required this.segments});
+  _DonutPainter({required this.segments, required this.stroke});
 
   final List<JtrGapSegment> segments;
+  final double stroke;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -166,7 +194,6 @@ class _DonutPainter extends CustomPainter {
 
     final center = Offset(size.width / 2, size.height / 2);
     final radius = math.min(size.width, size.height) / 2;
-    const stroke = 12.0;
     var start = -math.pi / 2;
 
     for (final segment in segments) {
@@ -189,5 +216,5 @@ class _DonutPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DonutPainter oldDelegate) =>
-      oldDelegate.segments != segments;
+      oldDelegate.segments != segments || oldDelegate.stroke != stroke;
 }

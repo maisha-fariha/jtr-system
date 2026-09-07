@@ -4,6 +4,8 @@ import 'package:get/get.dart';
 import '../../controllers/theme_controller.dart';
 import '../data/dummy_dashboard_data.dart';
 import '../models/dashboard_models.dart';
+import '../pages/jtr_mobile_family_sales_page.dart';
+import '../pages/jtr_mobile_gap_detail_page.dart';
 
 class JtrMobileDashboardController extends GetxController {
   final data = JtrMobileDummyData.dashboard().obs;
@@ -21,23 +23,11 @@ class JtrMobileDashboardController extends GetxController {
   void toggleTheme() => ThemeController.to.toggle();
 
   void onGapDetailTap() {
-    Get.snackbar(
-      'JTR Mobile',
-      'Détail de l\'écart — à venir',
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+    Get.to(() => const JtrMobileGapDetailPage());
   }
 
   void onFamilyDetailTap() {
-    Get.snackbar(
-      'JTR Mobile',
-      'Ventes par famille — à venir',
-      snackPosition: SnackPosition.BOTTOM,
-      margin: const EdgeInsets.all(16),
-      duration: const Duration(seconds: 2),
-    );
+    Get.to(() => const JtrMobileFamilySalesPage());
   }
 
   Future<void> applyPeriod(DateTime from, DateTime to) async {

@@ -50,6 +50,8 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
       body: Obx(() {
         final data = controller.data.value;
         final refreshing = controller.isRefreshing.value;
+        final chatOpen = controller.chatOpen.value;
+        final periodOpen = controller.periodOpen.value;
 
         return Stack(
           children: [
@@ -85,8 +87,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                               onChatTap: controller.toggleChat,
                               onThemeTap: controller.toggleTheme,
                             ),
-                            if (controller.chatOpen.value)
-                              const JtrMobileChatPanel(),
+                            if (chatOpen) const JtrMobileChatPanel(),
                             JtrMobileKpiCard(kpis: data.kpis),
                             const JtrMobileSectionLabel(
                               text: 'Mode de paiement',
@@ -150,7 +151,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                               text: 'Consulter une autre période',
                             ),
                             JtrMobilePeriodPicker(
-                              expanded: controller.periodOpen.value,
+                              expanded: periodOpen,
                               from: controller.periodFrom,
                               to: controller.periodTo,
                               onToggle: controller.togglePeriod,

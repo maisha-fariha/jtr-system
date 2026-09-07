@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../utils/app_theme.dart';
 
-/// Semantic tokens for the JTR Mobile manager dashboard.
-/// Reads [AppTheme] / [AppTheme.isDark] so light–dark stays in sync with the app.
+/// JTR Mobile tokens — thin layer over [AppTheme] (salmon brand, POS light/dark).
+/// Chart/segment colors reuse the existing toolbar semantic palette.
 class JtrMobileTheme {
   JtrMobileTheme._();
 
-  static bool get _dark => AppTheme.isDark;
+  // ─── Surfaces & text (AppTheme) ───────────────────────────────────────────
 
   static Color get pageBackground => AppTheme.connectBackground;
 
@@ -17,48 +17,50 @@ class JtrMobileTheme {
 
   static Color get border => AppTheme.cardBorder;
 
-  static Color get borderStrong =>
-      _dark ? const Color(0xFF47443D) : const Color(0xFFC9C6BB);
+  static Color get borderStrong => AppTheme.suggestionsPanelBorder;
 
   static Color get textPrimary => AppTheme.darkText;
 
   static Color get textSecondary => AppTheme.textSecondary;
 
-  static Color get textMuted =>
-      _dark ? const Color(0xFF78766C) : const Color(0xFF9A988E);
+  static Color get textMuted => AppTheme.textSecondary.withValues(alpha: 0.72);
 
-  static Color get accent =>
-      _dark ? const Color(0xFF85B7EB) : const Color(0xFF185FA5);
+  // ─── Brand ─────────────────────────────────────────────────────────────────
 
-  static Color get accentBg =>
-      _dark ? const Color(0xFF10263C) : const Color(0xFFE6F1FB);
+  static Color get accent => AppTheme.primary;
 
-  static Color get danger =>
-      _dark ? const Color(0xFFF09595) : const Color(0xFFC1392B);
+  static Color get accentBg => AppTheme.lightButton;
 
-  static Color get warning =>
-      _dark ? const Color(0xFFFAC775) : const Color(0xFFB5790E);
+  static Color get accentOnAccent => Colors.white;
 
-  static Color get success =>
-      _dark ? const Color(0xFF97C459) : const Color(0xFF3B6D11);
+  // ─── Chart / status (POS toolbar palette) ───────────────────────────────────
 
-  static Color get pro =>
-      _dark ? const Color(0xFFAFA9EC) : const Color(0xFF534AB7);
+  static Color get danger => AppTheme.toolbarKitchen;
 
-  static Color get dangerBg =>
-      _dark ? const Color(0xFF3A1414) : const Color(0xFFFCEBEB);
+  static Color get warning => AppTheme.toolbarQuantity;
 
-  static Color get warningBg =>
-      _dark ? const Color(0xFF3A2A0C) : const Color(0xFFFAEEDA);
+  static Color get success => AppTheme.toolbarSuivre;
 
-  static Color get successBg =>
-      _dark ? const Color(0xFF1E2A10) : const Color(0xFFEAF3DE);
+  static Color get info => AppTheme.toolbarTicket;
 
-  static Color get proBg =>
-      _dark ? const Color(0xFF211F3B) : const Color(0xFFEEEDFE);
+  static Color get pro => AppTheme.toolbarMenu;
 
-  static Color get barDefault =>
-      _dark ? const Color(0xFF4A4840) : const Color(0xFFD3D1C7);
+  static Color get chartAlt => AppTheme.toolbarPayment;
+
+  static Color get chartMuted => AppTheme.toolbarStatistics;
+
+  static Color get barDefault => AppTheme.subtleDivider;
+
+  static Color get liveDot => AppTheme.toolbarSuivre;
+
+  static List<Color> get categoryPalette => const [
+        AppTheme.primary,
+        AppTheme.toolbarMenu,
+        AppTheme.toolbarQuantity,
+        AppTheme.toolbarTicket,
+        AppTheme.toolbarSuivre,
+        AppTheme.toolbarPayment,
+      ];
 
   static double dashboardMaxWidth(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;

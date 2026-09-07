@@ -143,7 +143,7 @@ class JtrMobileChatPanel extends StatelessWidget {
                       height: JtrResponsive.getResponsiveSize(context, 34),
                       child: Icon(
                         Icons.send_rounded,
-                        color: Colors.white,
+                        color: JtrMobileTheme.accentOnAccent,
                         size: JtrResponsive.getResponsiveSize(context, 16),
                       ),
                     ),

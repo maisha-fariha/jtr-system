@@ -51,7 +51,7 @@ class JtrMobileDummyData {
         JtrGapSegment(
           label: 'Pertes',
           amount: 1250,
-          color: JtrMobileTheme.accent,
+          color: JtrMobileTheme.info,
         ),
       ],
       gapTotal: 25650,
@@ -92,13 +92,13 @@ class JtrMobileDummyData {
           name: 'Livraison',
           amount: 60000,
           percent: 14,
-          color: JtrMobileTheme.pro,
+          color: JtrMobileTheme.info,
         ),
         JtrZoneRevenue(
           name: 'Glovo',
           amount: 34100,
           percent: 7,
-          color: JtrMobileTheme.warning,
+          color: JtrMobileTheme.chartAlt,
         ),
       ],
       activity: const JtrActivityStats(
@@ -124,7 +124,7 @@ class JtrMobileDummyData {
           label: 'Transferts table',
           value: '47',
           subValue: null,
-          color: JtrMobileTheme.accent,
+          color: JtrMobileTheme.info,
         ),
         JtrMovementRow(
           label: 'Transferts article',

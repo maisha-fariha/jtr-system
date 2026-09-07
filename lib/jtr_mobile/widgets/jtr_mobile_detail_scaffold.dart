@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../../utils/app_theme.dart';
 import '../../utils/responsive.dart';
 import '../theme/jtr_mobile_theme.dart';
+import 'jtr_mobile_theme_scope.dart';
 
 class JtrMobileDetailScaffold extends StatelessWidget {
   const JtrMobileDetailScaffold({
@@ -25,7 +25,8 @@ class JtrMobileDetailScaffold extends StatelessWidget {
       horizontal: 16,
     ).horizontal;
 
-    return Scaffold(
+    return JtrMobileThemeScope(
+      builder: (context) => Scaffold(
       backgroundColor: JtrMobileTheme.pageBackground,
       body: SafeArea(
         child: Column(
@@ -66,6 +67,7 @@ class JtrMobileDetailScaffold extends StatelessWidget {
           ],
         ),
       ),
+    ),
     );
   }
 }

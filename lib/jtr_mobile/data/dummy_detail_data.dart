@@ -182,7 +182,7 @@ class JtrMobileDummyDetailData {
       ),
       JtrGapCategoryDetail(
         label: 'Pertes',
-        color: JtrMobileTheme.accent,
+        color: JtrMobileTheme.info,
         totalAmount: 1250,
         transactions: const [
           JtrGapTransaction(

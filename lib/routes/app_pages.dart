@@ -126,6 +126,9 @@ class AppPages {
       name: AppRoutes.login,
       page: () => const LoginPage(),
       binding: BindingsBuilder(() {
+        if (Get.isRegistered<LoginController>()) {
+          Get.delete<LoginController>(force: true);
+        }
         Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
       }),
     ),

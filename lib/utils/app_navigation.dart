@@ -5,8 +5,12 @@ import '../controllers/login_controller.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
+import '../jtr_mobile/data/jtr_mobile_dashboard_remote_datasource.dart';
+import '../jtr_mobile/data/repositories/jtr_mobile_dashboard_repository.dart';
 import '../routes/app_pages.dart';
 import '../services/reverb_realtime_service.dart';
+import '../controllers/session_controller.dart';
 
 class AppNavigation {
   AppNavigation._();
@@ -28,11 +32,31 @@ class AppNavigation {
     if (Get.isRegistered<AuthRepository>()) {
       await Get.find<AuthRepository>().logout();
     }
-    // Drop any lingering login controller so onInit reloads users from API.
-    if (Get.isRegistered<LoginController>()) {
-      Get.delete<LoginController>(force: true);
+    _disposeSessionScopedControllers();
+    await Get.offAllNamed(AppRoutes.login);
+    _ensureLoginController();
+  }
+
+  /// Route bindings should register [LoginController], but logout must never
+  /// land on login without it (avoids a race when deleting before navigation).
+  static void _ensureLoginController() {
+    if (Get.isRegistered<LoginController>()) return;
+    Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
+  }
+
+  static void _disposeSessionScopedControllers() {
+    if (Get.isRegistered<JtrMobileDashboardController>()) {
+      Get.delete<JtrMobileDashboardController>(force: true);
     }
-    Get.offAllNamed(AppRoutes.login);
+    if (Get.isRegistered<JtrMobileDashboardRepository>()) {
+      Get.delete<JtrMobileDashboardRepository>(force: true);
+    }
+    if (Get.isRegistered<JtrMobileDashboardRemoteDataSource>()) {
+      Get.delete<JtrMobileDashboardRemoteDataSource>(force: true);
+    }
+    if (Get.isRegistered<SessionController>()) {
+      Get.delete<SessionController>(force: true);
+    }
   }
 
   /// Clears session and returns to login when the API reports unauthenticated.

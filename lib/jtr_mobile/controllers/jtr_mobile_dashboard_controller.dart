@@ -47,13 +47,16 @@ class JtrMobileDashboardController extends GetxController {
     isLoading.value = true;
     try {
       _filters = await _repository.resolveDefaultFilters();
+      if (isClosed) return;
       data.value = await _repository.fetchDashboard(filters: _filters!);
     } on ApiException catch (e) {
+      if (isClosed) return;
       _showError(e.message);
     } catch (_) {
+      if (isClosed) return;
       _showError('Impossible de charger le tableau de bord.');
     } finally {
-      isLoading.value = false;
+      if (!isClosed) isLoading.value = false;
     }
   }
 
@@ -89,60 +92,75 @@ class JtrMobileDashboardController extends GetxController {
   }
 
   Future<void> refreshDashboard() async {
-    if (isRefreshing.value) return;
+    if (isRefreshing.value || isClosed) return;
     final showFullLoader = data.value == null;
     if (showFullLoader) isLoading.value = true;
     isRefreshing.value = true;
     try {
       _filters ??= await _repository.resolveDefaultFilters();
+      if (isClosed) return;
       final filters = _currentFilters();
       data.value = await _repository.fetchDashboard(filters: filters);
+      if (isClosed) return;
       _filters = filters;
     } on ApiException catch (e) {
+      if (isClosed) return;
       _showError(e.message);
     } catch (_) {
+      if (isClosed) return;
       _showError('Impossible de rafraîchir le tableau de bord.');
     } finally {
-      isRefreshing.value = false;
-      if (showFullLoader) isLoading.value = false;
+      if (!isClosed) {
+        isRefreshing.value = false;
+        if (showFullLoader) isLoading.value = false;
+      }
     }
   }
 
   Future<void> loadProductFamilies() async {
+    if (isClosed) return;
     isFamiliesLoading.value = true;
     productFamilies.clear();
     try {
       final families = await _repository.fetchProductFamilies(
         filters: _currentFilters(),
       );
+      if (isClosed) return;
       productFamilies.assignAll(families);
     } on ApiException catch (e) {
+      if (isClosed) return;
       _showError(e.message);
     } catch (_) {
+      if (isClosed) return;
       _showError('Impossible de charger les ventes par famille.');
     } finally {
-      isFamiliesLoading.value = false;
+      if (!isClosed) isFamiliesLoading.value = false;
     }
   }
 
   Future<void> loadGapCategories() async {
+    if (isClosed) return;
     isGapLoading.value = true;
     gapCategories.clear();
     try {
       final categories = await _repository.fetchGapCategories(
         filters: _currentFilters(),
       );
+      if (isClosed) return;
       gapCategories.assignAll(categories);
     } on ApiException catch (e) {
+      if (isClosed) return;
       _showError(e.message);
     } catch (_) {
+      if (isClosed) return;
       _showError("Impossible de charger le détail de l'écart.");
     } finally {
-      isGapLoading.value = false;
+      if (!isClosed) isGapLoading.value = false;
     }
   }
 
   void _showError(String message) {
+    if (isClosed) return;
     AppSnackbar.show('Tableau de bord', message);
   }
 }

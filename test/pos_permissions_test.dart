@@ -105,5 +105,24 @@ void main() {
         isFalse,
       );
     });
+    test('access-pos-dashboard grants JTR Mobile dashboard', () {
+      const user = AuthUserModel(
+        id: 7,
+        name: 'Manager',
+        permissions: [PosPermissions.accessPosDashboard],
+      );
+      expect(PosPermissions.canAccessJtrMobileDashboard(user), isTrue);
+      expect(PosPermissions.canAccessStatistics(user), isFalse);
+    });
+
+    test('access-dashboard grants Statistics but not JTR Mobile dashboard', () {
+      const user = AuthUserModel(
+        id: 8,
+        name: 'Manager',
+        permissions: [PosPermissions.accessDashboard],
+      );
+      expect(PosPermissions.canAccessStatistics(user), isTrue);
+      expect(PosPermissions.canAccessJtrMobileDashboard(user), isFalse);
+    });
   });
 }

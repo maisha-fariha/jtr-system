@@ -1660,8 +1660,10 @@ class SessionController extends GetxController {
         _authRepository.cachedSession?.user,
       );
 
-  /// JTR Mobile manager dashboard (`access-dashboard`).
-  bool get canAccessDashboard => canAccessStatistics;
+  /// JTR Mobile manager dashboard (`access-pos-dashboard`).
+  bool get canAccessDashboard => PosPermissions.canAccessJtrMobileDashboard(
+        _authRepository.cachedSession?.user,
+      );
 
   /// `access-offert` — table / line offer actions.
   bool get canAccessOffert => PosPermissions.canAccessOffert(

@@ -225,7 +225,6 @@ class _TxnAmount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final amount = txn.amount.toStringAsFixed(2).replaceAll('.', ',');
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -241,7 +240,7 @@ class _TxnAmount extends StatelessWidget {
           SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),
         ],
         Text(
-          '$amount DH',
+          JtrMobileFormatters.currency(txn.amount),
           style: TextStyle(
             fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
             fontWeight: FontWeight.w600,

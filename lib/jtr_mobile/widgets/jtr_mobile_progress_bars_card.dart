@@ -92,7 +92,7 @@ class _ProgressRow extends StatelessWidget {
                 children: [
                   TextSpan(text: JtrMobileFormatters.currency(row.amount)),
                   TextSpan(
-                    text: ' ${row.percent.round()}%',
+                    text: ' ${JtrMobileFormatters.percent(row.percent)}',
                     style: TextStyle(
                       fontWeight: FontWeight.w400,
                       color: JtrMobileTheme.textMuted,

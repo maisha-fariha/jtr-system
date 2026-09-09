@@ -86,7 +86,7 @@ class JtrMobileKpiCard extends StatelessWidget {
               ),
               SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
               Text(
-                '${kpis.collectedPercentOfRevenue.round()}% du CA',
+                '${JtrMobileFormatters.percent(kpis.collectedPercentOfRevenue)} du CA',
                 style: TextStyle(
                   fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                   color: JtrMobileTheme.textMuted,

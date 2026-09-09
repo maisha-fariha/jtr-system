@@ -7,21 +7,37 @@ class JtrMobileFormatters {
     return negative ? '-$core' : core;
   }
 
+  /// Exact amount with thousand separators — keeps decimals (no round/floor).
   static String currency(double value, {bool compact = false}) {
-    final rounded = value.round();
-    final negative = rounded < 0;
-    final core = _groupDigits(rounded.abs());
+    final negative = value < 0;
+    final core = _formatExactNumber(value.abs());
     return '${negative ? '-' : ''}$core DH';
   }
 
   static String decimal(double value) {
-    final rounded = value.round();
-    final hasFraction = (value - rounded).abs() > 0.05;
-    final core = hasFraction
-        ? value.toStringAsFixed(1).replaceAll('.', ',')
-        : _groupDigits(rounded.abs());
-    final prefix = value < 0 ? '-' : '';
-    return '$prefix$core DH';
+    final negative = value < 0;
+    final core = _formatExactNumber(value.abs());
+    return '${negative ? '-' : ''}$core DH';
+  }
+
+  /// Exact percent label (no integer round).
+  static String percent(double value) {
+    return '${_formatExactNumber(value.abs(), maxDecimals: 2)}%';
+  }
+
+  static String _formatExactNumber(double abs, {int maxDecimals = 2}) {
+    // Avoid float noise; keep up to [maxDecimals] without forcing .00.
+    final fixed = abs.toStringAsFixed(maxDecimals);
+    final parts = fixed.split('.');
+    final intGrouped = _groupDigits(int.parse(parts[0]));
+    if (parts.length == 1) return intGrouped;
+
+    var frac = parts[1];
+    while (frac.endsWith('0')) {
+      frac = frac.substring(0, frac.length - 1);
+    }
+    if (frac.isEmpty) return intGrouped;
+    return '$intGrouped,$frac';
   }
 
   static String _groupDigits(int abs) {

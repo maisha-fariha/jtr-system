@@ -384,9 +384,7 @@ class JtrMobileDashboardMapper {
     final percent = _dbl(comparison['change_percent']);
     final label = comparison['previous_label']?.toString();
     final sign = percent >= 0 ? '+' : '';
-    final pct = percent.toStringAsFixed(
-      percent == percent.roundToDouble() ? 0 : 1,
-    ).replaceAll('.', ',');
+    final pct = JtrMobileFormatters.percent(percent).replaceAll('%', '');
     if (label != null && label.isNotEmpty) {
       return '$sign$pct% vs $label';
     }

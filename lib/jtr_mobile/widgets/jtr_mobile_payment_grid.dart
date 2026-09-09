@@ -79,7 +79,7 @@ class _PaymentTile extends StatelessWidget {
           ),
           SizedBox(height: JtrResponsive.getResponsiveHeight(context, 2)),
           Text(
-            '${item.percent.round()}%',
+            JtrMobileFormatters.percent(item.percent),
             style: TextStyle(
               fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
               color: JtrMobileTheme.textMuted,

@@ -354,7 +354,8 @@ class JtrMobileDashboardMapper {
         : -1;
 
     final bars = <JtrHourlyBar>[];
-    for (var h = 10; h <= 22; h++) {
+    // Restaurant day window 10h–23h (14 bars; last slot is 23h).
+    for (var h = 10; h <= 23; h++) {
       final slot = byHour[h];
       final revenue = slot != null ? _dbl(slot['revenue']) : 0.0;
       bars.add(

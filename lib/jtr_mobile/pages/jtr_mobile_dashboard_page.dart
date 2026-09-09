@@ -27,31 +27,8 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
     return JtrMobileThemeScope(
       builder: (context) => Scaffold(
       backgroundColor: JtrMobileTheme.pageBackground,
-      appBar: AppBar(
-        backgroundColor: AppTheme.background,
-        surfaceTintColor: Colors.transparent,
-        elevation: 1,
-        shadowColor: Colors.black.withValues(alpha: 0.08),
-        centerTitle: true,
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back_ios_new,
-            color: AppTheme.darkText,
-            size: JtrResponsive.getResponsiveSize(context, 20),
-          ),
-          onPressed: () => Get.back(),
-        ),
-        title: Text(
-          'JTR MOBILE',
-          style: TextStyle(
-            color: AppTheme.primary,
-            fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1.2,
-          ),
-        ),
-      ),
-      body: Obx(() {
+      body: SafeArea(
+        child: Obx(() {
         final data = controller.data.value;
         final loading = controller.isLoading.value;
         final refreshing = controller.isRefreshing.value;
@@ -232,6 +209,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
           ],
         );
       }),
+      ),
       ),
     );
   }

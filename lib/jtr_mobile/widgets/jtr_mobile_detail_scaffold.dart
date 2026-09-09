@@ -95,7 +95,7 @@ class _BackHeader extends StatelessWidget {
       child: InkWell(
         onTap: () => Get.back(),
         borderRadius: BorderRadius.circular(
-          JtrResponsive.getResponsiveRadius(context, 8),
+          JtrMobileTheme.tileRadius,
         ),
         child: Padding(
           padding: JtrResponsive.getResponsivePadding(
@@ -171,7 +171,7 @@ class _JtrMobileExpansionCardState extends State<JtrMobileExpansionCard> {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 12);
+    final radius = JtrMobileTheme.cardRadius;
     return Container(
       margin: EdgeInsets.only(
         bottom: JtrResponsive.getResponsiveHeight(context, 10),

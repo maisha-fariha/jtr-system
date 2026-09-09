@@ -31,7 +31,7 @@ class JtrMobilePeriodPicker extends StatelessWidget {
           child: InkWell(
             onTap: onToggle,
             borderRadius: BorderRadius.circular(
-              JtrResponsive.getResponsiveRadius(context, 8),
+              JtrMobileTheme.tileRadius,
             ),
             child: Ink(
               padding: JtrResponsive.getResponsivePadding(
@@ -42,7 +42,7 @@ class JtrMobilePeriodPicker extends StatelessWidget {
               decoration: BoxDecoration(
                 color: JtrMobileTheme.surfaceCard,
                 borderRadius: BorderRadius.circular(
-                  JtrResponsive.getResponsiveRadius(context, 8),
+                  JtrMobileTheme.tileRadius,
                 ),
                 border: Border.all(
                   color: JtrMobileTheme.borderStrong,
@@ -93,7 +93,7 @@ class JtrMobilePeriodPicker extends StatelessWidget {
             decoration: BoxDecoration(
               color: JtrMobileTheme.surfaceCard,
               borderRadius: BorderRadius.circular(
-                JtrResponsive.getResponsiveRadius(context, 12),
+                JtrMobileTheme.cardRadius,
               ),
               border: Border.all(color: JtrMobileTheme.border, width: 0.5),
             ),
@@ -211,7 +211,7 @@ class _DateField extends StatelessWidget {
           child: InkWell(
             onTap: onTap,
             borderRadius: BorderRadius.circular(
-              JtrResponsive.getResponsiveRadius(context, 8),
+              JtrMobileTheme.tileRadius,
             ),
             child: Ink(
               width: double.infinity,
@@ -223,7 +223,7 @@ class _DateField extends StatelessWidget {
               decoration: BoxDecoration(
                 color: JtrMobileTheme.surfaceTile,
                 borderRadius: BorderRadius.circular(
-                  JtrResponsive.getResponsiveRadius(context, 8),
+                  JtrMobileTheme.tileRadius,
                 ),
                 border: Border.all(
                   color: JtrMobileTheme.borderStrong,

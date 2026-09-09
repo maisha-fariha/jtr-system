@@ -58,7 +58,7 @@ class _ActivityTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 8);
+    final radius = JtrMobileTheme.tileRadius;
     return Container(
       padding: JtrResponsive.getResponsivePadding(
         context,
@@ -81,7 +81,7 @@ class _ActivityTile extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: JtrMobileTheme.accentBg,
                   borderRadius: BorderRadius.circular(
-                    JtrResponsive.getResponsiveRadius(context, 8),
+                    JtrMobileTheme.tileRadius,
                   ),
                 ),
                 child: Icon(

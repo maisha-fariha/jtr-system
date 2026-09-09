@@ -202,7 +202,7 @@ class _TxnLeft extends StatelessWidget {
             decoration: BoxDecoration(
               color: JtrMobileTheme.surfaceTile,
               borderRadius: BorderRadius.circular(
-                JtrResponsive.getResponsiveRadius(context, 10),
+                JtrMobileTheme.tileRadius,
               ),
             ),
             child: Text(

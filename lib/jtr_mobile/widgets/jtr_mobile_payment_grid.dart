@@ -45,7 +45,7 @@ class _PaymentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 8);
+    final radius = JtrMobileTheme.tileRadius;
     return Container(
       padding: JtrResponsive.getResponsivePadding(
         context,

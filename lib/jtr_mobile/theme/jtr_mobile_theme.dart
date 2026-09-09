@@ -98,6 +98,12 @@ class JtrMobileTheme {
     }
   }
 
+  /// Main cards / lists — HTML `.card` is 12px; use 16 for a softer match.
+  static const double cardRadius = 16;
+
+  /// Pay tiles, buttons, activity tiles — HTML uses 8px; slightly softer.
+  static const double tileRadius = 10;
+
   static double dashboardMaxWidth(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
     if (w > 720) return 480;

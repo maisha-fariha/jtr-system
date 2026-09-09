@@ -11,7 +11,7 @@ class JtrMobileMovementsList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 12);
+    final radius = JtrMobileTheme.cardRadius;
     return Container(
       margin: EdgeInsets.only(
         bottom: JtrResponsive.getResponsiveHeight(context, 12),

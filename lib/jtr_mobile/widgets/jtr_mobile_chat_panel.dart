@@ -8,7 +8,7 @@ class JtrMobileChatPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 12);
+    final radius = JtrMobileTheme.cardRadius;
     return Container(
       margin: EdgeInsets.only(
         bottom: JtrResponsive.getResponsiveHeight(context, 12),
@@ -63,7 +63,7 @@ class JtrMobileChatPanel extends StatelessWidget {
               decoration: BoxDecoration(
                 color: JtrMobileTheme.surfaceTile,
                 borderRadius: BorderRadius.circular(
-                  JtrResponsive.getResponsiveRadius(context, 10),
+                  JtrMobileTheme.tileRadius,
                 ),
               ),
               child: Text(
@@ -103,7 +103,7 @@ class JtrMobileChatPanel extends StatelessWidget {
                       ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(
-                          JtrResponsive.getResponsiveRadius(context, 8),
+                          JtrMobileTheme.tileRadius,
                         ),
                         borderSide: BorderSide(
                           color: JtrMobileTheme.borderStrong,
@@ -112,7 +112,7 @@ class JtrMobileChatPanel extends StatelessWidget {
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(
-                          JtrResponsive.getResponsiveRadius(context, 8),
+                          JtrMobileTheme.tileRadius,
                         ),
                         borderSide: BorderSide(
                           color: JtrMobileTheme.borderStrong,
@@ -131,12 +131,12 @@ class JtrMobileChatPanel extends StatelessWidget {
                 Material(
                   color: JtrMobileTheme.accent,
                   borderRadius: BorderRadius.circular(
-                    JtrResponsive.getResponsiveRadius(context, 8),
+                    JtrMobileTheme.tileRadius,
                   ),
                   child: InkWell(
                     onTap: () {},
                     borderRadius: BorderRadius.circular(
-                      JtrResponsive.getResponsiveRadius(context, 8),
+                      JtrMobileTheme.tileRadius,
                     ),
                     child: SizedBox(
                       width: JtrResponsive.getResponsiveSize(context, 34),

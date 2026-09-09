@@ -41,7 +41,7 @@ class JtrMobileCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 12);
+    final radius = JtrMobileTheme.cardRadius;
     return Container(
       width: double.infinity,
       margin: margin ??
@@ -74,7 +74,7 @@ class JtrMobileDetailButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = JtrResponsive.getResponsiveRadius(context, 8);
+    final radius = JtrMobileTheme.tileRadius;
     return Material(
       color: Colors.transparent,
       child: InkWell(

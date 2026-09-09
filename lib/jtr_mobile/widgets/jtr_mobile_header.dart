@@ -98,12 +98,12 @@ class JtrMobileHeader extends StatelessWidget {
                   ? JtrMobileTheme.accentBg
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(
-                JtrResponsive.getResponsiveRadius(context, 8),
+                JtrMobileTheme.tileRadius,
               ),
               child: InkWell(
                 onTap: onChatTap,
                 borderRadius: BorderRadius.circular(
-                  JtrResponsive.getResponsiveRadius(context, 8),
+                  JtrMobileTheme.tileRadius,
                 ),
                 child: Padding(
                   padding: JtrResponsive.getResponsivePadding(
@@ -125,12 +125,12 @@ class JtrMobileHeader extends StatelessWidget {
             Material(
               color: Colors.transparent,
               borderRadius: BorderRadius.circular(
-                JtrResponsive.getResponsiveRadius(context, 8),
+                JtrMobileTheme.tileRadius,
               ),
               child: InkWell(
                 onTap: onThemeTap,
                 borderRadius: BorderRadius.circular(
-                  JtrResponsive.getResponsiveRadius(context, 8),
+                  JtrMobileTheme.tileRadius,
                 ),
                 child: Padding(
                   padding: JtrResponsive.getResponsivePadding(

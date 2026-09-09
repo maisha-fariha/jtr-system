@@ -49,7 +49,7 @@ class JtrMobileProgressBarsCard extends StatelessWidget {
           ),
           SizedBox(height: JtrResponsive.getResponsiveHeight(context, 14)),
           for (var i = 0; i < rows.length; i++) ...[
-            _ProgressRow(row: rows[i]),
+            _ProgressRow(row: rows[i], colorIndex: i),
             if (i < rows.length - 1)
               SizedBox(height: JtrResponsive.getResponsiveHeight(context, 12)),
           ],
@@ -64,9 +64,10 @@ class JtrMobileProgressBarsCard extends StatelessWidget {
 }
 
 class _ProgressRow extends StatelessWidget {
-  const _ProgressRow({required this.row});
+  const _ProgressRow({required this.row, required this.colorIndex});
 
   final JtrMobileProgressBarRow row;
+  final int colorIndex;
 
   @override
   Widget build(BuildContext context) {
@@ -112,7 +113,7 @@ class _ProgressRow extends StatelessWidget {
             value: (row.percent / 100).clamp(0.0, 1.0),
             minHeight: JtrResponsive.getResponsiveHeight(context, 6),
             backgroundColor: JtrMobileTheme.surfaceTile,
-            color: row.color,
+            color: JtrMobileTheme.paletteAt(colorIndex),
           ),
         ),
       ],

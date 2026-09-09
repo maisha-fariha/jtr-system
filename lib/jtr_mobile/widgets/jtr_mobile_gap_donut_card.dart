@@ -22,9 +22,12 @@ class JtrMobileGapDonutCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final donutSize = JtrResponsive.getResponsiveSize(context, 108);
-    const stroke = 12.0;
-    final holeSize = donutSize - stroke * 2.4;
+    // Slightly larger than HTML 100px so center amount + caption fit without
+    // overlapping the thick ring (stroke 12% / r 40%).
+    final donutSize = JtrResponsive.getResponsiveSize(context, 118);
+    final stroke = donutSize * 0.12;
+    // Keep text inside the clear hole with padding (inner diameter ≈ 0.68×size).
+    final holeSize = donutSize * 0.56;
 
     return JtrMobileCard(
       child: Column(
@@ -52,48 +55,43 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                       size: Size.square(donutSize),
                       painter: _DonutPainter(segments: segments, stroke: stroke),
                     ),
-                    Container(
+                    SizedBox(
                       width: holeSize,
                       height: holeSize,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: JtrMobileTheme.surfaceCard,
-                      ),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: JtrResponsive.getResponsiveWidth(context, 4),
-                      ),
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              JtrMobileFormatters.currency(total, compact: true)
-                                  .replaceAll(' DH', ''),
-                              style: TextStyle(
-                                fontSize: JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  13,
+                      child: Padding(
+                        padding: EdgeInsets.all(donutSize * 0.02),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                JtrMobileFormatters.currency(total, compact: true)
+                                    .replaceAll(' DH', ''),
+                                style: TextStyle(
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    13,
+                                  ),
+                                  fontWeight: FontWeight.w600,
+                                  color: JtrMobileTheme.textPrimary,
+                                  height: 1.05,
                                 ),
-                                fontWeight: FontWeight.w600,
-                                color: JtrMobileTheme.textPrimary,
-                                height: 1.1,
                               ),
-                            ),
-                            Text(
-                              'DH non encaissé',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: JtrResponsive.getResponsiveFontSize(
-                                  context,
-                                  8.5,
+                              Text(
+                                'DH non encaissé',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                    context,
+                                    9,
+                                  ),
+                                  color: JtrMobileTheme.textMuted,
+                                  height: 1.1,
                                 ),
-                                color: JtrMobileTheme.textMuted,
-                                height: 1.1,
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -125,12 +123,13 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                                       ),
                                       decoration: BoxDecoration(
                                         shape: BoxShape.circle,
-                                        color: s.color,
+                                        color: JtrMobileTheme.gapColorForLabel(
+                                          s.label,
+                                        ),
                                       ),
                                     ),
                                     SizedBox(
-                                      width:
-                                          JtrResponsive.getResponsiveWidth(
+                                      width: JtrResponsive.getResponsiveWidth(
                                         context,
                                         6,
                                       ),
@@ -154,7 +153,8 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                               Text(
                                 JtrMobileFormatters.currency(s.amount),
                                 style: TextStyle(
-                                  fontSize: JtrResponsive.getResponsiveFontSize(
+                                  fontSize:
+                                      JtrResponsive.getResponsiveFontSize(
                                     context,
                                     12,
                                   ),
@@ -193,23 +193,20 @@ class _DonutPainter extends CustomPainter {
     if (total <= 0) return;
 
     final center = Offset(size.width / 2, size.height / 2);
-    final radius = math.min(size.width, size.height) / 2;
+    // HTML: viewBox 100, circle r="40"
+    final radius = math.min(size.width, size.height) * 0.4;
+    final rect = Rect.fromCircle(center: center, radius: radius);
     var start = -math.pi / 2;
 
     for (final segment in segments) {
+      if (segment.amount <= 0) continue;
       final sweep = (segment.amount / total) * 2 * math.pi;
       final paint = Paint()
-        ..color = segment.color
+        ..color = JtrMobileTheme.gapColorForLabel(segment.label)
         ..style = PaintingStyle.stroke
         ..strokeWidth = stroke
         ..strokeCap = StrokeCap.butt;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius - stroke / 2),
-        start,
-        sweep,
-        false,
-        paint,
-      );
+      canvas.drawArc(rect, start, sweep, false, paint);
       start += sweep;
     }
   }

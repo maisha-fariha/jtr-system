@@ -1,3 +1,5 @@
+import 'package:flutter/material.dart';
+
 import '../../../utils/date_formatter.dart';
 import '../../models/dashboard_models.dart';
 import '../../models/detail_models.dart';
@@ -8,11 +10,11 @@ import '../jtr_mobile_dashboard_filters.dart';
 class JtrMobileDashboardMapper {
   JtrMobileDashboardMapper._();
 
-  static final _gapTypes = [
+  static List<(String, String, Color)> get _gapTypes => [
     ('annulations', 'Annulations', JtrMobileTheme.danger),
     ('remises', 'Remises', JtrMobileTheme.warning),
     ('offerts', 'Offerts', JtrMobileTheme.pro),
-    ('pertes', 'Pertes', JtrMobileTheme.info),
+    ('pertes', 'Pertes', JtrMobileTheme.accent),
   ];
 
   static DateTime parseActiveDayDate(Map<String, dynamic> activeDayJson) {
@@ -253,7 +255,7 @@ class JtrMobileDashboardMapper {
       JtrGapSegment(
         label: 'Pertes',
         amount: _dbl(recap['total_pertes']),
-        color: JtrMobileTheme.info,
+        color: JtrMobileTheme.accent,
       ),
     ];
   }

@@ -94,7 +94,7 @@ class _GapCategoryCard extends StatelessWidget {
             height: JtrResponsive.getResponsiveSize(context, 8),
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: category.color,
+              color: JtrMobileTheme.gapColorForLabel(category.label),
             ),
           ),
           SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),

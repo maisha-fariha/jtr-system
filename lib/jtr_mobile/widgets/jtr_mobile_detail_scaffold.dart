@@ -140,7 +140,7 @@ class _BackHeader extends StatelessWidget {
   }
 }
 
-class JtrMobileExpansionCard extends StatelessWidget {
+class JtrMobileExpansionCard extends StatefulWidget {
   const JtrMobileExpansionCard({
     super.key,
     required this.title,
@@ -155,6 +155,19 @@ class JtrMobileExpansionCard extends StatelessWidget {
   final List<Widget> children;
   final Widget? leading;
   final bool initiallyExpanded;
+
+  @override
+  State<JtrMobileExpansionCard> createState() => _JtrMobileExpansionCardState();
+}
+
+class _JtrMobileExpansionCardState extends State<JtrMobileExpansionCard> {
+  late bool _expanded;
+
+  @override
+  void initState() {
+    super.initState();
+    _expanded = widget.initiallyExpanded;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -172,19 +185,35 @@ class JtrMobileExpansionCard extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          initiallyExpanded: initiallyExpanded,
+          initiallyExpanded: widget.initiallyExpanded,
+          onExpansionChanged: (expanded) {
+            setState(() => _expanded = expanded);
+          },
           tilePadding: JtrResponsive.getResponsivePadding(
             context,
             horizontal: 16,
             vertical: 0,
           ),
           childrenPadding: EdgeInsets.zero,
-          leading: leading,
-          title: title,
-          trailing: trailing,
+          leading: widget.leading,
+          title: widget.title,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              widget.trailing,
+              SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
+              Icon(
+                _expanded
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+                color: JtrMobileTheme.textMuted,
+                size: JtrResponsive.getResponsiveSize(context, 22),
+              ),
+            ],
+          ),
           iconColor: JtrMobileTheme.textMuted,
           collapsedIconColor: JtrMobileTheme.textMuted,
-          children: children,
+          children: widget.children,
         ),
       ),
     );

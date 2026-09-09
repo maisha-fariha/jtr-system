@@ -209,10 +209,7 @@ class JtrMobileDashboardMapper {
   static String _eventMeta(Map<String, dynamic> item, DateTime? eventAt) {
     final parts = <String>[];
     if (eventAt != null) {
-      parts.add(
-        '${eventAt.day.toString().padLeft(2, '0')}/'
-        '${eventAt.month.toString().padLeft(2, '0')}',
-      );
+      parts.add(JtrMobileFormatters.isoDate(eventAt));
       parts.add(
         '${eventAt.hour.toString().padLeft(2, '0')}:'
         '${eventAt.minute.toString().padLeft(2, '0')}',
@@ -444,29 +441,7 @@ class JtrMobileDashboardMapper {
   }
 
   static String _formatPeriodLabel(DateTime from, DateTime to) {
-    const months = [
-      'janvier',
-      'février',
-      'mars',
-      'avril',
-      'mai',
-      'juin',
-      'juillet',
-      'août',
-      'septembre',
-      'octobre',
-      'novembre',
-      'décembre',
-    ];
-    if (from.year == to.year &&
-        from.month == to.month &&
-        from.day == to.day) {
-      return '${from.day} ${months[from.month - 1]} ${from.year}';
-    }
-    if (from.year == to.year && from.month == to.month) {
-      return '${months[from.month - 1]} ${from.year}';
-    }
-    return '${from.day}/${from.month} – ${to.day}/${to.month} ${to.year}';
+    return JtrMobileFormatters.isoDateRange(from, to);
   }
 
   static Map<String, dynamic> _map(dynamic value) {

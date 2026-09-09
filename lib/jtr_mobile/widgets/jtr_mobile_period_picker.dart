@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../utils/responsive.dart';
 import '../theme/jtr_mobile_theme.dart';
+import '../utils/jtr_mobile_formatters.dart';
 import 'jtr_mobile_shared_widgets.dart';
 
 class JtrMobilePeriodPicker extends StatelessWidget {
@@ -58,7 +59,7 @@ class JtrMobilePeriodPicker extends StatelessWidget {
                   SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),
                   Expanded(
                     child: Text(
-                      'Choisir une période',
+                      JtrMobileFormatters.isoDateRange(from, to),
                       style: TextStyle(
                         fontSize:
                             JtrResponsive.getResponsiveFontSize(context, 13),
@@ -147,8 +148,7 @@ class _PeriodFormState extends State<_PeriodForm> {
     if (picked != null) onPicked(picked);
   }
 
-  String _format(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  String _format(DateTime d) => JtrMobileFormatters.isoDate(d);
 
   @override
   Widget build(BuildContext context) {

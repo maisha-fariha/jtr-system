@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
@@ -19,10 +20,25 @@ class JtrMobileDashboardRemoteDataSource {
 
   Options _freshOptions() => Options(headers: _noCacheHeaders);
 
+  void _logRequest(String path, Map<String, dynamic>? queryParameters) {
+    final buffer = StringBuffer()
+      ..writeln('════════ JTR MOBILE DASHBOARD REQUEST ════════')
+      ..writeln('METHOD: GET')
+      ..writeln('PATH: $path')
+      ..writeln('QUERY / FILTERS:')
+      ..writeln(queryParameters ?? {});
+    final line = buffer.toString();
+    // ignore: avoid_print
+    print(line);
+    debugPrint(line);
+  }
+
   Future<Map<String, dynamic>> fetchActiveDay() async {
+    final params = {'_': DateTime.now().millisecondsSinceEpoch};
+    _logRequest(ApiEndpoints.activeDay, params);
     return _getMap(
       ApiEndpoints.activeDay,
-      queryParameters: {'_': DateTime.now().millisecondsSinceEpoch},
+      queryParameters: params,
     );
   }
 
@@ -32,6 +48,7 @@ class JtrMobileDashboardRemoteDataSource {
     final params = filters.toQueryParams();
     params['include_cashier_indicators'] = 1;
     params['include_period_comparison'] = 1;
+    _logRequest(ApiEndpoints.dashboardOrderSummary, params);
     return _getMap(ApiEndpoints.dashboardOrderSummary, queryParameters: params);
   }
 
@@ -40,15 +57,18 @@ class JtrMobileDashboardRemoteDataSource {
   ) async {
     final params = filters.toQueryParams();
     params['with_peak'] = 1;
+    _logRequest(ApiEndpoints.dashboardRevenueByHour, params);
     return _getMap(ApiEndpoints.dashboardRevenueByHour, queryParameters: params);
   }
 
   Future<List<Map<String, dynamic>>> fetchRevenueBySalesZone(
     JtrMobileDashboardFilters filters,
   ) async {
+    final params = filters.toQueryParams();
+    _logRequest(ApiEndpoints.dashboardRevenueBySalesZone, params);
     return _getList(
       ApiEndpoints.dashboardRevenueBySalesZone,
-      queryParameters: filters.toQueryParams(),
+      queryParameters: params,
     );
   }
 
@@ -58,6 +78,7 @@ class JtrMobileDashboardRemoteDataSource {
   }) async {
     final params = filters.toQueryParams();
     params['metric'] = metric;
+    _logRequest(ApiEndpoints.dashboardProductFamilySummary, params);
     return _getMap(
       ApiEndpoints.dashboardProductFamilySummary,
       queryParameters: params,
@@ -74,6 +95,7 @@ class JtrMobileDashboardRemoteDataSource {
     params['type'] = type;
     params['limit'] = limit;
     params['offset'] = offset;
+    _logRequest(ApiEndpoints.dashboardEventList, params);
     return _getMap(ApiEndpoints.dashboardEventList, queryParameters: params);
   }
 

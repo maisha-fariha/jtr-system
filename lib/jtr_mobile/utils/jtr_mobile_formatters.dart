@@ -1,6 +1,17 @@
 class JtrMobileFormatters {
   JtrMobileFormatters._();
 
+  /// API + UI date format: `YYYY-MM-DD`.
+  static String isoDate(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Single day → `YYYY-MM-DD`; range → `YYYY-MM-DD – YYYY-MM-DD`.
+  static String isoDateRange(DateTime from, DateTime to) {
+    final a = isoDate(from);
+    final b = isoDate(to);
+    return a == b ? a : '$a – $b';
+  }
+
   static String integer(int value) {
     final negative = value < 0;
     final core = _groupDigits(value.abs());

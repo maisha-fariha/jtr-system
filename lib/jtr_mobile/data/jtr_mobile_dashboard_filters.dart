@@ -1,3 +1,5 @@
+import '../utils/jtr_mobile_formatters.dart';
+
 class JtrMobileDashboardFilters {
   const JtrMobileDashboardFilters({
     required this.dateFrom,
@@ -13,8 +15,8 @@ class JtrMobileDashboardFilters {
 
   Map<String, dynamic> toQueryParams({bool bustCache = true}) {
     final params = <String, dynamic>{
-      'date_from': _formatDate(dateFrom),
-      'date_to': _formatDate(dateTo),
+      'date_from': JtrMobileFormatters.isoDate(dateFrom),
+      'date_to': JtrMobileFormatters.isoDate(dateTo),
     };
     if (waiterId != null) params['waiter_id'] = waiterId;
     if (salesZoneId != null) params['sales_zone_id'] = salesZoneId;
@@ -23,7 +25,4 @@ class JtrMobileDashboardFilters {
     }
     return params;
   }
-
-  static String _formatDate(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }

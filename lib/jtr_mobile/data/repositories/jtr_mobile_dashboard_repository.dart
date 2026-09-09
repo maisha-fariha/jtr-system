@@ -1,8 +1,8 @@
 import '../../../core/config/api_config.dart';
 import '../../../core/storage/device_secure_storage.dart';
-import '../../../utils/date_formatter.dart';
 import '../../models/dashboard_models.dart';
 import '../../models/detail_models.dart';
+import '../../utils/jtr_mobile_formatters.dart';
 import '../jtr_mobile_dashboard_filters.dart';
 import '../jtr_mobile_dashboard_remote_datasource.dart';
 import '../mappers/jtr_mobile_dashboard_mapper.dart';
@@ -24,12 +24,12 @@ class JtrMobileDashboardRepository {
     'pertes',
   ];
 
-  /// Resolves the default filter range from the active POS day (network only).
+  /// Default range: first day of the current year → today (`YYYY-MM-DD`).
   Future<JtrMobileDashboardFilters> resolveDefaultFilters() async {
-    final activeDay = await _remote.fetchActiveDay();
-    final date = JtrMobileDashboardMapper.parseActiveDayDate(activeDay);
-    final day = DateTime(date.year, date.month, date.day);
-    return JtrMobileDashboardFilters(dateFrom: day, dateTo: day);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yearStart = DateTime(now.year, 1, 1);
+    return JtrMobileDashboardFilters(dateFrom: yearStart, dateTo: today);
   }
 
   Future<JtrDashboardData> fetchDashboard({
@@ -106,11 +106,6 @@ class JtrMobileDashboardRepository {
   }
 
   String _buildDateLabel(DateTime activeDate) {
-    final now = DateTime.now();
-    final isToday = activeDate.year == now.year &&
-        activeDate.month == now.month &&
-        activeDate.day == now.day;
-    if (isToday) return "Aujourd'hui · en direct";
-    return '${DateFormatter.formatFrenchLongDate(activeDate)} · en direct';
+    return '${JtrMobileFormatters.isoDate(activeDate)} · en direct';
   }
 }

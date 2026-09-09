@@ -21,9 +21,12 @@ class JtrMobileTheme {
 
   static Color get textPrimary => AppTheme.darkText;
 
-  static Color get textSecondary => AppTheme.textSecondary;
+  /// Dark: slightly lighter greys than POS default for readable labels.
+  static Color get textSecondary =>
+      AppTheme.isDark ? const Color(0xFFBDBDBD) : AppTheme.textSecondary;
 
-  static Color get textMuted => AppTheme.textSecondary.withValues(alpha: 0.72);
+  static Color get textMuted =>
+      AppTheme.isDark ? const Color(0xFFA3A3A3) : AppTheme.textSecondary.withValues(alpha: 0.72);
 
   // ─── Brand ─────────────────────────────────────────────────────────────────
 

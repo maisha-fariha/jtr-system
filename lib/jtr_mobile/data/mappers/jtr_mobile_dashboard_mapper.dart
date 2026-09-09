@@ -39,6 +39,7 @@ class JtrMobileDashboardMapper {
 
     final gapSegments = _gapSegmentsFromRecap(recap);
     final gapTotal = (revenue - collected).clamp(0.0, double.infinity);
+    final hourly = _hourlyChart(revenueByHour);
 
     return JtrDashboardData(
       storeName: storeName,
@@ -62,11 +63,35 @@ class JtrMobileDashboardMapper {
         avgCover: _dbl(indicators['average_per_cover']),
       ),
       movements: _movements(indicators),
-      hourlyBars: _hourlyBars(revenueByHour),
-      peakCaption: _peakCaption(revenueByHour),
+      hourlyBars: hourly.bars,
+      peakCaption: hourly.peakCaption,
       periodFrom: filters.dateFrom,
       periodTo: filters.dateTo,
     );
+  }
+
+  static ({List<JtrHourlyBar> bars, String peakCaption}) _hourlyChart(
+    Map<String, dynamic> revenueByHour,
+  ) {
+    final bars = _hourlyBars(revenueByHour);
+    JtrHourlyBar? peakBar;
+    for (final bar in bars) {
+      if (bar.isPeak) {
+        peakBar = bar;
+        break;
+      }
+    }
+    if (peakBar != null && peakBar.amount > 0) {
+      final label = peakBar.hourLabel.isNotEmpty
+          ? peakBar.hourLabel
+          : 'pic';
+      return (
+        bars: bars,
+        peakCaption:
+            'Pic à $label · ${JtrMobileFormatters.currency(peakBar.amount)}',
+      );
+    }
+    return (bars: bars, peakCaption: _peakCaption(revenueByHour));
   }
 
   static List<JtrProductFamily> mapFamilies(Map<String, dynamic> payload) {
@@ -349,20 +374,46 @@ class JtrMobileDashboardMapper {
       byHour[_int(hour['hour'])] = hour;
     }
 
-    final peakHour = payload['peak'] is Map
+    final apiPeakHour = payload['peak'] is Map
         ? _int(Map<String, dynamic>.from(payload['peak'] as Map)['hour'])
         : -1;
 
-    final bars = <JtrHourlyBar>[];
-    // Restaurant day window 10h–23h (14 bars; last slot is 23h).
-    for (var h = 10; h <= 23; h++) {
+    // Build amounts for the visible window, then pick the tallest bar for accent.
+    const startHour = 10;
+    const endHour = 23;
+    final amounts = <int, double>{};
+    var maxRevenue = 0.0;
+    for (var h = startHour; h <= endHour; h++) {
       final slot = byHour[h];
       final revenue = slot != null ? _dbl(slot['revenue']) : 0.0;
+      amounts[h] = revenue;
+      if (revenue > maxRevenue) maxRevenue = revenue;
+    }
+
+    var visualPeakHour = -1;
+    if (maxRevenue > 0) {
+      if (apiPeakHour >= startHour &&
+          apiPeakHour <= endHour &&
+          (amounts[apiPeakHour] ?? 0) >= maxRevenue) {
+        visualPeakHour = apiPeakHour;
+      } else {
+        for (var h = startHour; h <= endHour; h++) {
+          if ((amounts[h] ?? 0) >= maxRevenue) {
+            visualPeakHour = h;
+            break;
+          }
+        }
+      }
+    }
+
+    final bars = <JtrHourlyBar>[];
+    for (var h = startHour; h <= endHour; h++) {
+      final isPeak = h == visualPeakHour;
       bars.add(
         JtrHourlyBar(
-          hourLabel: h.isEven ? '${h}h' : '',
-          amount: revenue,
-          isPeak: h == peakHour,
+          hourLabel: (h.isEven || isPeak) ? '${h}h' : '',
+          amount: amounts[h] ?? 0.0,
+          isPeak: isPeak,
         ),
       );
     }

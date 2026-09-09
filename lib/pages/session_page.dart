@@ -6,6 +6,7 @@ import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:get/get.dart';
 
 import '../controllers/session_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../data/mappers/order_mapper.dart';
 import '../data/models/sales_zone_info.dart';
 import '../models/order_display_entry.dart';
@@ -25,118 +26,129 @@ class SessionPage extends GetView<SessionController> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-          children: [
-            _SessionHeader(),
-            Divider(height: 1, color: AppTheme.cardBorder),
-            const _TableHeader(),
-            Expanded(
-              child: SlidableAutoCloseBehavior(
-                child: Obx(() {
-                  if (controller.isLoadingOrders.value &&
-                      controller.orders.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.5,
-                              color: AppTheme.primary,
-                            ),
-                          ),
-                          JtrResponsive.getResponsiveSpacing(context, 12),
-                          Text(
-                            'Chargement…',
-                            style: TextStyle(
-                              fontSize: JtrResponsive.getResponsiveFontSize(
-                                context,
-                                13,
-                              ),
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
-
-                  if (controller.orders.isEmpty) {
-                    return RefreshIndicator(
-                      color: AppTheme.primary,
-                      onRefresh: () => controller.loadSessionOrders(
-                        forceRefresh: true,
-                        // Full replace + table-key dedupe: avoids draft+server
-                        // duplicates after Send → quick swipe refresh.
-                        replaceExistingList: true,
-                      ),
-                      child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        children: [
-                          SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.35,
-                            child: Center(
-                              child: Text(
-                                controller.ordersError.value ??
-                                    'Aucune commande ouverte',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  fontSize: JtrResponsive.getResponsiveFontSize(
-                                    context,
-                                    13,
+    // Rebuild with global theme — AppTheme.* is static and will not update
+    // unless this page listens to [ThemeController] (same pattern as HomePage).
+    // Without this, toggling theme from JTR Mobile leaves session chrome/cards
+    // out of sync (e.g. light scaffold + dark rows).
+    return Obx(() {
+      final isDark = ThemeController.to.isDark.value;
+      return Scaffold(
+        key: ValueKey<bool>(isDark),
+        backgroundColor: AppTheme.background,
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  _SessionHeader(),
+                  Divider(height: 1, color: AppTheme.cardBorder),
+                  const _TableHeader(),
+                  Expanded(
+                    child: SlidableAutoCloseBehavior(
+                      child: Obx(() {
+                        if (controller.isLoadingOrders.value &&
+                            controller.orders.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const SizedBox(
+                                  width: 32,
+                                  height: 32,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: AppTheme.primary,
                                   ),
-                                  color: AppTheme.textSecondary,
                                 ),
-                              ),
+                                JtrResponsive.getResponsiveSpacing(context, 12),
+                                Text(
+                                  'Chargement…',
+                                  style: TextStyle(
+                                    fontSize:
+                                        JtrResponsive.getResponsiveFontSize(
+                                      context,
+                                      13,
+                                    ),
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }
+                          );
+                        }
 
-                  return RefreshIndicator(
-                    color: AppTheme.primary,
-                    onRefresh: () => controller.loadSessionOrders(
-                      forceRefresh: true,
-                      // Full replace + table-key dedupe: avoids draft+server
-                      // duplicates after Send → quick swipe refresh.
-                      replaceExistingList: true,
+                        if (controller.orders.isEmpty) {
+                          return RefreshIndicator(
+                            color: AppTheme.primary,
+                            onRefresh: () => controller.loadSessionOrders(
+                              forceRefresh: true,
+                              // Full replace + table-key dedupe: avoids draft+server
+                              // duplicates after Send → quick swipe refresh.
+                              replaceExistingList: true,
+                            ),
+                            child: ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                SizedBox(
+                                  height:
+                                      MediaQuery.of(context).size.height * 0.35,
+                                  child: Center(
+                                    child: Text(
+                                      controller.ordersError.value ??
+                                          'Aucune commande ouverte',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(
+                                        fontSize: JtrResponsive
+                                            .getResponsiveFontSize(
+                                          context,
+                                          13,
+                                        ),
+                                        color: AppTheme.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return RefreshIndicator(
+                          color: AppTheme.primary,
+                          onRefresh: () => controller.loadSessionOrders(
+                            forceRefresh: true,
+                            // Full replace + table-key dedupe: avoids draft+server
+                            // duplicates after Send → quick swipe refresh.
+                            replaceExistingList: true,
+                          ),
+                          child: const _SessionOrdersList(),
+                        );
+                      }),
                     ),
-                    child: const _SessionOrdersList(),
-                  );
-                }),
+                  ),
+                  const _ActionButtons(),
+                  if (kShowBottomNavigationBar) ...[
+                    Divider(height: 1, color: AppTheme.cardBorder),
+                    _BottomNavBar(),
+                  ],
+                ],
               ),
-            ),
-            const _ActionButtons(),
-            if (kShowBottomNavigationBar) ...[
-              Divider(height: 1, color: AppTheme.cardBorder),
-              _BottomNavBar(),
+              Obx(() {
+                if (!controller.isCreatingOrder.value) {
+                  return const SizedBox.shrink();
+                }
+                return const ColoredBox(
+                  color: Color(0x33000000),
+                  child: Center(
+                    child: CircularProgressIndicator(color: AppTheme.primary),
+                  ),
+                );
+              }),
             ],
-          ],
+          ),
         ),
-            Obx(() {
-              if (!controller.isCreatingOrder.value) {
-                return const SizedBox.shrink();
-              }
-              return const ColoredBox(
-                color: Color(0x33000000),
-                child: Center(
-                  child: CircularProgressIndicator(color: AppTheme.primary),
-                ),
-              );
-            }),
-          ],
-        ),
-      ),
-    );
+      );
+    });
   }
 }
 

@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../utils/responsive.dart';
+import '../assistant/jtr_mobile_assistant_chat_view.dart';
+import '../pages/jtr_mobile_assistant_page.dart';
 import '../theme/jtr_mobile_theme.dart';
 
+/// Compact dashboard chat card. Opens [JtrMobileAssistantPage] for full screen.
+///
+/// TEMPORARY mock UI — remove mock wiring when backend assistant API is ready.
 class JtrMobileChatPanel extends StatelessWidget {
   const JtrMobileChatPanel({super.key});
 
@@ -37,119 +42,102 @@ class JtrMobileChatPanel extends StatelessWidget {
                   color: JtrMobileTheme.accent,
                 ),
                 SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),
-                Text(
-                  'Assistant IA',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                    fontWeight: FontWeight.w600,
-                    color: JtrMobileTheme.textPrimary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              horizontal: 14,
-              vertical: 12,
-            ),
-            child: Container(
-              padding: JtrResponsive.getResponsivePadding(
-                context,
-                horizontal: 12,
-                vertical: 10,
-              ),
-              decoration: BoxDecoration(
-                color: JtrMobileTheme.surfaceTile,
-                borderRadius: BorderRadius.circular(
-                  JtrMobileTheme.tileRadius,
-                ),
-              ),
-              child: Text(
-                'Bonjour 👋 Je peux vous résumer vos ventes, expliquer un '
-                'écart ou comparer deux périodes. Que voulez-vous savoir ?',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                  height: 1.5,
-                  color: JtrMobileTheme.textPrimary,
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              horizontal: 14,
-              vertical: 0,
-            ).copyWith(bottom: 14),
-            child: Row(
-              children: [
                 Expanded(
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Écrivez votre question...',
-                      hintStyle: TextStyle(
-                        fontSize:
-                            JtrResponsive.getResponsiveFontSize(context, 12),
-                        color: JtrMobileTheme.textMuted,
-                      ),
-                      filled: true,
-                      fillColor: JtrMobileTheme.surfaceTile,
-                      contentPadding: JtrResponsive.getResponsivePadding(
-                        context,
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(
-                          JtrMobileTheme.tileRadius,
-                        ),
-                        borderSide: BorderSide(
-                          color: JtrMobileTheme.borderStrong,
-                          width: 0.5,
-                        ),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(
-                          JtrMobileTheme.tileRadius,
-                        ),
-                        borderSide: BorderSide(
-                          color: JtrMobileTheme.borderStrong,
-                          width: 0.5,
-                        ),
-                      ),
-                    ),
+                  child: Text(
+                    'Assistant IA',
                     style: TextStyle(
                       fontSize:
-                          JtrResponsive.getResponsiveFontSize(context, 12),
+                          JtrResponsive.getResponsiveFontSize(context, 13),
+                      fontWeight: FontWeight.w600,
                       color: JtrMobileTheme.textPrimary,
                     ),
                   ),
                 ),
+                Text(
+                  'Démo',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+                    fontWeight: FontWeight.w600,
+                    color: JtrMobileTheme.accent,
+                  ),
+                ),
                 SizedBox(width: JtrResponsive.getResponsiveWidth(context, 6)),
                 Material(
-                  color: JtrMobileTheme.accent,
-                  borderRadius: BorderRadius.circular(
-                    JtrMobileTheme.tileRadius,
-                  ),
+                  color: Colors.transparent,
                   child: InkWell(
-                    onTap: () {},
+                    onTap: () => JtrMobileAssistantPage.open(),
                     borderRadius: BorderRadius.circular(
                       JtrMobileTheme.tileRadius,
                     ),
-                    child: SizedBox(
-                      width: JtrResponsive.getResponsiveSize(context, 34),
-                      height: JtrResponsive.getResponsiveSize(context, 34),
+                    child: Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
                       child: Icon(
-                        Icons.send_rounded,
-                        color: JtrMobileTheme.accentOnAccent,
-                        size: JtrResponsive.getResponsiveSize(context, 16),
+                        Icons.open_in_full_rounded,
+                        size: JtrResponsive.getResponsiveSize(context, 18),
+                        color: JtrMobileTheme.accent,
                       ),
                     ),
                   ),
                 ),
               ],
+            ),
+          ),
+          const JtrMobileAssistantChatView(expanded: false),
+          Padding(
+            padding: JtrResponsive.getResponsivePadding(
+              context,
+              horizontal: 14,
+            ).copyWith(
+              bottom: JtrResponsive.getResponsiveHeight(context, 12),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: () => JtrMobileAssistantPage.open(),
+                borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
+                child: Ink(
+                  width: double.infinity,
+                  padding: JtrResponsive.getResponsivePadding(
+                    context,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(
+                      JtrMobileTheme.tileRadius,
+                    ),
+                    border: Border.all(
+                      color: JtrMobileTheme.borderStrong,
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.fullscreen_rounded,
+                        size: JtrResponsive.getResponsiveSize(context, 16),
+                        color: JtrMobileTheme.accent,
+                      ),
+                      SizedBox(
+                        width: JtrResponsive.getResponsiveWidth(context, 6),
+                      ),
+                      Text(
+                        'Ouvrir en plein écran',
+                        style: TextStyle(
+                          fontSize:
+                              JtrResponsive.getResponsiveFontSize(context, 13),
+                          fontWeight: FontWeight.w600,
+                          color: JtrMobileTheme.accent,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ],

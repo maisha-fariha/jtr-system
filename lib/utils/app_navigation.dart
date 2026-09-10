@@ -5,6 +5,7 @@ import '../controllers/login_controller.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../jtr_mobile/assistant/jtr_mobile_assistant_controller.dart';
 import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
 import '../jtr_mobile/data/jtr_mobile_dashboard_remote_datasource.dart';
 import '../jtr_mobile/data/repositories/jtr_mobile_dashboard_repository.dart';
@@ -45,6 +46,9 @@ class AppNavigation {
   }
 
   static void _disposeSessionScopedControllers() {
+    if (Get.isRegistered<JtrMobileAssistantController>()) {
+      Get.delete<JtrMobileAssistantController>(force: true);
+    }
     if (Get.isRegistered<JtrMobileDashboardController>()) {
       Get.delete<JtrMobileDashboardController>(force: true);
     }

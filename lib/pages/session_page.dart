@@ -1225,7 +1225,7 @@ class _ActionButtons extends GetView<SessionController> {
     ),
     (
       action: SessionAction.dashboard,
-      label: 'DASH',
+      label: 'RAPPORT',
       icon: Icons.insights_rounded,
       iconSize: 28.0,
     ),

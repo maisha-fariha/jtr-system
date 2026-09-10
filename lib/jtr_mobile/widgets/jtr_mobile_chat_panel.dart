@@ -87,59 +87,6 @@ class JtrMobileChatPanel extends StatelessWidget {
             ),
           ),
           const JtrMobileAssistantChatView(expanded: false),
-          Padding(
-            padding: JtrResponsive.getResponsivePadding(
-              context,
-              horizontal: 14,
-            ).copyWith(
-              bottom: JtrResponsive.getResponsiveHeight(context, 12),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: () => JtrMobileAssistantPage.open(),
-                borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
-                child: Ink(
-                  width: double.infinity,
-                  padding: JtrResponsive.getResponsivePadding(
-                    context,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(
-                      JtrMobileTheme.tileRadius,
-                    ),
-                    border: Border.all(
-                      color: JtrMobileTheme.borderStrong,
-                      width: 0.5,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.fullscreen_rounded,
-                        size: JtrResponsive.getResponsiveSize(context, 16),
-                        color: JtrMobileTheme.accent,
-                      ),
-                      SizedBox(
-                        width: JtrResponsive.getResponsiveWidth(context, 6),
-                      ),
-                      Text(
-                        'Ouvrir en plein écran',
-                        style: TextStyle(
-                          fontSize:
-                              JtrResponsive.getResponsiveFontSize(context, 13),
-                          fontWeight: FontWeight.w600,
-                          color: JtrMobileTheme.accent,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );

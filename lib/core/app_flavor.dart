@@ -1,12 +1,13 @@
 /// Build flavor: POS floor app vs manager Rapport (JTR Mobile) app.
 ///
 /// Set from entrypoints (`main_pos.dart` / `main_rapport.dart`) before [runApp].
-/// Android: different `applicationId` so both APKs install side-by-side.
+/// Android: different `applicationId` so both APKs install side-by-side
+/// (`com.jtrsystem.pos` / `com.jtrsystem.report`).
 enum AppFlavor {
-  /// Existing waiter / cashier POS (`com.example.jtr_system`).
+  /// Existing waiter / cashier POS (`com.jtrsystem.pos`).
   pos,
 
-  /// Manager Rapport dashboard (`com.example.jtr_rapport`).
+  /// Manager Rapport dashboard (`com.jtrsystem.report`).
   rapport,
 }
 

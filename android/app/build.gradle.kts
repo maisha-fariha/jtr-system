@@ -20,8 +20,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Replace with production IDs before Play Store release.
-        applicationId = "com.example.jtr_system"
+        applicationId = "com.jtrsystem.pos"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -32,12 +31,12 @@ android {
     productFlavors {
         create("pos") {
             dimension = "app"
-            applicationId = "com.example.jtr_system"
+            applicationId = "com.jtrsystem.pos"
             resValue("string", "app_name", "JTR System")
         }
         create("rapport") {
             dimension = "app"
-            applicationId = "com.example.jtr_rapport"
+            applicationId = "com.jtrsystem.report"
             resValue("string", "app_name", "JTR Rapport")
         }
     }

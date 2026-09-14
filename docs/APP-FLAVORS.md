@@ -4,10 +4,10 @@ Same codebase ships **two installable apps** (side-by-side on one device).
 
 | Flavor | App name | Android `applicationId` | Entry | What it is |
 |--------|----------|-------------------------|-------|------------|
-| **pos** | JTR System | `com.example.jtr_system` | `lib/main_pos.dart` | Existing waiter/cashier POS |
-| **rapport** | JTR Rapport | `com.example.jtr_rapport` | `lib/main_rapport.dart` | Manager dashboard (login → Rapport) |
+| **pos** | JTR System | `com.jtrsystem.pos` | `lib/main_pos.dart` | Existing waiter/cashier POS |
+| **rapport** | JTR Rapport | `com.jtrsystem.report` | `lib/main_rapport.dart` | Manager dashboard (login → Rapport) |
 
-Replace `com.example.*` with your production package IDs in `android/app/build.gradle.kts` before store release.
+Update these IDs in `android/app/build.gradle.kts` if branding needs change before store release.
 
 ## Run (debug)
 

@@ -72,6 +72,18 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                     ),
                     child: const Text('Réessayer'),
                   ),
+                  SizedBox(
+                    height: JtrResponsive.getResponsiveHeight(context, 12),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: () => AppNavigation.logout(),
+                    icon: const Icon(Icons.logout_rounded),
+                    label: const Text('Se déconnecter'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: JtrMobileTheme.textPrimary,
+                      side: BorderSide(color: JtrMobileTheme.borderStrong),
+                    ),
+                  ),
                 ],
               ),
             ),

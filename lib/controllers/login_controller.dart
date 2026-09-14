@@ -9,6 +9,7 @@ import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../controllers/session_controller.dart';
+import '../core/app_flavor.dart';
 import '../models/user_suggestion.dart';
 import '../routes/app_pages.dart';
 import '../services/reverb_realtime_service.dart';
@@ -170,9 +171,12 @@ class LoginController extends GetxController {
       if (Get.isRegistered<ReverbRealtimeService>()) {
         unawaited(Get.find<ReverbRealtimeService>().start());
       }
-      // Auth succeeded — reuse the existing "Chargement base de données"
-      // screen to preload session data before the session page mounts.
-      Get.offNamed(AppRoutes.connect);
+      // Auth succeeded — POS preloads session; Rapport opens dashboard.
+      if (AppFlavorConfig.isRapport) {
+        Get.offAllNamed(AppRoutes.jtrMobileDashboard);
+      } else {
+        Get.offNamed(AppRoutes.connect);
+      }
     } on ApiException catch (error) {
       final deactivated = _deactivationMessageFromApi(error.message);
       if (deactivated != null) {

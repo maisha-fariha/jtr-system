@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../controllers/theme_controller.dart';
+import '../../core/app_flavor.dart';
+import '../../utils/app_navigation.dart';
 import '../../utils/responsive.dart';
 import '../controllers/jtr_mobile_dashboard_controller.dart';
 import '../theme/jtr_mobile_theme.dart';
@@ -146,6 +148,33 @@ class JtrMobileHeader extends StatelessWidget {
                 ),
               ),
             ),
+            if (AppFlavorConfig.isRapport) ...[
+              SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),
+              Material(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(
+                  JtrMobileTheme.tileRadius,
+                ),
+                child: InkWell(
+                  onTap: () => AppNavigation.logout(),
+                  borderRadius: BorderRadius.circular(
+                    JtrMobileTheme.tileRadius,
+                  ),
+                  child: Padding(
+                    padding: JtrResponsive.getResponsivePadding(
+                      context,
+                      horizontal: 6,
+                      vertical: 6,
+                    ),
+                    child: Icon(
+                      Icons.logout_rounded,
+                      color: JtrMobileTheme.textSecondary,
+                      size: JtrResponsive.getResponsiveSize(context, 19),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       );

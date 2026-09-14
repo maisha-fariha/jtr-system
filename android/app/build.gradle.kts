@@ -20,14 +20,26 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        // TODO: Replace with production IDs before Play Store release.
         applicationId = "com.example.jtr_system"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    flavorDimensions += "app"
+    productFlavors {
+        create("pos") {
+            dimension = "app"
+            applicationId = "com.example.jtr_system"
+            resValue("string", "app_name", "JTR System")
+        }
+        create("rapport") {
+            dimension = "app"
+            applicationId = "com.example.jtr_rapport"
+            resValue("string", "app_name", "JTR Rapport")
+        }
     }
 
     buildTypes {

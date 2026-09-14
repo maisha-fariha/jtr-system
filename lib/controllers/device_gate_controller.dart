@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/scheduler.dart';
 import 'package:get/get.dart';
 
+import '../core/app_flavor.dart';
 import '../data/models/device_activation_models.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/device_repository.dart';
@@ -47,7 +48,7 @@ class DeviceGateController extends GetxController {
       // Already logged in: open home now, verify device afterwards.
       if (_authRepository.isAuthenticated &&
           await _deviceRepository.hasStoredCredentials) {
-        _go(AppRoutes.session);
+        _go(AppFlavorConfig.homeRoute);
         unawaited(_validateDeviceInBackground());
         return;
       }
@@ -67,7 +68,7 @@ class DeviceGateController extends GetxController {
           // Connect preload is only for fresh login (see LoginController).
           _go(
             _authRepository.isAuthenticated
-                ? AppRoutes.session
+                ? AppFlavorConfig.homeRoute
                 : AppRoutes.login,
           );
           return;

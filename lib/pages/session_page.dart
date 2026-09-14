@@ -1223,12 +1223,6 @@ class _ActionButtons extends GetView<SessionController> {
       icon: Icons.bar_chart_rounded,
       iconSize: 28.0,
     ),
-    (
-      action: SessionAction.dashboard,
-      label: 'RAPPORT',
-      icon: Icons.insights_rounded,
-      iconSize: 28.0,
-    ),
   ];
 
   static double _buttonGap(BuildContext context) {

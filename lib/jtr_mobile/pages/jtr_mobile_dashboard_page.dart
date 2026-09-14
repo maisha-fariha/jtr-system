@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../widgets/app_footer.dart';
+import '../../core/app_flavor.dart';
+import '../../utils/app_navigation.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/responsive.dart';
 import '../controllers/jtr_mobile_dashboard_controller.dart';
@@ -24,7 +26,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
 
   @override
   Widget build(BuildContext context) {
-    return JtrMobileThemeScope(
+    final body = JtrMobileThemeScope(
       builder: (context) => Scaffold(
       backgroundColor: JtrMobileTheme.pageBackground,
       body: SafeArea(
@@ -211,6 +213,16 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
       }),
       ),
       ),
+    );
+
+    if (!AppFlavorConfig.isRapport) return body;
+
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) AppNavigation.logout();
+      },
+      child: body,
     );
   }
 }

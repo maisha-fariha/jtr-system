@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import '../core/app_flavor.dart';
+
 /// Manages dark / light theme toggling for the whole app.
 /// Call [ThemeController.to.toggle()] from any widget.
 class ThemeController extends GetxController {
@@ -11,7 +13,13 @@ class ThemeController extends GetxController {
   @override
   void onInit() {
     super.onInit();
-    isDark.value = Get.isDarkMode;
+    // Rapport app starts in dark mode; POS follows GetX / system default.
+    if (AppFlavorConfig.isRapport) {
+      isDark.value = true;
+      Get.changeThemeMode(ThemeMode.dark);
+    } else {
+      isDark.value = Get.isDarkMode;
+    }
   }
 
   void toggle() {

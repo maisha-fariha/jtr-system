@@ -32,10 +32,12 @@ class JtrMobileDashboardController extends GetxController {
 
   JtrMobileDashboardFilters? _filters;
 
-  DateTime get periodFrom =>
-      _filters?.dateFrom ??
-      data.value?.periodFrom ??
-      DateTime(DateTime.now().year, 1, 1);
+  DateTime get periodFrom {
+    final now = DateTime.now();
+    return _filters?.dateFrom ??
+        data.value?.periodFrom ??
+        DateTime(now.year, now.month, now.day);
+  }
   DateTime get periodTo {
     final now = DateTime.now();
     return _filters?.dateTo ??

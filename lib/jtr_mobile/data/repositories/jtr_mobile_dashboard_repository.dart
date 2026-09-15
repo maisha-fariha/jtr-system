@@ -24,12 +24,12 @@ class JtrMobileDashboardRepository {
     'pertes',
   ];
 
-  /// Default range: first day of the current year → today (`YYYY-MM-DD`).
+  /// Default range: today only (`YYYY-MM-DD` → `YYYY-MM-DD`).
+  /// User can widen the range later via the period picker.
   Future<JtrMobileDashboardFilters> resolveDefaultFilters() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final yearStart = DateTime(now.year, 1, 1);
-    return JtrMobileDashboardFilters(dateFrom: yearStart, dateTo: today);
+    return JtrMobileDashboardFilters(dateFrom: today, dateTo: today);
   }
 
   Future<JtrDashboardData> fetchDashboard({

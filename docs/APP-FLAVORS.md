@@ -35,7 +35,7 @@ Outputs (typical):
 
 **POS:** device gate → activation (if needed) → login → connect preload → session floor.
 
-**Rapport:** device gate → activation (if needed) → login → JTR Mobile dashboard (no session floor). Logout from the header.
+**Rapport:** device gate → activation (if needed) → login → JTR Mobile dashboard (no session floor). Logout from the header. Defaults: **today’s date** for filters, **dark mode** on.
 
 The RAPPORT tab was removed from the POS bottom bar; managers use the **JTR Rapport** app.
 

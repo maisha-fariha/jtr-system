@@ -66,8 +66,7 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
-                                JtrMobileFormatters.currency(total, compact: true)
-                                    .replaceAll(' DH', ''),
+                                JtrMobileFormatters.currency(total, compact: true),
                                 style: TextStyle(
                                   fontSize: JtrResponsive.getResponsiveFontSize(
                                     context,
@@ -79,7 +78,7 @@ class JtrMobileGapDonutCard extends StatelessWidget {
                                 ),
                               ),
                               Text(
-                                'DH non encaissé',
+                                'non encaissé',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: JtrResponsive.getResponsiveFontSize(

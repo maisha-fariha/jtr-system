@@ -22,13 +22,13 @@ class JtrMobileFormatters {
   static String currency(double value, {bool compact = false}) {
     final negative = value < 0;
     final core = _formatExactNumber(value.abs());
-    return '${negative ? '-' : ''}$core DH';
+    return '${negative ? '-' : ''}$core';
   }
 
   static String decimal(double value) {
     final negative = value < 0;
     final core = _formatExactNumber(value.abs());
-    return '${negative ? '-' : ''}$core DH';
+    return '${negative ? '-' : ''}$core';
   }
 
   /// Exact percent label (no integer round).

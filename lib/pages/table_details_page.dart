@@ -1751,22 +1751,59 @@ class _MenuGrid extends GetView<TableDetailsController> {
                               ),
                               Expanded(
                                 child: Center(
-                                  child: Text(
-                                    product.name,
-                                    textAlign: TextAlign.center,
-                                    maxLines: 3,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize:
-                                          _categoryPartFontSize(context, 11),
-                                      fontWeight: FontWeight.w700,
-                                      color: AppTheme.darkText.withValues(
-                                        alpha: orderOffered
-                                            ? 0.45
-                                            : (isInOrder ? 0.78 : 0.92),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        product.name,
+                                        textAlign: TextAlign.center,
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: _categoryPartFontSize(
+                                            context,
+                                            11,
+                                          ),
+                                          fontWeight: FontWeight.w700,
+                                          color: AppTheme.darkText.withValues(
+                                            alpha: orderOffered
+                                                ? 0.45
+                                                : (isInOrder ? 0.78 : 0.92),
+                                          ),
+                                          height: 1.28,
+                                        ),
                                       ),
-                                      height: 1.28,
-                                    ),
+                                      if (!stockMode) ...[
+                                        SizedBox(
+                                          height:
+                                              JtrResponsive.getResponsiveHeight(
+                                            context,
+                                            4,
+                                          ),
+                                        ),
+                                        Text(
+                                          product.isPrixLibre ||
+                                                  product.requiresCashierPrice
+                                              ? 'Prix libre'
+                                              : product.formattedPrice,
+                                          textAlign: TextAlign.center,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontSize: _categoryPartFontSize(
+                                              context,
+                                              10,
+                                            ),
+                                            fontWeight: FontWeight.w600,
+                                            color: AppTheme.primary.withValues(
+                                              alpha: orderOffered
+                                                  ? 0.45
+                                                  : (isInOrder ? 0.75 : 1),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
                               ),

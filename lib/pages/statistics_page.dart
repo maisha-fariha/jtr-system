@@ -91,7 +91,7 @@ class StatisticsPage extends GetView<SessionController> {
                       child: _KpiCard(
                         label: 'REVENU TOTAL',
                         value: _formatTotal(totalRevenue),
-                        icon: Icons.euro_symbol_rounded,
+                        icon: Icons.payments_rounded,
                         iconColor: AppTheme.primary,
                       ),
                     ),
@@ -152,7 +152,7 @@ class StatisticsPage extends GetView<SessionController> {
 
   String _formatTotal(double value) {
     final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
-    return '$formatted €';
+    return formatted;
   }
 
   double _parseTotal(String total) {

@@ -3623,7 +3623,7 @@ class TableDetailsController extends GetxController {
   void _applyLocalProductOffer(SessionOrder currentOrder, int productIndex) {
     final offered = currentOrder.products[productIndex].copyWith(
       isOffered: true,
-      price: '0,00 €',
+      price: '0,00',
     );
     final updatedProducts = [...currentOrder.products];
     updatedProducts[productIndex] = offered;
@@ -3635,7 +3635,7 @@ class TableDetailsController extends GetxController {
           OrderDisplayEntry.product(
             product: entry.product!.copyWith(
               isOffered: true,
-              price: '0,00 €',
+              price: '0,00',
             ),
             lineIndex: productIndex,
             sectionIndex: entry.sectionIndex ?? 0,

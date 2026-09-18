@@ -2671,7 +2671,7 @@ class SessionController extends GetxController {
     final offeredProducts = order.products
         .map(
           (product) => product.copyWith(
-            price: '0,00 €',
+            price: '0,00',
             isOffered: true,
           ),
         )
@@ -2682,7 +2682,7 @@ class SessionController extends GetxController {
             entry.product != null)
           OrderDisplayEntry.product(
             product: entry.product!.copyWith(
-              price: '0,00 €',
+              price: '0,00',
               isOffered: true,
             ),
             lineIndex: entry.lineIndex ?? 0,
@@ -2694,7 +2694,7 @@ class SessionController extends GetxController {
           entry,
     ];
     orders[idx] = order.copyWith(
-      total: '0,00 €',
+      total: '0,00',
       products: offeredProducts,
       displayEntries: offeredEntries.isNotEmpty
           ? offeredEntries

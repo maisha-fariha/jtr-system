@@ -185,7 +185,7 @@ class _PrixLibrePriceDialogState extends State<PrixLibrePriceDialog> {
                   ),
                   decoration: InputDecoration(
                     errorText: _errorText,
-                    suffixText: '€',
+                    // no currency suffix
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(
                         JtrResponsive.getResponsiveRadius(context, 12),

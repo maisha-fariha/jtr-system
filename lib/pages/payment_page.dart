@@ -123,13 +123,13 @@ class _SummaryCard extends StatelessWidget {
               ),
             ),
             JtrResponsive.getResponsiveSpacing(context, 10),
-            _kv(context, 'Total', _euro(controller.totalAmount.value)),
-            _kv(context, 'Déjà payé', _euro(controller.totalPaid.value)),
+            _kv(context, 'Total', _formatAmount(controller.totalAmount.value)),
+            _kv(context, 'Déjà payé', _formatAmount(controller.totalPaid.value)),
             const Divider(height: 20),
             _kv(
               context,
               'Reste à payer',
-              _euro(controller.remaining.value),
+              _formatAmount(controller.remaining.value),
               emphasize: true,
             ),
           ],
@@ -315,7 +315,7 @@ class _SeatPaymentCard extends StatelessWidget {
                   paid
                       ? 'Payé'
                       : (input.suggestedAmount > 0
-                          ? 'Part ${_euro(input.suggestedAmount)}'
+                          ? 'Part ${_formatAmount(input.suggestedAmount)}'
                           : ''),
                   style: TextStyle(
                     color: paid ? AppTheme.textSecondary : AppTheme.primary,
@@ -367,7 +367,7 @@ class _SeatPaymentCard extends StatelessWidget {
                 decoration: InputDecoration(
                   labelText: 'Montant',
                   hintText: 'Vide = ne paie pas',
-                  suffixText: '€',
+                  // no currency suffix
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
@@ -386,7 +386,7 @@ class _SeatPaymentCard extends StatelessWidget {
                   decoration: InputDecoration(
                     labelText: 'Montant donné',
                     hintText: 'Espèces reçues',
-                    suffixText: '€',
+                    // no currency suffix
                     helperText: 'Moins = partiel · Plus = rendu',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -521,7 +521,7 @@ class _LineEditor extends StatelessWidget {
             ],
             decoration: InputDecoration(
               labelText: 'Montant',
-              suffixText: '€',
+              // no currency suffix
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -539,7 +539,7 @@ class _LineEditor extends StatelessWidget {
               decoration: InputDecoration(
                 labelText: 'Montant donné',
                 hintText: 'Espèces reçues (ex. 50 si rendu)',
-                suffixText: '€',
+                // no currency suffix
                 helperText:
                     'Si moins que le montant → paiement partiel. '
                     'Si plus → rendu (change).',
@@ -630,7 +630,7 @@ class _TransactionsCard extends StatelessWidget {
     final mode = tx['payment_mode'];
     final name = mode is Map ? mode['name']?.toString() : null;
     final amount = tx['amount'];
-    return '${name ?? 'Paiement'}  ${_euro(_asDouble(amount) ?? 0)}';
+    return '${name ?? 'Paiement'}  ${_formatAmount(_asDouble(amount) ?? 0)}';
   }
 }
 
@@ -722,8 +722,8 @@ class _ErrorState extends StatelessWidget {
   }
 }
 
-String _euro(double value) =>
-    '${value.toStringAsFixed(2).replaceAll('.', ',')} €';
+String _formatAmount(double value) =>
+    value.toStringAsFixed(2).replaceAll('.', ',');
 
 double? _asDouble(dynamic raw) {
   if (raw is num) return raw.toDouble();

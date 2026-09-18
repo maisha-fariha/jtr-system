@@ -3651,7 +3651,7 @@ class OrderMapper {
 
   static String? _productFingerprint(OrderProduct? product) {
     if (product == null) return null;
-    // Name + qty only — price formatting ("5" vs "5,00 €") breaks matching.
+    // Name + qty only — price formatting ("5" vs "5,00") breaks matching.
     return '${product.name.trim().toUpperCase()}|${product.quantity}';
   }
 
@@ -3795,7 +3795,7 @@ class OrderMapper {
               offeredByItemId.contains(itemId)) ||
           offeredByLineIndex.contains(index);
       if (!offered || product.isOffered) return product;
-      return product.copyWith(isOffered: true, price: '0,00 €');
+      return product.copyWith(isOffered: true, price: '0,00');
     }
 
     final patchedEntries = [
@@ -4132,7 +4132,7 @@ class OrderMapper {
 
   static String formatPrice(String value) {
     final parsed = double.tryParse(value.replaceAll(',', '.')) ?? 0;
-    return '${parsed.toStringAsFixed(2).replaceAll('.', ',')} €';
+    return parsed.toStringAsFixed(2).replaceAll('.', ',');
   }
 
   static Color impressionColorFor(int count) {
@@ -8054,7 +8054,7 @@ class OrderMapper {
 
   static String formatPaymentAmountDisplay(double amount) {
     final formatted = amount.toStringAsFixed(2).replaceAll('.', ',');
-    return '$formatted €';
+    return formatted;
   }
 
   static double parseOrderTotalAmount(Map<String, dynamic> data) {
@@ -8977,7 +8977,7 @@ class OrderMapper {
       result = result.copyWith(menuItems: List<String>.from(live.menuItems));
     }
     if (live.isOffered && !result.isOffered) {
-      result = result.copyWith(isOffered: true, price: '0,00 €');
+      result = result.copyWith(isOffered: true, price: '0,00');
     }
     return result;
   }
@@ -8998,7 +8998,7 @@ class OrderMapper {
     return OrderProduct(
       quantity: '$qty',
       name: name,
-      price: isOffer ? '0,00 €' : formatPrice(subTotal),
+      price: isOffer ? '0,00' : formatPrice(subTotal),
       message: message,
       menuItems: menuSelectionLabelsFromItem(item),
       isOffered: isOffer,

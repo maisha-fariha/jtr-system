@@ -47,7 +47,7 @@ class CatalogProductModel {
       double.tryParse(price.replaceAll(',', '.')) ?? 0;
 
   String get formattedPrice =>
-      '${unitPrice.toStringAsFixed(2).replaceAll('.', ',')} €';
+      unitPrice.toStringAsFixed(2).replaceAll('.', ',');
 
   CatalogProductModel copyWith({
     int? id,

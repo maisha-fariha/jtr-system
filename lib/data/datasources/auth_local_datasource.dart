@@ -74,4 +74,13 @@ class AuthLocalDataSource {
   String? readToken() => _storage.readString(StorageConstants.authTokenKey);
 
   Future<void> clearSession() => _storage.clearAuth();
+
+  /// Drop cached login users/roles so a restaurant switch never shows
+  /// the previous tenant's directory.
+  Future<void> clearLoginDirectory() async {
+    await Future.wait([
+      _storage.delete(StorageConstants.loginUsersKey),
+      _storage.delete(StorageConstants.loginRolesKey),
+    ]);
+  }
 }

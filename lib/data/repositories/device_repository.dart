@@ -1,7 +1,10 @@
+import '../../core/app_flavor.dart';
 import '../../core/config/api_config.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/device_secure_storage.dart';
+import '../../jtr_mobile/restaurants/rapport_restaurant_store.dart';
+import '../../jtr_mobile/restaurants/rapport_saved_restaurant.dart';
 import '../../utils/api_log.dart';
 import '../datasources/device_remote_datasource.dart';
 import '../mappers/device_activation_mapper.dart';
@@ -286,6 +289,15 @@ class DeviceRepository {
       label: result.label,
     );
     await _secureStorage.saveCredentials(credentials);
+
+    if (AppFlavorConfig.isRapport &&
+        Get.isRegistered<RapportRestaurantStore>()) {
+      try {
+        await Get.find<RapportRestaurantStore>().upsertAndSelect(
+          RapportSavedRestaurant.fromCredentials(credentials),
+        );
+      } catch (_) {}
+    }
 
     ApiConfig.applyRuntime(
       baseUrl: credentials.apiBaseUrl,

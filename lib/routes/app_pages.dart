@@ -126,10 +126,13 @@ class AppPages {
       name: AppRoutes.login,
       page: () => const LoginPage(),
       binding: BindingsBuilder(() {
-        if (Get.isRegistered<LoginController>()) {
-          Get.delete<LoginController>(force: true);
+        // Permanent so offAllNamed / stack clears do not drop it under Obx.
+        if (!Get.isRegistered<LoginController>()) {
+          Get.put(
+            LoginController(authRepository: Get.find<AuthRepository>()),
+            permanent: true,
+          );
         }
-        Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
       }),
     ),
     GetPage(

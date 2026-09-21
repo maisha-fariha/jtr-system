@@ -35,7 +35,7 @@ Outputs (typical):
 
 **POS:** device gate → activation (if needed) → login → connect preload → session floor.
 
-**Rapport:** device gate → activation (if needed) → login → JTR Mobile dashboard (no session floor). Logout from the header. Defaults: **today’s date** for filters, **dark mode** on.
+**Rapport:** device gate → activation (if needed) → login → JTR Mobile dashboard (no session floor). Logout from the header. Defaults: **today’s date** for filters, **dark mode** on. Login supports **multi-restaurant**: saved QR bindings in a dropdown + « Ajouter un restaurant (QR) ».
 
 The RAPPORT tab was removed from the POS bottom bar; managers use the **JTR Rapport** app.
 

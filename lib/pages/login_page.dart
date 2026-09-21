@@ -3,21 +3,34 @@ import 'package:get/get.dart';
 
 import '../controllers/login_controller.dart';
 import '../controllers/theme_controller.dart';
+import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/app_footer.dart';
 import '../widgets/themed_asset_image.dart';
 import '../widgets/user_identifiant_field.dart';
 
-class LoginPage extends GetView<LoginController> {
+class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
+
+  LoginController get _c {
+    AppNavigation.ensureLoginControllerForNavigation(recreate: false);
+    return Get.find<LoginController>();
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Guarantee DI before any Obx / GetView-style access.
+    final controller = _c;
+
     return Obx(() {
       if (Get.isRegistered<ThemeController>()) {
         ThemeController.to.isDark.value;
       }
+      // Re-resolve in case a navigation recreate swapped the instance.
+      final c = Get.isRegistered<LoginController>()
+          ? Get.find<LoginController>()
+          : controller;
 
       final horizontalPadding = JtrResponsive.getResponsiveWidth(context, 32);
       final fieldWidth =
@@ -73,19 +86,25 @@ class LoginPage extends GetView<LoginController> {
                   children: [
                     JtrResponsive.getResponsiveSpacing(context, 40),
                     const ThemedAssetImage.logo(),
-                    JtrResponsive.getResponsiveSpacing(context, 48),
+                    if (c.showRestaurantSwitcher) ...[
+                      JtrResponsive.getResponsiveSpacing(context, 48),
+                      _AddRestaurantButton(controller: c),
+                      JtrResponsive.getResponsiveSpacing(context, 24),
+                    ] else
+                      JtrResponsive.getResponsiveSpacing(context, 48),
                     Stack(
                       alignment: Alignment.center,
                       children: [
                         UserIdentifiantField(
-                          controller: controller.identifiantFieldController,
+                          controller: c.identifiantFieldController,
                           showFieldIcons: true,
                         ),
                         Obx(
-                          () => controller.isLoadingUsers.value
+                          () => c.isLoadingUsers.value ||
+                                  c.isSwitchingRestaurant.value
                               ? ColoredBox(
-                                  color:
-                                      AppTheme.background.withValues(alpha: 0.7),
+                                  color: AppTheme.background
+                                      .withValues(alpha: 0.7),
                                   child: SizedBox(
                                     width: double.infinity,
                                     height: UserIdentifiantSuggestionsOverlay
@@ -103,9 +122,9 @@ class LoginPage extends GetView<LoginController> {
                       ],
                     ),
                     JtrResponsive.getResponsiveSpacing(context, 16),
-                    _buildPasswordField(context),
+                    _PasswordField(controller: c),
                     const Spacer(),
-                    _buildLoginButton(context),
+                    _LoginButton(controller: c),
                     const Spacer(flex: 2),
                     const AppFooter(),
                     JtrResponsive.getResponsiveSpacing(context, 24),
@@ -114,17 +133,66 @@ class LoginPage extends GetView<LoginController> {
               ),
             ),
             UserIdentifiantSuggestionsOverlay(
-              controller: controller.identifiantFieldController,
+              controller: c.identifiantFieldController,
               fieldWidth: fieldWidth,
-              onUserSelected: controller.selectUser,
+              onUserSelected: c.selectUser,
             ),
           ],
         ),
       );
     });
   }
+}
 
-  Widget _buildPasswordField(BuildContext context) {
+class _AddRestaurantButton extends StatelessWidget {
+  const _AddRestaurantButton({required this.controller});
+
+  final LoginController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final busy = controller.isSwitchingRestaurant.value;
+      return OutlinedButton.icon(
+        onPressed: busy ? null : () => controller.addRestaurantByScan(),
+        icon: Icon(
+          Icons.qr_code_scanner_rounded,
+          size: JtrResponsive.getResponsiveSize(context, 18),
+          color: AppTheme.primary,
+        ),
+        label: Text(
+          'Ajouter un restaurant (QR)',
+          style: TextStyle(
+            color: AppTheme.primary,
+            fontWeight: FontWeight.w600,
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: AppTheme.primary.withValues(alpha: 0.55)),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 20,
+            vertical: 12,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 14),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+class _PasswordField extends StatelessWidget {
+  const _PasswordField({required this.controller});
+
+  final LoginController controller;
+
+  @override
+  Widget build(BuildContext context) {
     return Obx(
       () => AuthInputContainer(
         showIcons: true,
@@ -158,11 +226,19 @@ class LoginPage extends GetView<LoginController> {
       ),
     );
   }
+}
 
-  Widget _buildLoginButton(BuildContext context) {
+class _LoginButton extends StatelessWidget {
+  const _LoginButton({required this.controller});
+
+  final LoginController controller;
+
+  @override
+  Widget build(BuildContext context) {
     return Obx(
       () {
-        final loading = controller.isLoading.value;
+        final loading = controller.isLoading.value ||
+            controller.isSwitchingRestaurant.value;
         return SizedBox(
           width: double.infinity,
           height: JtrResponsive.getResponsiveHeight(context, 56),
@@ -193,7 +269,8 @@ class LoginPage extends GetView<LoginController> {
                 : Text(
                     'Se connecter',
                     style: TextStyle(
-                      fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 18),
                       fontWeight: FontWeight.w600,
                     ),
                   ),

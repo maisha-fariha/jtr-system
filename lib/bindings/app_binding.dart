@@ -17,6 +17,7 @@ import '../data/datasources/order_local_datasource.dart';
 import '../data/datasources/order_remote_datasource.dart';
 import '../data/datasources/session_datasource.dart';
 import '../data/repositories/session_repository.dart';
+import '../jtr_mobile/restaurants/rapport_restaurant_store.dart';
 import '../services/connectivity_service.dart';
 import '../controllers/theme_controller.dart';
 import '../data/datasources/stock_remote_datasource.dart';
@@ -41,6 +42,10 @@ class AppBinding extends Bindings {
     Get.lazyPut<ApiClient>(() => ApiClient(), fenix: true);
     Get.lazyPut<HiveStorage>(() => HiveStorage(), fenix: true);
     Get.lazyPut<DeviceSecureStorage>(() => DeviceSecureStorage(), fenix: true);
+    Get.lazyPut<RapportRestaurantStore>(
+      () => RapportRestaurantStore(),
+      fenix: true,
+    );
     Get.lazyPut<DeviceRemoteDataSource>(
       () => DeviceRemoteDataSource(Get.find<ApiClient>()),
       fenix: true,

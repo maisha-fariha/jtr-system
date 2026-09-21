@@ -5,6 +5,8 @@ import 'package:get/get.dart';
 import '../controllers/device_activation_controller.dart';
 import '../core/config/device_activation_bypass.dart';
 import '../controllers/theme_controller.dart';
+import '../routes/app_pages.dart';
+import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
 import '../utils/responsive.dart';
 import '../widgets/themed_asset_image.dart';
@@ -12,6 +14,11 @@ import '../widgets/themed_asset_image.dart';
 /// Manual + QR-PNG activation screen using the app design system.
 class DeviceActivationPage extends GetView<DeviceActivationController> {
   const DeviceActivationPage({super.key});
+
+  bool get _allowBackToLogin {
+    final args = Get.arguments;
+    return args is Map && args['returnToLogin'] == true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +43,25 @@ class DeviceActivationPage extends GetView<DeviceActivationController> {
                 ),
                 child: Column(
                   children: [
+                    if (_allowBackToLogin) ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: IconButton(
+                          tooltip: 'Retour à la connexion',
+                          onPressed: () {
+                            AppNavigation.ensureLoginControllerForNavigation(
+                              recreate: false,
+                            );
+                            Get.offAllNamed(AppRoutes.login);
+                          },
+                          icon: Icon(
+                            Icons.arrow_back_rounded,
+                            color: AppTheme.darkText,
+                          ),
+                        ),
+                      ),
+                      JtrResponsive.getResponsiveSpacing(context, 8),
+                    ],
                     const ThemedAssetImage.logo(),
                     JtrResponsive.getResponsiveSpacing(context, 28),
                     Container(

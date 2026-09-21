@@ -34,15 +34,25 @@ class AppNavigation {
       await Get.find<AuthRepository>().logout();
     }
     _disposeSessionScopedControllers();
+    // Put LoginController BEFORE the route builds (binding must not delete).
+    ensureLoginControllerForNavigation(recreate: true);
     await Get.offAllNamed(AppRoutes.login);
-    _ensureLoginController();
   }
 
-  /// Route bindings should register [LoginController], but logout must never
-  /// land on login without it (avoids a race when deleting before navigation).
-  static void _ensureLoginController() {
-    if (Get.isRegistered<LoginController>()) return;
-    Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
+  /// Ensures [LoginController] exists before opening login.
+  ///
+  /// Uses [permanent] so `Get.offAllNamed` does not dispose it mid-rebuild
+  /// (that was causing "LoginController not found" on LoginPage Obx).
+  static void ensureLoginControllerForNavigation({bool recreate = false}) {
+    if (recreate && Get.isRegistered<LoginController>()) {
+      Get.delete<LoginController>(force: true);
+    }
+    if (!Get.isRegistered<LoginController>()) {
+      Get.put(
+        LoginController(authRepository: Get.find<AuthRepository>()),
+        permanent: true,
+      );
+    }
   }
 
   static void _disposeSessionScopedControllers() {

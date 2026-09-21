@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:get/get.dart';
 
 import '../../utils/responsive.dart';
 import '../assistant/jtr_mobile_assistant_chat_view.dart';
+import '../assistant/jtr_mobile_assistant_controller.dart';
 import '../pages/jtr_mobile_assistant_page.dart';
 import '../theme/jtr_mobile_theme.dart';
 
 /// Compact dashboard chat card. Opens [JtrMobileAssistantPage] for full screen.
-///
-/// TEMPORARY mock UI — remove mock wiring when backend assistant API is ready.
 class JtrMobileChatPanel extends StatelessWidget {
   const JtrMobileChatPanel({super.key});
 
@@ -53,15 +53,34 @@ class JtrMobileChatPanel extends StatelessWidget {
                     ),
                   ),
                 ),
-                Text(
-                  'Démo',
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
-                    fontWeight: FontWeight.w600,
-                    color: JtrMobileTheme.accent,
+                Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      if (!Get.isRegistered<JtrMobileAssistantController>()) {
+                        Get.put(JtrMobileAssistantController());
+                      }
+                      Get.find<JtrMobileAssistantController>()
+                          .startNewConversation();
+                    },
+                    borderRadius: BorderRadius.circular(
+                      JtrMobileTheme.tileRadius,
+                    ),
+                    child: Padding(
+                      padding: JtrResponsive.getResponsivePadding(
+                        context,
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      child: Icon(
+                        Icons.add_comment_outlined,
+                        size: JtrResponsive.getResponsiveSize(context, 18),
+                        color: JtrMobileTheme.accent,
+                      ),
+                    ),
                   ),
                 ),
-                SizedBox(width: JtrResponsive.getResponsiveWidth(context, 6)),
+                SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
                 Material(
                   color: Colors.transparent,
                   child: InkWell(

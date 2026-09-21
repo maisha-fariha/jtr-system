@@ -23,6 +23,10 @@ class ApiEndpoints {
       '/api/dashboard/product-family-summary';
   static const dashboardEventList = '/api/dashboard/event-list';
   static const dashboardEventListExport = '/api/dashboard/event-list/export';
+
+  /// JTR Rapport / POS read-only AI chat (requires `access-pos-chat`).
+  static const chat = '/api/chat';
+
   static const salesZonesShortlist = '/api/sales-zones/shortlist';
   static const customersShortlist = '/api/customers/shortlist';
   static const customers = '/api/customers';

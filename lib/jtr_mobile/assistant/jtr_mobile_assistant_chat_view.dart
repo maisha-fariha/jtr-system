@@ -7,8 +7,6 @@ import 'jtr_mobile_assistant_controller.dart';
 import 'jtr_mobile_assistant_message.dart';
 
 /// Shared chat body (messages + input) for panel and full-screen page.
-///
-/// TEMPORARY mock UI — remove with `assistant/` when backend API is ready.
 class JtrMobileAssistantChatView extends StatefulWidget {
   const JtrMobileAssistantChatView({
     super.key,
@@ -246,11 +244,19 @@ class _MessageBubble extends StatelessWidget {
           vertical: 10,
         ),
         decoration: BoxDecoration(
-          color: isUser ? JtrMobileTheme.accentBg : JtrMobileTheme.surfaceTile,
+          color: isUser
+              ? JtrMobileTheme.accentBg
+              : (message.isSoftRefusal
+                  ? JtrMobileTheme.warning.withValues(alpha: 0.12)
+                  : JtrMobileTheme.surfaceTile),
           borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
           border: isUser
               ? Border.all(color: JtrMobileTheme.accent.withValues(alpha: 0.35))
-              : null,
+              : (message.isSoftRefusal
+                  ? Border.all(
+                      color: JtrMobileTheme.warning.withValues(alpha: 0.35),
+                    )
+                  : null),
         ),
         child: Text(
           message.text,

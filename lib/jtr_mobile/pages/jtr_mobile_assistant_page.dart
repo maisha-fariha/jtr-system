@@ -9,8 +9,6 @@ import '../theme/jtr_mobile_theme.dart';
 import '../widgets/jtr_mobile_theme_scope.dart';
 
 /// Full-screen Assistant IA chat (shares [JtrMobileAssistantController]).
-///
-/// TEMPORARY mock page — remove with `assistant/` when backend API is ready.
 class JtrMobileAssistantPage extends StatelessWidget {
   const JtrMobileAssistantPage({super.key});
 
@@ -42,7 +40,7 @@ class JtrMobileAssistantPage extends StatelessWidget {
                   alignment: Alignment.center,
                   child: ConstrainedBox(
                     constraints: BoxConstraints(maxWidth: maxW),
-                    child: _AssistantAppBar(),
+                    child: const _AssistantAppBar(),
                   ),
                 ),
               ),
@@ -97,6 +95,8 @@ class JtrMobileAssistantPage extends StatelessWidget {
 }
 
 class _AssistantAppBar extends StatelessWidget {
+  const _AssistantAppBar();
+
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -140,7 +140,7 @@ class _AssistantAppBar extends StatelessWidget {
                 ),
               ),
               Text(
-                'Plein écran · démo locale',
+                'Plein écran · API chat',
                 style: TextStyle(
                   fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                   color: JtrMobileTheme.textMuted,
@@ -149,21 +149,41 @@ class _AssistantAppBar extends StatelessWidget {
             ],
           ),
         ),
-        Container(
-          padding: EdgeInsets.symmetric(
-            horizontal: JtrResponsive.getResponsiveWidth(context, 8),
-            vertical: JtrResponsive.getResponsiveHeight(context, 4),
-          ),
-          decoration: BoxDecoration(
-            color: JtrMobileTheme.accentBg,
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              if (Get.isRegistered<JtrMobileAssistantController>()) {
+                Get.find<JtrMobileAssistantController>().startNewConversation();
+              }
+            },
             borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
-          ),
-          child: Text(
-            'Démo',
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
-              fontWeight: FontWeight.w600,
-              color: JtrMobileTheme.accent,
+            child: Padding(
+              padding: JtrResponsive.getResponsivePadding(
+                context,
+                horizontal: 8,
+                vertical: 6,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.add_comment_outlined,
+                    size: JtrResponsive.getResponsiveSize(context, 16),
+                    color: JtrMobileTheme.accent,
+                  ),
+                  SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
+                  Text(
+                    'Nouveau',
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 12),
+                      fontWeight: FontWeight.w600,
+                      color: JtrMobileTheme.accent,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

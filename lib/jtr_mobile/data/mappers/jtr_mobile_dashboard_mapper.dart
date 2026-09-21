@@ -229,7 +229,26 @@ class JtrMobileDashboardMapper {
       if (name != null && name.isNotEmpty) parts.add(name);
     }
 
+    final waiterName = _waiterName(item);
+    if (waiterName != null) {
+      parts.add(waiterName);
+    }
+
     return parts.isEmpty ? '—' : parts.join(' · ');
+  }
+
+  /// Prefer nested `waiter.name`, then flat fallbacks if present.
+  static String? _waiterName(Map<String, dynamic> item) {
+    final waiter = item['waiter'];
+    if (waiter is Map) {
+      final name = waiter['name']?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    for (final key in ['waiter_name', 'server_name', 'user_name']) {
+      final name = item[key]?.toString().trim();
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return null;
   }
 
   static Map<String, dynamic> recapFrom(Map<String, dynamic> orderSummary) =>

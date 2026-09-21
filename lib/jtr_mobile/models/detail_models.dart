@@ -33,6 +33,7 @@ class JtrGapTransaction {
     this.quantity,
     this.tag,
     this.discountPercent,
+    this.waiterName,
     required this.amount,
   });
 
@@ -41,6 +42,7 @@ class JtrGapTransaction {
   final int? quantity;
   final String? tag;
   final int? discountPercent;
+  final String? waiterName;
   final double amount;
 }
 

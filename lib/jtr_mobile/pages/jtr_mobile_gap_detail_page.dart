@@ -144,11 +144,25 @@ class _TxnRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            txn.meta,
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
-              color: JtrMobileTheme.textMuted,
+          Text.rich(
+            TextSpan(
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 10),
+                color: JtrMobileTheme.textMuted,
+              ),
+              children: [
+                TextSpan(text: txn.meta),
+                if (txn.waiterName != null && txn.waiterName!.isNotEmpty) ...[
+                  const TextSpan(text: ' · '),
+                  TextSpan(
+                    text: txn.waiterName,
+                    style: TextStyle(
+                      color: JtrMobileTheme.accent,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
           SizedBox(height: JtrResponsive.getResponsiveHeight(context, 3)),

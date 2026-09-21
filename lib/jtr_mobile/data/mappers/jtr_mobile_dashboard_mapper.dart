@@ -204,6 +204,7 @@ class JtrMobileDashboardMapper {
       quantity: _nullableInt(item['quantity']),
       tag: item['reason']?.toString(),
       discountPercent: discountPercent,
+      waiterName: _waiterName(item),
       amount: _dbl(item['amount']),
     );
   }
@@ -227,11 +228,6 @@ class JtrMobileDashboardMapper {
       final zone = Map<String, dynamic>.from(item['sales_zone'] as Map);
       final name = zone['name']?.toString();
       if (name != null && name.isNotEmpty) parts.add(name);
-    }
-
-    final waiterName = _waiterName(item);
-    if (waiterName != null) {
-      parts.add(waiterName);
     }
 
     return parts.isEmpty ? '—' : parts.join(' · ');

@@ -161,7 +161,7 @@ class _AddRestaurantButton extends StatelessWidget {
           color: AppTheme.primary,
         ),
         label: Text(
-          'Ajouter un restaurant (QR)',
+          'Changer de restaurant',
           style: TextStyle(
             color: AppTheme.primary,
             fontWeight: FontWeight.w600,

@@ -31,24 +31,31 @@ class JtrMobileFormatters {
     return '${negative ? '-' : ''}$core';
   }
 
-  /// Exact percent label (no integer round).
+  /// Exact percent label (no integer round, no thousand grouping).
   static String percent(double value) {
-    return '${_formatExactNumber(value.abs(), maxDecimals: 2)}%';
+    final negative = value < 0;
+    final core = _formatExactNumber(value.abs(), maxDecimals: 2, group: false);
+    return '${negative ? '-' : ''}$core%';
   }
 
-  static String _formatExactNumber(double abs, {int maxDecimals = 2}) {
+  static String _formatExactNumber(
+    double abs, {
+    int maxDecimals = 2,
+    bool group = true,
+  }) {
     // Avoid float noise; keep up to [maxDecimals] without forcing .00.
     final fixed = abs.toStringAsFixed(maxDecimals);
     final parts = fixed.split('.');
-    final intGrouped = _groupDigits(int.parse(parts[0]));
-    if (parts.length == 1) return intGrouped;
+    final intPart =
+        group ? _groupDigits(int.parse(parts[0])) : parts[0];
+    if (parts.length == 1) return intPart;
 
     var frac = parts[1];
     while (frac.endsWith('0')) {
       frac = frac.substring(0, frac.length - 1);
     }
-    if (frac.isEmpty) return intGrouped;
-    return '$intGrouped,$frac';
+    if (frac.isEmpty) return intPart;
+    return '$intPart,$frac';
   }
 
   static String _groupDigits(int abs) {

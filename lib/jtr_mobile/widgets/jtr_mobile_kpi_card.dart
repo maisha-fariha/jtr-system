@@ -21,6 +21,7 @@ class JtrMobileKpiCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
+            flex: 3,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -32,13 +33,19 @@ class JtrMobileKpiCard extends StatelessWidget {
                   ),
                 ),
                 SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
-                Text(
-                  JtrMobileFormatters.currency(kpis.revenue),
-                  style: TextStyle(
-                    fontSize: JtrResponsive.getResponsiveFontSize(context, 26),
-                    fontWeight: FontWeight.w600,
-                    color: JtrMobileTheme.textPrimary,
-                    height: 1.1,
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    JtrMobileFormatters.currency(kpis.revenue),
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 26),
+                      fontWeight: FontWeight.w600,
+                      color: JtrMobileTheme.textPrimary,
+                      height: 1.1,
+                    ),
                   ),
                 ),
                 SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
@@ -51,13 +58,18 @@ class JtrMobileKpiCard extends StatelessWidget {
                       size: JtrResponsive.getResponsiveSize(context, 14),
                       color: trendColor,
                     ),
-                    SizedBox(width: JtrResponsive.getResponsiveWidth(context, 4)),
-                    Text(
-                      kpis.trendLabel,
-                      style: TextStyle(
-                        fontSize:
-                            JtrResponsive.getResponsiveFontSize(context, 12),
-                        color: trendColor,
+                    SizedBox(
+                        width: JtrResponsive.getResponsiveWidth(context, 4)),
+                    Expanded(
+                      child: Text(
+                        kpis.trendLabel,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize:
+                              JtrResponsive.getResponsiveFontSize(context, 12),
+                          color: trendColor,
+                        ),
                       ),
                     ),
                   ],
@@ -65,34 +77,48 @@ class JtrMobileKpiCard extends StatelessWidget {
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                'Encaissé',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                  color: JtrMobileTheme.textSecondary,
+          SizedBox(width: JtrResponsive.getResponsiveWidth(context, 12)),
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  'Encaissé',
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                    color: JtrMobileTheme.textSecondary,
+                  ),
                 ),
-              ),
-              SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
-              Text(
-                JtrMobileFormatters.currency(kpis.collected),
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 18),
-                  fontWeight: FontWeight.w600,
-                  color: JtrMobileTheme.textPrimary,
+                SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    JtrMobileFormatters.currency(kpis.collected),
+                    maxLines: 1,
+                    textAlign: TextAlign.right,
+                    style: TextStyle(
+                      fontSize:
+                          JtrResponsive.getResponsiveFontSize(context, 18),
+                      fontWeight: FontWeight.w600,
+                      color: JtrMobileTheme.textPrimary,
+                    ),
+                  ),
                 ),
-              ),
-              SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
-              Text(
-                '${JtrMobileFormatters.percent(kpis.collectedPercentOfRevenue)} du CA',
-                style: TextStyle(
-                  fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-                  color: JtrMobileTheme.textMuted,
+                SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
+                Text(
+                  '${JtrMobileFormatters.percent(kpis.collectedPercentOfRevenue)} du CA',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                    color: JtrMobileTheme.textMuted,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),

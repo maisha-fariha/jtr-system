@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../widgets/app_footer.dart';
@@ -232,7 +233,7 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) AppNavigation.logout();
+        if (!didPop) SystemNavigator.pop();
       },
       child: body,
     );

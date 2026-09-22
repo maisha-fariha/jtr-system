@@ -176,21 +176,11 @@ class _JtrMobileAssistantChatViewState
                 child: SizedBox(
                   width: JtrResponsive.getResponsiveSize(context, 34),
                   height: JtrResponsive.getResponsiveSize(context, 34),
-                  child: busy
-                      ? Padding(
-                          padding: EdgeInsets.all(
-                            JtrResponsive.getResponsiveSize(context, 9),
-                          ),
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: JtrMobileTheme.accentOnAccent,
-                          ),
-                        )
-                      : Icon(
-                          Icons.send_rounded,
-                          color: JtrMobileTheme.accentOnAccent,
-                          size: JtrResponsive.getResponsiveSize(context, 16),
-                        ),
+                  child: Icon(
+                    Icons.send_rounded,
+                    color: JtrMobileTheme.accentOnAccent,
+                    size: JtrResponsive.getResponsiveSize(context, 16),
+                  ),
                 ),
               ),
             );

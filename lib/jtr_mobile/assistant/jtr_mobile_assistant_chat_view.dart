@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -261,8 +263,31 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-class _TypingBubble extends StatelessWidget {
+class _TypingBubble extends StatefulWidget {
   const _TypingBubble();
+
+  @override
+  State<_TypingBubble> createState() => _TypingBubbleState();
+}
+
+class _TypingBubbleState extends State<_TypingBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -278,13 +303,40 @@ class _TypingBubble extends StatelessWidget {
           color: JtrMobileTheme.surfaceTile,
           borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
         ),
-        child: Text(
-          'Analyse en cours…',
-          style: TextStyle(
-            fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
-            color: JtrMobileTheme.textMuted,
-            fontStyle: FontStyle.italic,
-          ),
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final step = (_controller.value * 4).floor() % 4;
+            final pulse =
+                0.6 + 0.4 * math.sin(_controller.value * math.pi * 2).abs();
+            return Opacity(
+              opacity: pulse,
+              child: Text.rich(
+                TextSpan(
+                  style: TextStyle(
+                    fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
+                    color: JtrMobileTheme.textMuted,
+                    fontStyle: FontStyle.italic,
+                  ),
+                  children: [
+                    const TextSpan(text: 'Analyse en cours'),
+                    TextSpan(
+                      text: '.' * step,
+                      style: TextStyle(
+                        color: JtrMobileTheme.textMuted,
+                      ),
+                    ),
+                    TextSpan(
+                      text: '.' * (3 - step),
+                      style: TextStyle(
+                        color: JtrMobileTheme.textMuted.withValues(alpha: 0),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );

@@ -24,9 +24,10 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
-	<true/>
-	<key>NSPhotoLibraryUsageDescription</key>
+	<true/>	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
@@ -41,8 +42,6 @@
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
-		<true/>
-		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
 	<key>UIApplicationSceneManifest</key>

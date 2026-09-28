@@ -19,12 +19,18 @@ flutter run --flavor pos -t lib/main_pos.dart
 flutter run --flavor rapport -t lib/main_rapport.dart
 ```
 
-## Build release APKs
+## Build release APKs / Play App Bundle
 
 ```bash
+# Local APK
 flutter build apk --flavor pos -t lib/main_pos.dart --release
 flutter build apk --flavor rapport -t lib/main_rapport.dart --release
+
+# Google Play (POS) — use App Bundle
+flutter build appbundle --flavor pos -t lib/main_pos.dart --release
 ```
+
+Store upload checklist (privacy + deletion URLs, signing, iOS): see [STORE-UPLOAD.md](./STORE-UPLOAD.md).
 
 Outputs (typical):
 
@@ -41,7 +47,7 @@ The RAPPORT tab was removed from the POS bottom bar; managers use the **JTR Rapp
 
 ## iOS
 
-Android flavors are fully wired. For iOS, add matching Xcode schemes (`pos` / `rapport`) and bundle IDs (`com.example.jtrSystem` / `com.example.jtrRapport`), then:
+Android flavors are fully wired. iOS bundle ID for POS is `com.jtrsystem.pos`. Add matching Xcode schemes (`pos` / `rapport`) if needed, then:
 
 ```bash
 flutter run --flavor pos -t lib/main_pos.dart

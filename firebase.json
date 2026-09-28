@@ -1,0 +1,50 @@
+{
+  "hosting": [
+    {
+      "target": "main",
+      "public": "hosting",
+      "ignore": [
+        "firebase.json",
+        "**/.*",
+        "**/node_modules/**"
+      ],
+      "rewrites": [
+        {
+          "source": "/privacy",
+          "destination": "/privacy.html"
+        },
+        {
+          "source": "/privacy/",
+          "destination": "/privacy.html"
+        },
+        {
+          "source": "/delete-account",
+          "destination": "/delete-account.html"
+        },
+        {
+          "source": "/delete-account/",
+          "destination": "/delete-account.html"
+        },
+        {
+          "source": "/account-deletion",
+          "destination": "/delete-account.html"
+        },
+        {
+          "source": "/account-deletion/",
+          "destination": "/delete-account.html"
+        }
+      ],
+      "headers": [
+        {
+          "source": "**/*.@(html)",
+          "headers": [
+            {
+              "key": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

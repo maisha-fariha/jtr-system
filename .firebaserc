@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "jtr-system-legal"
+  },
+  "targets": {
+    "jtr-system-legal": {
+      "hosting": {
+        "main": [
+          "jtr-system-legal"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

@@ -1,5 +1,6 @@
 import '../../core/app_flavor.dart';
 import '../../core/config/api_config.dart';
+import '../../core/device/device_instance_identity.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/device_secure_storage.dart';
@@ -12,8 +13,8 @@ import '../models/api_envelope.dart';
 import '../models/device_activation_models.dart';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
@@ -206,7 +207,7 @@ class DeviceRepository {
         fallbackTenantSchema: fallbackTenantSchema,
         fallbackApiBaseUrl: fallbackApiBaseUrl,
       );
-      return _persistActivationResult(
+      return await _persistActivationResult(
         result: result,
         contactedApiBaseUrl: result.apiBaseUrl,
       );
@@ -227,16 +228,20 @@ class DeviceRepository {
         DeviceActivationMapper.normalizePosApiBaseUrl(payload.apiBaseUrl);
     final origin = ApiConfig.normalizeOriginBaseUrl(contactedApiBaseUrl);
     final fingerprint = await _stableFingerprint();
+    final identity = await DeviceInstanceIdentity.resolve();
 
     final result = await _remote.activate(
       code: payload.code,
       tenantSchema: payload.tenantSchema,
       originBaseUrl: origin,
+      platform: identity.platform,
+      deviceInstanceId: identity.deviceInstanceId,
       appVersion: appVersion,
       fingerprint: fingerprint,
       metadata: {
-        'platform': defaultTargetPlatform.name,
         'app': 'jtr_system',
+        if (identity.model != null) 'model': identity.model,
+        if (identity.osVersion != null) 'os_version': identity.osVersion,
       },
     );
 

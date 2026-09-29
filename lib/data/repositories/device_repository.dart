@@ -34,7 +34,7 @@ class DeviceRepository {
   final DeviceSecureStorage _secureStorage;
   final ApiClient _apiClient;
 
-  static const appVersion = '1.0.0';
+  static const appVersion = '1.0.1';
 
   Future<bool> get hasStoredCredentials => _secureStorage.hasCredentials;
 

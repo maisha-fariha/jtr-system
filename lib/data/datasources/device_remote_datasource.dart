@@ -241,7 +241,7 @@ class DeviceRemoteDataSource {
     required String originBaseUrl,
     required String platform,
     required String deviceInstanceId,
-    String appVersion = '1.0.0',
+    String appVersion = '1.0.1',
     String? fingerprint,
     Map<String, dynamic>? metadata,
   }) async {

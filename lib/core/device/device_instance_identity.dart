@@ -26,7 +26,15 @@ class DeviceInstanceIdentity {
 
   static final DeviceInfoPlugin _plugin = DeviceInfoPlugin();
 
+  static DeviceInstanceIdentity? _cached;
+
+  /// Cached per process so the fallback id stays stable between activate,
+  /// session and later API calls.
   static Future<DeviceInstanceIdentity> resolve() async {
+    return _cached ??= await _resolveUncached();
+  }
+
+  static Future<DeviceInstanceIdentity> _resolveUncached() async {
     try {
       if (Platform.isAndroid) {
         final info = await _plugin.androidInfo;

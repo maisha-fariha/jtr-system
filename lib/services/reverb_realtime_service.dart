@@ -378,6 +378,14 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
     if (deviceToken != null && deviceToken.isNotEmpty) {
       headers['X-Device-Token'] = deviceToken;
     }
+    final platform = ApiConfig.devicePlatform;
+    if (platform != null && platform.isNotEmpty) {
+      headers['X-Device-Platform'] = platform;
+    }
+    final instanceId = ApiConfig.deviceInstanceId;
+    if (instanceId != null && instanceId.isNotEmpty) {
+      headers['X-Device-Instance-Id'] = instanceId;
+    }
     final tenant = ApiConfig.tenantSchema.trim();
     if (tenant.isNotEmpty) {
       headers['X-Tenant-Schema'] = tenant;

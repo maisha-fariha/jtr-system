@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../core/app_flavor.dart';
 import '../models/device_activation_models.dart';
 
 class DeviceActivationMapper {
@@ -197,10 +198,11 @@ class DeviceActivationMapper {
   static ActivationQrPayload payloadFromActivationFields(
     Map<String, dynamic> map,
   ) {
+    final expectedType = AppFlavorConfig.activationDeviceType;
     final type = (map['type']?.toString() ?? '').trim().toLowerCase();
-    if (type.isNotEmpty && type != 'mobile') {
+    if (type.isNotEmpty && type != expectedType) {
       throw FormatException(
-        'Ce QR est de type "$type". L\'app mobile exige type "mobile".',
+        'Ce QR est de type "$type". Cette app exige type "$expectedType".',
       );
     }
 
@@ -226,7 +228,7 @@ class DeviceActivationMapper {
       version: version,
       apiBaseUrl: apiBaseUrl,
       code: code,
-      type: type.isEmpty ? 'mobile' : type,
+      type: type.isEmpty ? expectedType : type,
       tenantSchema: tenant,
     );
   }
@@ -318,7 +320,7 @@ class DeviceActivationMapper {
       version: 1,
       apiBaseUrl: normalizePosApiBaseUrl(text),
       code: code,
-      type: 'mobile',
+      type: AppFlavorConfig.activationDeviceType,
       tenantSchema: tenant,
     );
   }
@@ -394,7 +396,7 @@ class DeviceActivationMapper {
       version: 1,
       apiBaseUrl: normalizePosApiBaseUrl(api),
       code: code,
-      type: 'mobile',
+      type: AppFlavorConfig.activationDeviceType,
       tenantSchema: tenant,
     );
   }
@@ -462,20 +464,44 @@ class DeviceActivationMapper {
         lower.contains('licence')) {
       return DeviceGateOutcome.licenseBlocked;
     }
+    // Checked before "deactivated" so a changed phone never lands on the
+    // blocked screen with stale credentials.
+    if (requiresNewActivation(message)) {
+      return DeviceGateOutcome.needsActivation;
+    }
     if (lower.contains('deactivated') || lower.contains('désactivé')) {
       return DeviceGateOutcome.deactivated;
     }
-    // Doc: only wipe on revoke / invalid device credentials.
-    if (lower.contains('revoked') ||
+    // Network / unknown API errors: keep credentials (handled by caller).
+    return DeviceGateOutcome.active;
+  }
+
+  /// Revoked / invalid device credentials or device binding mismatch
+  /// (« appareil mobile changé »): stored credentials must be wiped.
+  static bool requiresNewActivation(String? message) {
+    final lower = message?.trim().toLowerCase() ?? '';
+    if (lower.isEmpty) return false;
+    return lower.contains('revoked') ||
         lower.contains('révoqué') ||
         lower.contains('revoque') ||
         lower.contains('invalid device') ||
         lower.contains('identifiants poste') ||
         lower.contains('device credentials') ||
-        lower.contains('unknown device')) {
-      return DeviceGateOutcome.needsActivation;
-    }
-    // Network / unknown API errors: keep credentials (handled by caller).
-    return DeviceGateOutcome.active;
+        lower.contains('unknown device') ||
+        lower.contains('appareil mobile chang') ||
+        lower.contains('appareil changé') ||
+        lower.contains('appareil change') ||
+        lower.contains('device changed') ||
+        lower.contains('device mismatch');
+  }
+
+  /// Stricter [requiresNewActivation] for non-device endpoints: a bare
+  /// "revoked" there may refer to the user token, not the device.
+  static bool isDeviceBindingFailure(String? message) {
+    if (!requiresNewActivation(message)) return false;
+    final lower = message!.toLowerCase();
+    return lower.contains('device') ||
+        lower.contains('appareil') ||
+        lower.contains('poste');
   }
 }

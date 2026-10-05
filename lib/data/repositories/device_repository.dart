@@ -43,6 +43,7 @@ class DeviceRepository {
 
   /// Applies saved device credentials to [ApiConfig] + Dio.
   Future<bool> restoreRuntimeFromStorage() async {
+    await _applyDeviceIdentity();
     final creds = await _secureStorage.readCredentials();
     if (creds == null) {
       ApiConfig.resetToDefaults();
@@ -146,7 +147,7 @@ class DeviceRepository {
       version: 1,
       apiBaseUrl: DeviceActivationMapper.normalizePosApiBaseUrl(apiBaseUrl),
       code: normalizedCode,
-      type: 'mobile',
+      type: AppFlavorConfig.activationDeviceType,
       tenantSchema: DeviceActivationMapper.normalizeTenantSchema(tenantSchema),
     );
     return _activatePayload(payload);
@@ -154,8 +155,11 @@ class DeviceRepository {
 
   Future<DeviceActivationResult> activateFromQrText(String qrText) async {
     final payload = DeviceActivationMapper.parseQrText(qrText);
-    if (!payload.isMobile) {
-      throw ApiException(message: 'Le type d\'activation doit être "mobile".');
+    if (!payload.matchesAppType) {
+      throw ApiException(
+        message: 'Le type d\'activation doit être '
+            '"${AppFlavorConfig.activationDeviceType}".',
+      );
     }
     return _activatePayload(payload);
   }
@@ -228,21 +232,32 @@ class DeviceRepository {
         DeviceActivationMapper.normalizePosApiBaseUrl(payload.apiBaseUrl);
     final origin = ApiConfig.normalizeOriginBaseUrl(contactedApiBaseUrl);
     final fingerprint = await _stableFingerprint();
-    final identity = await DeviceInstanceIdentity.resolve();
+    final identity = await _applyDeviceIdentity();
+    final metadata = <String, dynamic>{
+      'app': 'jtr_system',
+      if (identity.model != null) 'model': identity.model,
+      if (identity.osVersion != null) 'os_version': identity.osVersion,
+    };
+
+    logDeviceActivation(
+      phase: 'device_identity',
+      request: {
+        'platform': identity.platform,
+        'device_instance_id': identity.deviceInstanceId,
+        'metadata': metadata,
+      },
+    );
 
     final result = await _remote.activate(
       code: payload.code,
+      type: payload.type,
       tenantSchema: payload.tenantSchema,
       originBaseUrl: origin,
       platform: identity.platform,
       deviceInstanceId: identity.deviceInstanceId,
       appVersion: appVersion,
       fingerprint: fingerprint,
-      metadata: {
-        'app': 'jtr_system',
-        if (identity.model != null) 'model': identity.model,
-        if (identity.osVersion != null) 'os_version': identity.osVersion,
-      },
+      metadata: metadata,
     );
 
     return _persistActivationResult(
@@ -379,6 +394,15 @@ class DeviceRepository {
   Future<String> decodeQrImageFile(File file) async {
     final bytes = await file.readAsBytes();
     return decodeQrImageBytes(bytes);
+  }
+
+  Future<DeviceInstanceIdentity> _applyDeviceIdentity() async {
+    final identity = await DeviceInstanceIdentity.resolve();
+    ApiConfig.applyDeviceIdentity(
+      platform: identity.platform,
+      instanceId: identity.deviceInstanceId,
+    );
+    return identity;
   }
 
   Future<String> _stableFingerprint() async {

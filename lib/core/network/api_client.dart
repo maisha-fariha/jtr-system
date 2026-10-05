@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:get/get.dart' hide Response;
 
+import '../../data/mappers/device_activation_mapper.dart';
 import '../../utils/app_navigation.dart';
 import '../config/api_config.dart';
 import 'api_endpoints.dart';
@@ -45,10 +46,24 @@ class ApiClient extends GetxService {
             } else {
               options.headers.remove('X-Device-Token');
             }
+            final platform = ApiConfig.devicePlatform;
+            final instanceId = ApiConfig.deviceInstanceId;
+            if (platform != null && platform.isNotEmpty) {
+              options.headers['X-Device-Platform'] = platform;
+            } else {
+              options.headers.remove('X-Device-Platform');
+            }
+            if (instanceId != null && instanceId.isNotEmpty) {
+              options.headers['X-Device-Instance-Id'] = instanceId;
+            } else {
+              options.headers.remove('X-Device-Instance-Id');
+            }
           } else {
             options.headers.remove('X-Tenant-Schema');
             options.headers.remove('X-Device-Id');
             options.headers.remove('X-Device-Token');
+            options.headers.remove('X-Device-Platform');
+            options.headers.remove('X-Device-Instance-Id');
           }
 
           if (!skipAuth) {
@@ -63,8 +78,27 @@ class ApiClient extends GetxService {
           }
           handler.next(options);
         },
+        onError: (error, handler) {
+          _maybeRequireDeviceActivation(error);
+          handler.next(error);
+        },
       ),
     );
+  }
+
+  /// 403 « appareil mobile changé » / revoked device on any regular call.
+  /// Activate + session are handled by the device gate itself.
+  void _maybeRequireDeviceActivation(DioException error) {
+    if (error.response?.statusCode != 403) return;
+    final path = error.requestOptions.path.toLowerCase();
+    if (path.contains(ApiEndpoints.deviceActivate) ||
+        path.contains(ApiEndpoints.deviceSession)) {
+      return;
+    }
+    final body = error.response?.data;
+    final message = body is Map ? body['message']?.toString() : null;
+    if (!DeviceActivationMapper.isDeviceBindingFailure(message)) return;
+    AppNavigation.scheduleDeviceActivationRequired();
   }
 
   late final Dio _dio;

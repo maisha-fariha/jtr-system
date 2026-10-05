@@ -27,6 +27,10 @@ class AppFlavorConfig {
   static String get homeRoute =>
       isRapport ? '/jtr-mobile-dashboard' : '/session';
 
+  /// Activate `type` — must match the activation code issued by the dashboard.
+  static String get activationDeviceType =>
+      isRapport ? 'mobile_rapport' : 'mobile';
+
   static void bootstrap(AppFlavor flavor) {
     current = flavor;
   }

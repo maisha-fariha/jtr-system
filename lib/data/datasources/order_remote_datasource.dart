@@ -39,6 +39,33 @@ class OrderRemoteDataSource {
     return OrderMapper.unwrapOrderDetail(envelope.data!);
   }
 
+  /// `POST /api/orders/{id}/open` — table session (lock) + full detail.
+  Future<Map<String, dynamic>> openOrder(int orderId) async {
+    final path = ApiEndpoints.openOrder(orderId);
+    final response = await _client.post<Map<String, dynamic>>(
+      path,
+      data: const {},
+    );
+    final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
+      response.data!,
+      (json) => json as Map<String, dynamic>,
+    );
+
+    if (!envelope.success || envelope.data == null) {
+      throw ApiException(
+        message: envelope.message ?? 'Failed to open order.',
+        statusCode: envelope.status,
+      );
+    }
+
+    final detail = OrderMapper.unwrapOrderDetail(envelope.data!);
+    if (OrderMapper.orderIdFromDetail(detail) != orderId) {
+      throw ApiException(message: 'Unexpected open order payload.');
+    }
+    logOrderFlow('POST $path OK');
+    return detail;
+  }
+
   Future<void> closeOrder(int orderId) async {
     final response = await _client.post<Map<String, dynamic>>(
       ApiEndpoints.closeOrder(orderId),

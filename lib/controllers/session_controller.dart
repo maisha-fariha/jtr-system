@@ -1579,11 +1579,14 @@ class SessionController extends GetxController {
     }
   }
 
+  /// [openSession]: user opened the ticket screen. Only the waiter's own
+  /// ticket takes the server lock (`POST /orders/{id}/open`).
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    bool openSession = false,
   }) async {
     final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
     if (existing == null) return;
@@ -1599,6 +1602,7 @@ class SessionController extends GetxController {
     loadingDetailOrderNumbers.add(orderNumber);
     loadingDetailOrderNumbers.refresh();
 
+    var useOpen = false;
     try {
       final previous = orders[idx];
       // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
@@ -1606,9 +1610,12 @@ class SessionController extends GetxController {
             previousDisplayEntries,
           ) ??
           OrderMapper.coalesceLayoutHints(previous.displayEntries);
+      final waiterId = _currentWaiterId;
+      useOpen = openSession && waiterId > 0 && existing.waiterId == waiterId;
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
         previousDisplayEntries: layoutHints,
+        openSession: useOpen,
       );
       // Re-resolve the row by id — a background list refresh may have
       // mutated `orders` while this request was in flight, so the index
@@ -1627,13 +1634,31 @@ class SessionController extends GetxController {
         orders.refresh();
       }
     } on ApiException catch (e) {
-      _showSnack('Erreur', e.message);
+      if (useOpen && e.statusCode == 409) {
+        logOrderFlow(
+          'POST /api/orders/${existing.id}/open 409 — table in use: ${e.message}',
+        );
+        await _leaveTicketTableInUse(existing.number);
+      } else {
+        _showSnack('Erreur', e.message);
+      }
     } catch (_) {
       _showSnack('Erreur', 'Impossible de charger les produits.');
     } finally {
       loadingDetailOrderNumbers.remove(orderNumber);
       loadingDetailOrderNumbers.refresh();
     }
+  }
+
+  /// `/orders/{id}/open` refused the session: back to the list + occupied dialog.
+  Future<void> _leaveTicketTableInUse(String tableNumber) async {
+    if (Get.currentRoute == AppRoutes.tableDetails) {
+      Get.back<void>();
+    }
+    await TableOccupiedDialog.show(
+      userName: _currentUserDisplayName,
+      tableNumber: tableNumber,
+    );
   }
 
   bool isRowSelected({

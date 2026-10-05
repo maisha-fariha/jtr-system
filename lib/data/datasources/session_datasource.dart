@@ -15,7 +15,7 @@ import '../mappers/order_mapper.dart';
 class SessionRemoteDataSource {
   SessionRemoteDataSource(this._client);
 
-  /// Session list + swipe-refresh page size (`GET /api/orders`).
+  /// Session list + swipe-refresh page size (`GET /api/orders/summary`).
   static const int ordersPageSize = 20;
 
   final ApiClient _client;
@@ -96,7 +96,7 @@ class SessionRemoteDataSource {
     return DayStatisticsInfo.fromJson(envelope.data!);
   }
 
-  /// Open unpaid orders ([GET /api/orders], `active_day=false` like Postman).
+  /// Open unpaid orders ([GET /api/orders/summary], `active_day=false`).
   ///
   /// When [firstPageOnly] is true, returns after page 1 so the session list
   /// can paint without waiting on further pagination.
@@ -190,6 +190,7 @@ class SessionRemoteDataSource {
     return orders;
   }
 
+  /// `GET /api/orders/summary` — lightweight rows (no item trees).
   Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
     required int page,
     int? waiterId,
@@ -216,7 +217,7 @@ class SessionRemoteDataSource {
     }
 
     final response = await _client.get<Map<String, dynamic>>(
-      ApiEndpoints.orders,
+      ApiEndpoints.ordersSummary,
       queryParameters: queryParameters,
     );
     final envelope = ApiEnvelope<dynamic>.fromJson(
@@ -229,6 +230,11 @@ class SessionRemoteDataSource {
         message: envelope.message ?? 'Failed to load orders.',
         statusCode: envelope.status,
       );
+    }
+
+    // An unknown shape is an error, not "no open orders".
+    if (!_payloadHasOrdersList(envelope.data)) {
+      throw ApiException(message: 'Unexpected orders summary payload.');
     }
 
     return (
@@ -245,14 +251,24 @@ class SessionRemoteDataSource {
     return [for (final order in orders) _slimOpenOrderForList(order)];
   }
 
+  bool _payloadHasOrdersList(dynamic data) {
+    if (data is List) return true;
+    if (data is! Map<String, dynamic>) return false;
+    final direct = data['data'];
+    if (direct is List) return true;
+    return direct is Map<String, dynamic> && direct['data'] is List;
+  }
+
   Map<String, dynamic> _slimOpenOrderForList(Map<String, dynamic> order) {
     final waiter = order['waiter'];
     final zone = order['sales_zone'];
+    final table = order['table'];
     return <String, dynamic>{
       'id': order['id'],
       'order_number': order['order_number'],
-      'table_id': order['table_id'],
-      'table_number': order['table_number'],
+      'table_id': order['table_id'] ?? (table is Map ? table['id'] : null),
+      'table_number': order['table_number'] ??
+          (table is Map ? table['table_number'] : null),
       'status': order['status'],
       'payment_status': order['payment_status'],
       'payment_status_detailed': order['payment_status_detailed'],
@@ -263,7 +279,8 @@ class SessionRemoteDataSource {
       'receipt_print_count': order['receipt_print_count'],
       'waiter_id': order['waiter_id'],
       'sales_zone_id': order['sales_zone_id'],
-      'sales_zone_name': order['sales_zone_name'],
+      'sales_zone_name':
+          order['sales_zone_name'] ?? (zone is Map ? zone['name'] : null),
       'created_at': order['created_at'],
       'updated_at': order['updated_at'],
       'items_count': order['items_count'],
@@ -281,42 +298,53 @@ class SessionRemoteDataSource {
     };
   }
 
+  Future<List<Map<String, dynamic>>> _fetchAllOrdersPages({
+    int? waiterId,
+    String? status,
+  }) async {
+    final first = await _fetchOrdersPage(
+      page: 1,
+      waiterId: waiterId,
+      status: status,
+    );
+    final orders = List<Map<String, dynamic>>.from(first.orders);
+    if (first.lastPage > 1) {
+      const batchSize = 4;
+      for (var page = 2;
+          page <= first.lastPage && page <= 50;
+          page += batchSize) {
+        final batch = <int>[
+          for (var p = page;
+              p < page + batchSize && p <= first.lastPage;
+              p++)
+            p,
+        ];
+        final pages = await Future.wait(
+          batch.map(
+            (p) => _fetchOrdersPage(
+              page: p,
+              waiterId: waiterId,
+              status: status,
+            ),
+          ),
+        );
+        for (final pageResult in pages) {
+          orders.addAll(pageResult.orders);
+        }
+      }
+    }
+    return orders;
+  }
+
   /// Completed + paid orders for the statistics list (latest paid first).
   Future<List<Map<String, dynamic>>> fetchPaidOrdersList({
     int? waiterId,
   }) async {
     try {
-      final first = await _fetchOrdersPage(
-        page: 1,
+      final orders = await _fetchAllOrdersPages(
         waiterId: waiterId,
         status: 'completed',
       );
-      var orders = List<Map<String, dynamic>>.from(first.orders);
-      if (first.lastPage > 1) {
-        const batchSize = 4;
-        for (var page = 2;
-            page <= first.lastPage && page <= 50;
-            page += batchSize) {
-          final batch = <int>[
-            for (var p = page;
-                p < page + batchSize && p <= first.lastPage;
-                p++)
-              p,
-          ];
-          final pages = await Future.wait(
-            batch.map(
-              (p) => _fetchOrdersPage(
-                page: p,
-                waiterId: waiterId,
-                status: 'completed',
-              ),
-            ),
-          );
-          for (final pageResult in pages) {
-            orders.addAll(pageResult.orders);
-          }
-        }
-      }
 
       final paid = orders
           .where(OrderMapper.isActiveDayPaidOrder)

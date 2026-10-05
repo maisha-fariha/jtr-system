@@ -417,7 +417,9 @@ class _OrderStatRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}',
+                  order.itemCount > 0
+                      ? '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}'
+                      : 'Gr. ${order.group}  •  ${order.poste}',
                   style: TextStyle(
                     fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),

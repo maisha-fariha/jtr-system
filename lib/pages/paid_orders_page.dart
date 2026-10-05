@@ -180,7 +180,9 @@ class _PaidOrderRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  ${order.poste}',
+                  order.itemCount > 0
+                      ? '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  ${order.poste}'
+                      : order.poste,
                   style: TextStyle(
                     fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),

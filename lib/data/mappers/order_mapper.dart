@@ -6652,6 +6652,258 @@ class OrderMapper {
     return data;
   }
 
+  // ── POS write / payment acks (slim server responses) ─────────────────────
+
+  /// True when [order] carries the editing tree (`seat_orders[].courses`).
+  static bool orderDetailHasSeatTree(Map<String, dynamic>? order) {
+    if (order == null) return false;
+    final seats = order['seat_orders'];
+    if (seats is! List) return false;
+    for (final seat in seats) {
+      if (seat is Map && seat['courses'] is List) return true;
+    }
+    return false;
+  }
+
+  static const _writeAckScalarKeys = <String>[
+    'id',
+    'order_number',
+    'status',
+    'payment_status',
+    'table_id',
+    'sales_zone_id',
+    'waiter_id',
+    'customer_id',
+    'number_of_guests',
+    'total_price',
+    'total_paid',
+    'remaining_amount',
+    'total_ht',
+    'total_tva',
+  ];
+
+  /// Rebuilds a full order detail from an OrderWriteAck.
+  ///
+  /// The tree comes from [sent] (the PUT/POST body), header fields from
+  /// [previous] (cached detail) then [ack]. New lines get their server id via
+  /// `item_uid_map`; missing product names are filled from [previous] or
+  /// [catalogNamesById].
+  static Map<String, dynamic> mergeWriteAck({
+    required Map<String, dynamic> ack,
+    required Map<String, dynamic> sent,
+    Map<String, dynamic>? previous,
+    Map<int, String> catalogNamesById = const {},
+  }) {
+    final result = <String, dynamic>{
+      if (previous != null) ..._deepCopyJsonMap(previous),
+      ..._deepCopyJsonMap(sent),
+    };
+    if (sent['seat_orders'] is! List && previous?['seat_orders'] is List) {
+      result['seat_orders'] = _deepCopyJson(previous!['seat_orders']);
+    }
+    for (final key in _writeAckScalarKeys) {
+      final value = ack[key];
+      if (value != null) result[key] = value;
+    }
+
+    final idByUid = <String, int>{};
+    void collectUid(Object? raw) {
+      if (raw is! List) return;
+      for (final row in raw) {
+        if (row is! Map) continue;
+        final uid = row['uid']?.toString() ?? '';
+        final id = (row['id'] as num?)?.toInt() ?? 0;
+        if (uid.isNotEmpty && id > 0) idByUid.putIfAbsent(uid, () => id);
+      }
+    }
+
+    collectUid(ack['item_uid_map']);
+    collectUid(ack['items']);
+
+    final statusByItemId = <int, String>{};
+    final ackItems = ack['items'];
+    if (ackItems is List) {
+      for (final row in ackItems) {
+        if (row is! Map) continue;
+        final id = (row['id'] as num?)?.toInt() ?? 0;
+        final status = row['status']?.toString() ?? '';
+        if (id > 0 && status.isNotEmpty) statusByItemId[id] = status;
+      }
+    }
+
+    final seatIdByNumber = <int, int>{};
+    final ackSeats = ack['seat_orders'];
+    if (ackSeats is List) {
+      for (final row in ackSeats) {
+        if (row is! Map) continue;
+        final seat = (row['seat_number'] as num?)?.toInt();
+        final id = (row['id'] as num?)?.toInt() ?? 0;
+        if (seat != null && id > 0) seatIdByNumber[seat] = id;
+      }
+    }
+
+    final courseIdByKey = <String, int>{};
+    final ackCourses = ack['courses'];
+    if (ackCourses is List) {
+      for (final row in ackCourses) {
+        if (row is! Map) continue;
+        final seat = (row['seat_number'] as num?)?.toInt();
+        final course = (row['course_number'] as num?)?.toInt();
+        final id = (row['id'] as num?)?.toInt() ?? 0;
+        if (seat != null && course != null && id > 0) {
+          courseIdByKey['$seat:$course'] = id;
+        }
+      }
+    }
+
+    final namesByProductId = <int, String>{...catalogNamesById};
+    if (previous != null) {
+      _forEachTreeItem(previous, (_, _, item) {
+        final product = item['product'];
+        if (product is! Map) return;
+        final id = (product['id'] as num?)?.toInt() ?? 0;
+        final name = product['name']?.toString().trim() ?? '';
+        if (id > 0 && name.isNotEmpty) namesByProductId[id] = name;
+      });
+    }
+
+    final seats = result['seat_orders'];
+    if (seats is List) {
+      for (final seat in seats) {
+        if (seat is! Map<String, dynamic>) continue;
+        final seatNumber = (seat['seat_number'] as num?)?.toInt();
+        if (((seat['id'] as num?)?.toInt() ?? 0) <= 0 &&
+            seatNumber != null &&
+            seatIdByNumber.containsKey(seatNumber)) {
+          seat['id'] = seatIdByNumber[seatNumber];
+        }
+        final courses = seat['courses'];
+        if (courses is! List) continue;
+        for (final course in courses) {
+          if (course is! Map<String, dynamic>) continue;
+          final courseNumber = (course['course_number'] as num?)?.toInt();
+          final courseKey = '$seatNumber:$courseNumber';
+          if (((course['id'] as num?)?.toInt() ?? 0) <= 0 &&
+              courseIdByKey.containsKey(courseKey)) {
+            course['id'] = courseIdByKey[courseKey];
+          }
+          final courseId = (course['id'] as num?)?.toInt() ?? 0;
+          final items = course['items'];
+          if (items is! List) continue;
+          for (final item in items) {
+            if (item is! Map<String, dynamic>) continue;
+            var itemId = (item['id'] as num?)?.toInt() ?? 0;
+            final uid = item['uid']?.toString() ?? '';
+            if (itemId <= 0 && uid.isNotEmpty && idByUid.containsKey(uid)) {
+              itemId = idByUid[uid]!;
+              item['id'] = itemId;
+            }
+            if (courseId > 0 &&
+                ((item['course_id'] as num?)?.toInt() ?? 0) <= 0) {
+              item['course_id'] = courseId;
+            }
+            final ackStatus = statusByItemId[itemId];
+            if (ackStatus != null && item['status'] != 'cancelled') {
+              item['status'] = ackStatus;
+            }
+            final product = item['product'];
+            final productId = _itemProductId(item);
+            final hasName = product is Map &&
+                (product['name']?.toString().trim() ?? '').isNotEmpty;
+            if (!hasName && namesByProductId.containsKey(productId)) {
+              item['product'] = <String, dynamic>{
+                if (product is Map) ...Map<String, dynamic>.from(product),
+                'id': productId,
+                'name': namesByProductId[productId],
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /// True when every visible line has a server id and a product name — safe
+  /// to render without a follow-up GET.
+  static bool orderDetailLinesComplete(Map<String, dynamic> detail) {
+    var complete = true;
+    _forEachTreeItem(detail, (_, _, item) {
+      if (item['status'] == 'cancelled') return;
+      final id = (item['id'] as num?)?.toInt() ?? 0;
+      final product = item['product'];
+      final name =
+          product is Map ? (product['name']?.toString().trim() ?? '') : '';
+      if (id <= 0 || name.isEmpty) complete = false;
+    });
+    return complete;
+  }
+
+  /// Applies a lean PaymentOrderAck (totals / status / transactions) onto
+  /// [base] without dropping its seat → course → item tree.
+  ///
+  /// Returns [lean] unchanged when [base] has no tree to keep.
+  static Map<String, dynamic> mergePaymentAck({
+    required Map<String, dynamic>? base,
+    required Map<String, dynamic> lean,
+  }) {
+    if (!orderDetailHasSeatTree(base)) {
+      return Map<String, dynamic>.from(lean);
+    }
+    final merged = _deepCopyJsonMap(base!);
+    for (final entry in lean.entries) {
+      final key = entry.key;
+      if (key == 'seat_orders' || key == 'courses' || key == 'items') continue;
+      final value = entry.value;
+      if (key == 'sales_zone' && value is Map && merged[key] is Map) {
+        merged[key] = <String, dynamic>{
+          ...Map<String, dynamic>.from(merged[key] as Map),
+          ...Map<String, dynamic>.from(value),
+        };
+        continue;
+      }
+      merged[key] = _deepCopyJson(value);
+    }
+    return merged;
+  }
+
+  static void _forEachTreeItem(
+    Map<String, dynamic> detail,
+    void Function(
+      Map<String, dynamic> seat,
+      Map<String, dynamic> course,
+      Map<String, dynamic> item,
+    ) visit,
+  ) {
+    final seats = detail['seat_orders'];
+    if (seats is! List) return;
+    for (final seat in seats) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final items = course['items'];
+        if (items is! List) continue;
+        for (final item in items) {
+          if (item is Map<String, dynamic>) visit(seat, course, item);
+        }
+      }
+    }
+  }
+
+  static Map<String, dynamic> _deepCopyJsonMap(Map source) => <String, dynamic>{
+        for (final entry in source.entries)
+          entry.key.toString(): _deepCopyJson(entry.value),
+      };
+
+  static Object? _deepCopyJson(Object? value) {
+    if (value is Map) return _deepCopyJsonMap(value);
+    if (value is List) return [for (final v in value) _deepCopyJson(v)];
+    return value;
+  }
+
   /// Default seat for adding items (first seat in order, else 1).
   static int resolveDefaultSeatNumber(Map<String, dynamic> detail) {
     final seatOrders = detail['seat_orders'];

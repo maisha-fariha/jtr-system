@@ -1342,16 +1342,24 @@ class OrderRepository {
         'PUT /api/orders/$orderId cancel=${cancelIds.length} lines=${lines.length}',
       );
       debugPrint(apiLog.toString());
+      final serverBeforePut = detail;
       try {
         detail = await _putOrderUpdate(
           orderId: orderId,
           payload: payload,
           apiLog: apiLog,
         );
-        try {
-          detail = await _remote.fetchOrderDetail(orderId);
-          apiLog.writeln('── GET /api/orders/$orderId after PUT ──');
-        } catch (_) {}
+        if (_noChangeWriteOrderIds.contains(orderId)) {
+          // Nothing applied: the pre-PUT GET is still the server state.
+          detail = serverBeforePut;
+          apiLog.writeln('── PUT has_changes=false — GET skipped ──');
+          logOrderFlow('PUT /api/orders/$orderId has_changes=false — GET skipped');
+        } else {
+          try {
+            detail = await _remote.fetchOrderDetail(orderId);
+            apiLog.writeln('── GET /api/orders/$orderId after PUT ──');
+          } catch (_) {}
+        }
       } on ApiException catch (e) {
         apiLog.writeln('── PUT draft onto existing failed: ${e.message} ──');
         // If items appeared anyway (race), keep going.
@@ -4628,6 +4636,14 @@ class OrderRepository {
     );
   }
 
+  /// Orders whose latest write ack said `has_changes: false`.
+  final Set<int> _noChangeWriteOrderIds = <int>{};
+
+  /// True once (then cleared) when the latest write on [orderId] changed
+  /// nothing server-side, so a follow-up GET would return the same order.
+  bool consumeNoChangeWrite(int orderId) =>
+      _noChangeWriteOrderIds.remove(orderId);
+
   /// POST/PUT return a slim OrderWriteAck — rebuild the full detail from the
   /// body we sent so callers never cache / render a tree-less order.
   Map<String, dynamic> _resolveWriteResponse({
@@ -4644,6 +4660,13 @@ class OrderRepository {
       previous: resolvedId > 0 ? _local.readOrderDetail(resolvedId) : null,
       catalogNamesById: _catalog.cachedProductNamesById(),
     );
+    if (resolvedId > 0) {
+      if (response['has_changes'] == false) {
+        _noChangeWriteOrderIds.add(resolvedId);
+      } else {
+        _noChangeWriteOrderIds.remove(resolvedId);
+      }
+    }
     logOrderFlow(
       'WriteAck merged order=$resolvedId '
       'has_changes=${response['has_changes']} '

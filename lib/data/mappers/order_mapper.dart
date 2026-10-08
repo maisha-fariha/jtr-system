@@ -2834,11 +2834,26 @@ class OrderMapper {
         if (byId >= 0) return remaining.removeAt(byId);
       }
       final key = _productFingerprint(liveProduct.product);
-      if (key != null) {
-        final byKey = remaining.indexWhere(
-          (e) => _productFingerprint(e.product) == key,
-        );
-        if (byKey >= 0) return remaining.removeAt(byKey);
+      if (key == null) return null;
+
+      // Identical name+qty lines: prefer same course, then same message/menu,
+      // so twin lines in different suites keep their own server ids.
+      final course = liveProduct.courseNumber;
+      final details = _lineDetailFingerprint(liveProduct.product);
+      bool sameKey(OrderDisplayEntry e) => _productFingerprint(e.product) == key;
+      bool sameCourse(OrderDisplayEntry e) =>
+          course != null && e.courseNumber == course;
+      bool sameDetails(OrderDisplayEntry e) =>
+          _lineDetailFingerprint(e.product) == details;
+
+      for (final matches in <bool Function(OrderDisplayEntry)>[
+        (e) => sameKey(e) && sameCourse(e) && sameDetails(e),
+        (e) => sameKey(e) && sameCourse(e),
+        (e) => sameKey(e) && sameDetails(e),
+        sameKey,
+      ]) {
+        final index = remaining.indexWhere(matches);
+        if (index >= 0) return remaining.removeAt(index);
       }
       return null;
     }
@@ -3653,6 +3668,13 @@ class OrderMapper {
     if (product == null) return null;
     // Name + qty only — price formatting ("5" vs "5,00") breaks matching.
     return '${product.name.trim().toUpperCase()}|${product.quantity}';
+  }
+
+  static String _lineDetailFingerprint(OrderProduct? product) {
+    if (product == null) return '';
+    final message = product.message?.trim().toUpperCase() ?? '';
+    final menu = product.menuItems.map((m) => m.trim().toUpperCase()).join(',');
+    return '$message|$menu|${product.isOffered}';
   }
 
   /// True when any visible line message differs (comment / pencil edits).

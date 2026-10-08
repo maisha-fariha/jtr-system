@@ -1454,6 +1454,16 @@ class SessionController extends GetxController {
       final orderId = await orderIdFuture;
       if (orderId == null || orderId <= 0) return;
 
+      // Send changed nothing server-side — the row from Send is already current.
+      if (_orderRepository.consumeNoChangeWrite(orderId)) {
+        if (!selectedZoneUsesTableFlow) {
+          _freeTicketByOrderId[orderId] =
+              OrderMapper.freeZoneTicketLabelForOrderId(orderId);
+        }
+        logOrderFlow('Send refresh skipped order=$orderId (has_changes=false)');
+        return;
+      }
+
       final current = findOrder(orderId: orderId, orderNumber: tableNumber);
       var detail = await _orderRepository.getOrderDetail(
         orderId,

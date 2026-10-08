@@ -364,6 +364,16 @@ class SessionRepository {
     await _local.clearPaidOrdersList();
   }
 
+  /// Drops in-memory rows from the previous server (Hive is wiped separately).
+  void resetForServerSwitch() {
+    _openOrdersMemory = null;
+    _preloadedSessionOrders = null;
+    _salesZonesMemory = const [];
+    _occupancyOpenOrders = const [];
+    _openOrdersEpoch++;
+    _tablesWireEpoch++;
+  }
+
   /// Persist a completed+paid ticket for the statistics paid-orders list.
   Future<void> rememberPaidOrder(Map<String, dynamic> orderDetail) async {
     if (!OrderMapper.isActiveDayPaidOrder(orderDetail)) return;

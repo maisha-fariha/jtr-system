@@ -34,6 +34,8 @@ class OrderLocalDataSource {
     return decoded;
   }
 
+  void clearMemory() => _detailMemory.clear();
+
   Future<void> removeOrderDetail(int orderId) async {
     _detailMemory.remove(orderId);
     await _storage.delete(_detailKey(orderId));

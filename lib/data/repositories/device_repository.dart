@@ -1,9 +1,11 @@
 import '../../core/app_flavor.dart';
 import '../../core/config/api_config.dart';
+import '../../core/constants/storage_constants.dart';
 import '../../core/device/device_instance_identity.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/device_secure_storage.dart';
+import '../../core/storage/hive_storage.dart';
 import '../../jtr_mobile/restaurants/rapport_restaurant_store.dart';
 import '../../jtr_mobile/restaurants/rapport_saved_restaurant.dart';
 import '../../utils/api_log.dart';
@@ -11,6 +13,10 @@ import '../datasources/device_remote_datasource.dart';
 import '../mappers/device_activation_mapper.dart';
 import '../models/api_envelope.dart';
 import '../models/device_activation_models.dart';
+import 'catalog_repository.dart';
+import 'order_repository.dart';
+import 'session_repository.dart';
+import 'stock_repository.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -308,7 +314,12 @@ class DeviceRepository {
       deviceUuid: result.deviceUuid,
       label: result.label,
     );
+    final previous = await _secureStorage.readCredentials();
     await _secureStorage.saveCredentials(credentials);
+    await _resetCachedDataIfServerChanged(
+      next: credentials,
+      previous: previous,
+    );
 
     if (AppFlavorConfig.isRapport &&
         Get.isRegistered<RapportRestaurantStore>()) {
@@ -338,6 +349,48 @@ class DeviceRepository {
       bootstrap: result.bootstrap,
       message: result.message,
     );
+  }
+
+  static String _serverScope(String tenantSchema, String apiBaseUrl) =>
+      '${tenantSchema.trim().toLowerCase()}|'
+      '${ApiConfig.normalizeOriginBaseUrl(apiBaseUrl).toLowerCase()}';
+
+  /// POS: cached orders / tables / catalog belong to one server — order ids
+  /// collide across restaurants, so drop them when activation moves servers.
+  Future<void> _resetCachedDataIfServerChanged({
+    required DeviceCredentials next,
+    required DeviceCredentials? previous,
+  }) async {
+    if (AppFlavorConfig.isRapport || !Get.isRegistered<HiveStorage>()) return;
+
+    final storage = Get.find<HiveStorage>();
+    final nextScope = _serverScope(next.tenantSchema, next.apiBaseUrl);
+    final lastScope = storage.readString(StorageConstants.serverScopeKey) ??
+        (previous == null
+            ? null
+            : _serverScope(previous.tenantSchema, previous.apiBaseUrl));
+
+    if (lastScope != null && lastScope != nextScope) {
+      logDeviceActivation(
+        phase: 'SERVER_SWITCH',
+        posUrl: next.apiBaseUrl,
+        response: {'previous': lastScope, 'next': nextScope},
+      );
+      await storage.clearAll();
+      if (Get.isRegistered<OrderRepository>()) {
+        Get.find<OrderRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<SessionRepository>()) {
+        Get.find<SessionRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<CatalogRepository>()) {
+        Get.find<CatalogRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<StockRepository>()) {
+        Get.find<StockRepository>().clearCache();
+      }
+    }
+    await storage.writeString(StorageConstants.serverScopeKey, nextScope);
   }
 
   Future<void> clearDeviceCredentials() async {

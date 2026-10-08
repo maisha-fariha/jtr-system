@@ -23,6 +23,11 @@ class CatalogRepository {
 
   CatalogProductModel? _cachedSeedProduct;
 
+  /// Drops the previous server's seed product (Hive catalog is wiped separately).
+  void resetForServerSwitch() {
+    _cachedSeedProduct = null;
+  }
+
   Future<List<LeafCategoryModel>> getLeafCategories({
     bool forceRefresh = false,
   }) async {

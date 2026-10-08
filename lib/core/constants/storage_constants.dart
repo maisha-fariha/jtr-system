@@ -14,4 +14,6 @@ class StorageConstants {
   static const tablesListKey = 'tables_list';
   static const catalogLeafCategoriesKey = 'catalog_leaf_categories';
   static const catalogProductsKey = 'catalog_products';
+  /// `tenant|origin` of the server the cached data belongs to (POS).
+  static const serverScopeKey = 'server_scope';
 }

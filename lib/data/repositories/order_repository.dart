@@ -109,6 +109,19 @@ class OrderRepository {
     return _optimisticSyncByKey.putIfAbsent(syncKey, OrderOptimisticSync.new);
   }
 
+  /// Drops per-order memory from the previous server (order ids collide
+  /// across restaurants). Call only when no ticket screen is open.
+  void resetForServerSwitch() {
+    _local.clearMemory();
+    _emptyShellDisplayOrderIds.clear();
+    _suppressedItemIdsByOrderId.clear();
+    _pendingLocalDeleteOrderIds.clear();
+    _detailRevisionByOrderId.clear();
+    _noChangeWriteOrderIds.clear();
+    _optimisticSyncByKey.clear();
+    _cachedPaymentModes = [];
+  }
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
   Map<String, dynamic>? cachedOrderDetail(int orderId) {
     if (orderId <= 0) return null;

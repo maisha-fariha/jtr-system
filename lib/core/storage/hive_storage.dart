@@ -34,4 +34,10 @@ class HiveStorage extends GetxService {
     await box.delete(StorageConstants.authSessionKey);
     await box.delete(StorageConstants.authTokenKey);
   }
+
+  /// Every key in this box belongs to one restaurant server (users, session,
+  /// orders, tables, catalog). Device credentials live in the Keychain.
+  Future<void> clearAll() async {
+    await box.clear();
+  }
 }

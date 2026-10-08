@@ -90,6 +90,10 @@ class LoginPage extends StatelessWidget {
                       JtrResponsive.getResponsiveSpacing(context, 48),
                       _AddRestaurantButton(controller: c),
                       JtrResponsive.getResponsiveSpacing(context, 24),
+                    ] else if (c.showServerSwitcher) ...[
+                      JtrResponsive.getResponsiveSpacing(context, 48),
+                      _SwitchServerButton(controller: c),
+                      JtrResponsive.getResponsiveSpacing(context, 24),
                     ] else
                       JtrResponsive.getResponsiveSpacing(context, 48),
                     Stack(
@@ -155,6 +159,49 @@ class _AddRestaurantButton extends StatelessWidget {
       final busy = controller.isSwitchingRestaurant.value;
       return OutlinedButton.icon(
         onPressed: busy ? null : () => controller.addRestaurantByScan(),
+        icon: Icon(
+          Icons.qr_code_scanner_rounded,
+          size: JtrResponsive.getResponsiveSize(context, 18),
+          color: AppTheme.primary,
+        ),
+        label: Text(
+          'Changer de restaurant',
+          style: TextStyle(
+            color: AppTheme.primary,
+            fontWeight: FontWeight.w600,
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: AppTheme.primary.withValues(alpha: 0.55)),
+          padding: JtrResponsive.getResponsivePadding(
+            context,
+            horizontal: 20,
+            vertical: 12,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(
+              JtrResponsive.getResponsiveRadius(context, 14),
+            ),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+class _SwitchServerButton extends StatelessWidget {
+  const _SwitchServerButton({required this.controller});
+
+  final LoginController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      final busy = controller.isLoading.value;
+      return OutlinedButton.icon(
+        onPressed:
+            busy ? null : () => controller.switchServerByScan(context),
         icon: Icon(
           Icons.qr_code_scanner_rounded,
           size: JtrResponsive.getResponsiveSize(context, 18),

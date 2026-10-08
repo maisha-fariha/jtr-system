@@ -16,7 +16,7 @@ class SessionRemoteDataSource {
   SessionRemoteDataSource(this._client);
 
   /// Session list + swipe-refresh page size (`GET /api/orders/summary`).
-  static const int ordersPageSize = 20;
+  static const int ordersPageSize = 100;
 
   final ApiClient _client;
 

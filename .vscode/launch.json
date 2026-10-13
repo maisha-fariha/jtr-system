@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "JTR System (POS)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main_pos.dart",
+      "args": ["--flavor", "pos"]
+    },
+    {
+      "name": "JTR Rapport (manager)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main_rapport.dart",
+      "args": ["--flavor", "rapport"]
+    }
+  ]
+}

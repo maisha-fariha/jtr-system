@@ -14,50 +14,48 @@ class AppFooter extends StatelessWidget {
       ThemeController.to.isDark.value;
       const email = 'contact.jtrinnovation@gmail.com';
       final fontSize = JtrResponsive.getResponsiveFontSize(context, 12);
+      final baseStyle = TextStyle(
+        fontSize: fontSize,
+        color: AppTheme.darkText.withValues(alpha: 0.8),
+        height: 1.5,
+      );
 
-      return Column(
-        children: [
-          Text(
-            'All rights and license granted by JTR Innovation.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: fontSize,
-              color: AppTheme.darkText.withValues(alpha: 0.8),
-              height: 1.5,
+      return Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.paddingOf(context).bottom,
+        ),
+        child: Column(
+          children: [
+            Text(
+              'All rights and license granted by JTR Innovation.',
+              textAlign: TextAlign.center,
+              style: baseStyle,
             ),
-          ),
-          JtrResponsive.getResponsiveSpacing(context, 4),
-          Text(
-            'Contact: +212 8 08 58 51 28 / +212 6 66 44 43 30',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: fontSize,
-              color: AppTheme.darkText.withValues(alpha: 0.8),
-              height: 1.5,
+            JtrResponsive.getResponsiveSpacing(context, 4),
+            Text(
+              'Contact: +212 8 08 58 51 28 / +212 6 66 44 43 30',
+              textAlign: TextAlign.center,
+              style: baseStyle,
             ),
-          ),
-          JtrResponsive.getResponsiveSpacing(context, 4),
-          RichText(
-            textAlign: TextAlign.center,
-            text: TextSpan(
-              style: TextStyle(
-                fontSize: fontSize,
-                color: AppTheme.darkText.withValues(alpha: 0.8),
-                height: 1.5,
-              ),
-              children: [
-                const TextSpan(text: 'Email: '),
-                TextSpan(
-                  text: email,
-                  style: const TextStyle(
-                    color: AppTheme.primary,
-                    decoration: TextDecoration.underline,
+            JtrResponsive.getResponsiveSpacing(context, 4),
+            Text.rich(
+              TextSpan(
+                style: baseStyle,
+                children: [
+                  const TextSpan(text: 'Email: '),
+                  TextSpan(
+                    text: email,
+                    style: baseStyle.copyWith(
+                      color: AppTheme.primary,
+                      decoration: TextDecoration.underline,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
+              textAlign: TextAlign.center,
             ),
-          ),
-        ],
+          ],
+        ),
       );
     });
   }

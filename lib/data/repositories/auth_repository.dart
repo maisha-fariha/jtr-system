@@ -269,4 +269,10 @@ class AuthRepository {
     _apiClient.setAuthToken(null);
     logAuthTokenCleared(source: 'logout');
   }
+
+  /// Clears session + login user/role cache (restaurant / tenant switch).
+  Future<void> clearTenantScopedAuthCache() async {
+    await logout();
+    await _local.clearLoginDirectory();
+  }
 }

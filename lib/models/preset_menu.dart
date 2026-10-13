@@ -23,5 +23,5 @@ class PresetMenu {
   String get badgeLabel => 'M $badgeNumber';
 
   String get formattedPrice =>
-      '${priceValue.toStringAsFixed(2).replaceAll('.', ',')} €';
+      priceValue.toStringAsFixed(2).replaceAll('.', ',');
 }

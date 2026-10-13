@@ -4,9 +4,15 @@ import 'package:get/get.dart';
 import '../controllers/login_controller.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/device_repository.dart';
 import '../data/repositories/session_repository.dart';
+import '../jtr_mobile/assistant/jtr_mobile_assistant_controller.dart';
+import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
+import '../jtr_mobile/data/jtr_mobile_dashboard_remote_datasource.dart';
+import '../jtr_mobile/data/repositories/jtr_mobile_dashboard_repository.dart';
 import '../routes/app_pages.dart';
 import '../services/reverb_realtime_service.dart';
+import '../controllers/session_controller.dart';
 
 class AppNavigation {
   AppNavigation._();
@@ -28,11 +34,44 @@ class AppNavigation {
     if (Get.isRegistered<AuthRepository>()) {
       await Get.find<AuthRepository>().logout();
     }
-    // Drop any lingering login controller so onInit reloads users from API.
-    if (Get.isRegistered<LoginController>()) {
+    _disposeSessionScopedControllers();
+    // Put LoginController BEFORE the route builds (binding must not delete).
+    ensureLoginControllerForNavigation(recreate: true);
+    await Get.offAllNamed(AppRoutes.login);
+  }
+
+  /// Ensures [LoginController] exists before opening login.
+  ///
+  /// Uses [permanent] so `Get.offAllNamed` does not dispose it mid-rebuild
+  /// (that was causing "LoginController not found" on LoginPage Obx).
+  static void ensureLoginControllerForNavigation({bool recreate = false}) {
+    if (recreate && Get.isRegistered<LoginController>()) {
       Get.delete<LoginController>(force: true);
     }
-    Get.offAllNamed(AppRoutes.login);
+    if (!Get.isRegistered<LoginController>()) {
+      Get.put(
+        LoginController(authRepository: Get.find<AuthRepository>()),
+        permanent: true,
+      );
+    }
+  }
+
+  static void _disposeSessionScopedControllers() {
+    if (Get.isRegistered<JtrMobileAssistantController>()) {
+      Get.delete<JtrMobileAssistantController>(force: true);
+    }
+    if (Get.isRegistered<JtrMobileDashboardController>()) {
+      Get.delete<JtrMobileDashboardController>(force: true);
+    }
+    if (Get.isRegistered<JtrMobileDashboardRepository>()) {
+      Get.delete<JtrMobileDashboardRepository>(force: true);
+    }
+    if (Get.isRegistered<JtrMobileDashboardRemoteDataSource>()) {
+      Get.delete<JtrMobileDashboardRemoteDataSource>(force: true);
+    }
+    if (Get.isRegistered<SessionController>()) {
+      Get.delete<SessionController>(force: true);
+    }
   }
 
   /// Clears session and returns to login when the API reports unauthenticated.
@@ -76,6 +115,40 @@ class AppNavigation {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       forceLogoutForUnauthenticated();
     });
+  }
+
+  static bool _deviceActivationInFlight = false;
+
+  /// Schedule [forceDeviceActivation] after the current frame (Dio errors).
+  static void scheduleDeviceActivationRequired() {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      forceDeviceActivation();
+    });
+  }
+
+  /// Device revoked / « appareil mobile changé »: wipe device credentials and
+  /// require a new activation code. Duplicate triggers are ignored.
+  static Future<void> forceDeviceActivation() async {
+    if (_deviceActivationInFlight) return;
+    if (Get.currentRoute == AppRoutes.activation) return;
+
+    _deviceActivationInFlight = true;
+    try {
+      _closeOverlays();
+      if (Get.isRegistered<SessionRepository>()) {
+        await Get.find<SessionRepository>().clearOpenOrdersCache();
+      }
+      if (Get.isRegistered<AuthRepository>()) {
+        await Get.find<AuthRepository>().logout();
+      }
+      if (Get.isRegistered<DeviceRepository>()) {
+        await Get.find<DeviceRepository>().clearDeviceCredentials();
+      }
+      _disposeSessionScopedControllers();
+      await Get.offAllNamed(AppRoutes.activation);
+    } finally {
+      _deviceActivationInFlight = false;
+    }
   }
 
   static void _closeOverlays() {

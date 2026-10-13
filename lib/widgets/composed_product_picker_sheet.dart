@@ -93,7 +93,7 @@ class _ComposedProductPickerSheetState extends State<ComposedProductPickerSheet>
                       ),
                     ),
                     Text(
-                      '${_totalPrice.toStringAsFixed(2).replaceAll('.', ',')} €',
+                      _totalPrice.toStringAsFixed(2).replaceAll('.', ','),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -133,7 +133,7 @@ class _ComposedProductPickerSheetState extends State<ComposedProductPickerSheet>
                               final isSelected = selected?.id == option.id;
                               final supplement = option.supplement;
                               final label = supplement > 0
-                                  ? '${option.name} (+${supplement.toStringAsFixed(2).replaceAll('.', ',')} €)'
+                                  ? '${option.name} (+${supplement.toStringAsFixed(2).replaceAll('.', ',')})'
                                   : option.name;
 
                               return ChoiceChip(

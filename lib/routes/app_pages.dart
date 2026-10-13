@@ -19,6 +19,12 @@ import '../pages/menu_selection_page.dart';
 import '../pages/session_page.dart';
 import '../pages/statistics_page.dart';
 import '../pages/paid_orders_page.dart';
+import '../core/network/api_client.dart';
+import '../core/storage/device_secure_storage.dart';
+import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
+import '../jtr_mobile/data/jtr_mobile_dashboard_remote_datasource.dart';
+import '../jtr_mobile/data/repositories/jtr_mobile_dashboard_repository.dart';
+import '../jtr_mobile/pages/jtr_mobile_dashboard_page.dart';
 import '../controllers/table_details_controller.dart';
 import '../controllers/payment_controller.dart';
 import '../data/repositories/auth_repository.dart';
@@ -43,6 +49,7 @@ class AppRoutes {
   static const menuSelection = '/menu-selection';
   static const tableDetails = '/table-details';
   static const statistics = '/statistics';
+  static const jtrMobileDashboard = '/jtr-mobile-dashboard';
   static const paidOrders = '/paid-orders';
   static const payment = '/payment';
 }
@@ -119,7 +126,13 @@ class AppPages {
       name: AppRoutes.login,
       page: () => const LoginPage(),
       binding: BindingsBuilder(() {
-        Get.put(LoginController(authRepository: Get.find<AuthRepository>()));
+        // Permanent so offAllNamed / stack clears do not drop it under Obx.
+        if (!Get.isRegistered<LoginController>()) {
+          Get.put(
+            LoginController(authRepository: Get.find<AuthRepository>()),
+            permanent: true,
+          );
+        }
       }),
     ),
     GetPage(
@@ -170,6 +183,26 @@ class AppPages {
     GetPage(
       name: AppRoutes.statistics,
       page: () => const StatisticsPage(),
+    ),
+    GetPage(
+      name: AppRoutes.jtrMobileDashboard,
+      page: () => const JtrMobileDashboardPage(),
+      binding: BindingsBuilder(() {
+        Get.lazyPut(
+          () => JtrMobileDashboardRemoteDataSource(Get.find<ApiClient>()),
+        );
+        Get.lazyPut(
+          () => JtrMobileDashboardRepository(
+            remote: Get.find<JtrMobileDashboardRemoteDataSource>(),
+            secureStorage: Get.find<DeviceSecureStorage>(),
+          ),
+        );
+        Get.put(
+          JtrMobileDashboardController(
+            repository: Get.find<JtrMobileDashboardRepository>(),
+          ),
+        );
+      }),
     ),
     GetPage(
       name: AppRoutes.paidOrders,

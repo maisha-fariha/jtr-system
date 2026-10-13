@@ -91,7 +91,7 @@ class StatisticsPage extends GetView<SessionController> {
                       child: _KpiCard(
                         label: 'REVENU TOTAL',
                         value: _formatTotal(totalRevenue),
-                        icon: Icons.euro_symbol_rounded,
+                        icon: Icons.payments_rounded,
                         iconColor: AppTheme.primary,
                       ),
                     ),
@@ -152,7 +152,7 @@ class StatisticsPage extends GetView<SessionController> {
 
   String _formatTotal(double value) {
     final formatted = value.toStringAsFixed(2).replaceAll('.', ',');
-    return '$formatted €';
+    return formatted;
   }
 
   double _parseTotal(String total) {
@@ -417,7 +417,9 @@ class _OrderStatRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}',
+                  order.itemCount > 0
+                      ? '${order.itemCount} article${order.itemCount != 1 ? 's' : ''}  •  Gr. ${order.group}  •  ${order.poste}'
+                      : 'Gr. ${order.group}  •  ${order.poste}',
                   style: TextStyle(
                     fontSize: JtrResponsive.getResponsiveFontSize(context, 12),
                     color: AppTheme.textSecondary.withValues(alpha: 0.7),

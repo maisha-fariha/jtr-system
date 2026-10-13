@@ -15,11 +15,25 @@ class ApiEndpoints {
 
   static const activeDay = '/api/days/active';
   static const activeDayStatistics = '/api/dashboard/active-day-statistics';
+  static const dashboardOrderSummary = '/api/dashboard/order-summary';
+  static const dashboardRevenueByHour = '/api/dashboard/revenue-by-hour';
+  static const dashboardRevenueBySalesZone =
+      '/api/dashboard/revenue-by-sales-zone';
+  static const dashboardProductFamilySummary =
+      '/api/dashboard/product-family-summary';
+  static const dashboardEventList = '/api/dashboard/event-list';
+  static const dashboardEventListExport = '/api/dashboard/event-list/export';
+
+  /// JTR Rapport / POS read-only AI chat (requires `access-pos-chat`).
+  static const chat = '/api/chat';
+
   static const salesZonesShortlist = '/api/sales-zones/shortlist';
   static const customersShortlist = '/api/customers/shortlist';
   static const customers = '/api/customers';
   static String customerById(int id) => '/api/customers/$id';
   static const orders = '/api/orders';
+  /// Lightweight list rows (no seat/course trees, no `items_count`).
+  static const ordersSummary = '/api/orders/summary';
   static const createOrder = orders;
   static const openOrders = '/api/days/open-orders';
   static const markOrderPrinted = '/api/orders/mark-printed';
@@ -31,6 +45,8 @@ class ApiEndpoints {
   static String tableSession(int tableId) => '/api/tables/$tableId/session';
 
   static String orderById(int id) => '/api/orders/$id';
+  /// Starts the table session (lock) and returns the full order detail.
+  static String openOrder(int id) => '/api/orders/$id/open';
   static String closeOrder(int id) => '/api/orders/$id/close';
   static String requestCourses(int id) => '/api/orders/$id/request-courses';
   static String orderSeatOrderItems(int orderId, int seatNumber) =>

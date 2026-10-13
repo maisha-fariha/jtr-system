@@ -16,6 +16,7 @@ import '../pages/device_qr_scan_page.dart';
 import '../routes/app_pages.dart';
 import '../services/reverb_realtime_service.dart';
 import '../utils/api_log.dart';
+import '../utils/app_navigation.dart';
 
 /// Activates this mobile device against the configured API host.
 ///
@@ -543,10 +544,15 @@ class DeviceActivationController extends GetxController {
             .timeout(const Duration(seconds: 2));
       } catch (_) {}
     }
-    await _authRepository.logout();
+    try {
+      await _authRepository.clearTenantScopedAuthCache();
+    } catch (_) {
+      await _authRepository.logout();
+    }
     if (Get.isRegistered<SessionRepository>()) {
       await Get.find<SessionRepository>().clearOpenOrdersCache();
     }
-    Get.offAllNamed(AppRoutes.login);
+    AppNavigation.ensureLoginControllerForNavigation(recreate: true);
+    await Get.offAllNamed(AppRoutes.login);
   }
 }

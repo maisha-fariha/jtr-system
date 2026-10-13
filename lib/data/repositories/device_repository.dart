@@ -1,16 +1,26 @@
+import '../../core/app_flavor.dart';
 import '../../core/config/api_config.dart';
+import '../../core/constants/storage_constants.dart';
+import '../../core/device/device_instance_identity.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_exception.dart';
 import '../../core/storage/device_secure_storage.dart';
+import '../../core/storage/hive_storage.dart';
+import '../../jtr_mobile/restaurants/rapport_restaurant_store.dart';
+import '../../jtr_mobile/restaurants/rapport_saved_restaurant.dart';
 import '../../utils/api_log.dart';
 import '../datasources/device_remote_datasource.dart';
 import '../mappers/device_activation_mapper.dart';
 import '../models/api_envelope.dart';
 import '../models/device_activation_models.dart';
+import 'catalog_repository.dart';
+import 'order_repository.dart';
+import 'session_repository.dart';
+import 'stock_repository.dart';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
@@ -30,7 +40,7 @@ class DeviceRepository {
   final DeviceSecureStorage _secureStorage;
   final ApiClient _apiClient;
 
-  static const appVersion = '1.0.0';
+  static const appVersion = '1.0.1';
 
   Future<bool> get hasStoredCredentials => _secureStorage.hasCredentials;
 
@@ -39,6 +49,7 @@ class DeviceRepository {
 
   /// Applies saved device credentials to [ApiConfig] + Dio.
   Future<bool> restoreRuntimeFromStorage() async {
+    await _applyDeviceIdentity();
     final creds = await _secureStorage.readCredentials();
     if (creds == null) {
       ApiConfig.resetToDefaults();
@@ -142,7 +153,7 @@ class DeviceRepository {
       version: 1,
       apiBaseUrl: DeviceActivationMapper.normalizePosApiBaseUrl(apiBaseUrl),
       code: normalizedCode,
-      type: 'mobile',
+      type: AppFlavorConfig.activationDeviceType,
       tenantSchema: DeviceActivationMapper.normalizeTenantSchema(tenantSchema),
     );
     return _activatePayload(payload);
@@ -150,8 +161,11 @@ class DeviceRepository {
 
   Future<DeviceActivationResult> activateFromQrText(String qrText) async {
     final payload = DeviceActivationMapper.parseQrText(qrText);
-    if (!payload.isMobile) {
-      throw ApiException(message: 'Le type d\'activation doit être "mobile".');
+    if (!payload.matchesAppType) {
+      throw ApiException(
+        message: 'Le type d\'activation doit être '
+            '"${AppFlavorConfig.activationDeviceType}".',
+      );
     }
     return _activatePayload(payload);
   }
@@ -203,7 +217,7 @@ class DeviceRepository {
         fallbackTenantSchema: fallbackTenantSchema,
         fallbackApiBaseUrl: fallbackApiBaseUrl,
       );
-      return _persistActivationResult(
+      return await _persistActivationResult(
         result: result,
         contactedApiBaseUrl: result.apiBaseUrl,
       );
@@ -224,17 +238,32 @@ class DeviceRepository {
         DeviceActivationMapper.normalizePosApiBaseUrl(payload.apiBaseUrl);
     final origin = ApiConfig.normalizeOriginBaseUrl(contactedApiBaseUrl);
     final fingerprint = await _stableFingerprint();
+    final identity = await _applyDeviceIdentity();
+    final metadata = <String, dynamic>{
+      'app': 'jtr_system',
+      if (identity.model != null) 'model': identity.model,
+      if (identity.osVersion != null) 'os_version': identity.osVersion,
+    };
+
+    logDeviceActivation(
+      phase: 'device_identity',
+      request: {
+        'platform': identity.platform,
+        'device_instance_id': identity.deviceInstanceId,
+        'metadata': metadata,
+      },
+    );
 
     final result = await _remote.activate(
       code: payload.code,
+      type: payload.type,
       tenantSchema: payload.tenantSchema,
       originBaseUrl: origin,
+      platform: identity.platform,
+      deviceInstanceId: identity.deviceInstanceId,
       appVersion: appVersion,
       fingerprint: fingerprint,
-      metadata: {
-        'platform': defaultTargetPlatform.name,
-        'app': 'jtr_system',
-      },
+      metadata: metadata,
     );
 
     return _persistActivationResult(
@@ -285,7 +314,21 @@ class DeviceRepository {
       deviceUuid: result.deviceUuid,
       label: result.label,
     );
+    final previous = await _secureStorage.readCredentials();
     await _secureStorage.saveCredentials(credentials);
+    await _resetCachedDataIfServerChanged(
+      next: credentials,
+      previous: previous,
+    );
+
+    if (AppFlavorConfig.isRapport &&
+        Get.isRegistered<RapportRestaurantStore>()) {
+      try {
+        await Get.find<RapportRestaurantStore>().upsertAndSelect(
+          RapportSavedRestaurant.fromCredentials(credentials),
+        );
+      } catch (_) {}
+    }
 
     ApiConfig.applyRuntime(
       baseUrl: credentials.apiBaseUrl,
@@ -306,6 +349,48 @@ class DeviceRepository {
       bootstrap: result.bootstrap,
       message: result.message,
     );
+  }
+
+  static String _serverScope(String tenantSchema, String apiBaseUrl) =>
+      '${tenantSchema.trim().toLowerCase()}|'
+      '${ApiConfig.normalizeOriginBaseUrl(apiBaseUrl).toLowerCase()}';
+
+  /// POS: cached orders / tables / catalog belong to one server — order ids
+  /// collide across restaurants, so drop them when activation moves servers.
+  Future<void> _resetCachedDataIfServerChanged({
+    required DeviceCredentials next,
+    required DeviceCredentials? previous,
+  }) async {
+    if (AppFlavorConfig.isRapport || !Get.isRegistered<HiveStorage>()) return;
+
+    final storage = Get.find<HiveStorage>();
+    final nextScope = _serverScope(next.tenantSchema, next.apiBaseUrl);
+    final lastScope = storage.readString(StorageConstants.serverScopeKey) ??
+        (previous == null
+            ? null
+            : _serverScope(previous.tenantSchema, previous.apiBaseUrl));
+
+    if (lastScope != null && lastScope != nextScope) {
+      logDeviceActivation(
+        phase: 'SERVER_SWITCH',
+        posUrl: next.apiBaseUrl,
+        response: {'previous': lastScope, 'next': nextScope},
+      );
+      await storage.clearAll();
+      if (Get.isRegistered<OrderRepository>()) {
+        Get.find<OrderRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<SessionRepository>()) {
+        Get.find<SessionRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<CatalogRepository>()) {
+        Get.find<CatalogRepository>().resetForServerSwitch();
+      }
+      if (Get.isRegistered<StockRepository>()) {
+        Get.find<StockRepository>().clearCache();
+      }
+    }
+    await storage.writeString(StorageConstants.serverScopeKey, nextScope);
   }
 
   Future<void> clearDeviceCredentials() async {
@@ -362,6 +447,15 @@ class DeviceRepository {
   Future<String> decodeQrImageFile(File file) async {
     final bytes = await file.readAsBytes();
     return decodeQrImageBytes(bytes);
+  }
+
+  Future<DeviceInstanceIdentity> _applyDeviceIdentity() async {
+    final identity = await DeviceInstanceIdentity.resolve();
+    ApiConfig.applyDeviceIdentity(
+      platform: identity.platform,
+      instanceId: identity.deviceInstanceId,
+    );
+    return identity;
   }
 
   Future<String> _stableFingerprint() async {

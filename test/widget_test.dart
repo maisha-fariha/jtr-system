@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:jtr_system/app_bootstrap.dart';
 
 import 'package:jtr_system/controllers/theme_controller.dart';
 import 'package:jtr_system/main.dart';
@@ -7,7 +8,7 @@ import 'package:jtr_system/main.dart';
 void main() {
   testWidgets('Home page smoke test', (WidgetTester tester) async {
     Get.put(ThemeController());
-    await tester.pumpWidget(const JtrSystemApp());
+    await tester.pumpWidget( JtrSystemApp());
     await tester.pumpAndSettle();
 
     expect(find.text('JTR System'), findsOneWidget);

@@ -36,6 +36,7 @@ enum SessionAction {
   demanderSuite,
   ticket,
   statistics,
+  dashboard,
 }
 
 class SessionRowSelection {
@@ -447,6 +448,12 @@ class SessionController extends GetxController {
     // Warm paid-orders cache while the user views KPIs (non-blocking).
     _prefetchPaidOrdersInBackground();
     await Get.toNamed(AppRoutes.statistics);
+  }
+
+  Future<void> openJtrMobileDashboard() async {
+    if (!canAccessDashboard) return;
+    selectAction(SessionAction.dashboard);
+    await Get.toNamed(AppRoutes.jtrMobileDashboard);
   }
 
   /// Remove a fully paid table from the open session list.
@@ -1447,6 +1454,16 @@ class SessionController extends GetxController {
       final orderId = await orderIdFuture;
       if (orderId == null || orderId <= 0) return;
 
+      // Send changed nothing server-side — the row from Send is already current.
+      if (_orderRepository.consumeNoChangeWrite(orderId)) {
+        if (!selectedZoneUsesTableFlow) {
+          _freeTicketByOrderId[orderId] =
+              OrderMapper.freeZoneTicketLabelForOrderId(orderId);
+        }
+        logOrderFlow('Send refresh skipped order=$orderId (has_changes=false)');
+        return;
+      }
+
       final current = findOrder(orderId: orderId, orderNumber: tableNumber);
       var detail = await _orderRepository.getOrderDetail(
         orderId,
@@ -1572,11 +1589,14 @@ class SessionController extends GetxController {
     }
   }
 
+  /// [openSession]: user opened the ticket screen. Only the waiter's own
+  /// ticket takes the server lock (`POST /orders/{id}/open`).
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
     List<OrderDisplayEntry>? previousDisplayEntries,
+    bool openSession = false,
   }) async {
     final existing = findOrder(orderNumber: orderNumber, orderId: orderId);
     if (existing == null) return;
@@ -1592,6 +1612,7 @@ class SessionController extends GetxController {
     loadingDetailOrderNumbers.add(orderNumber);
     loadingDetailOrderNumbers.refresh();
 
+    var useOpen = false;
     try {
       final previous = orders[idx];
       // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
@@ -1599,9 +1620,12 @@ class SessionController extends GetxController {
             previousDisplayEntries,
           ) ??
           OrderMapper.coalesceLayoutHints(previous.displayEntries);
+      final waiterId = _currentWaiterId;
+      useOpen = openSession && waiterId > 0 && existing.waiterId == waiterId;
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
         previousDisplayEntries: layoutHints,
+        openSession: useOpen,
       );
       // Re-resolve the row by id — a background list refresh may have
       // mutated `orders` while this request was in flight, so the index
@@ -1620,13 +1644,31 @@ class SessionController extends GetxController {
         orders.refresh();
       }
     } on ApiException catch (e) {
-      _showSnack('Erreur', e.message);
+      if (useOpen && e.statusCode == 409) {
+        logOrderFlow(
+          'POST /api/orders/${existing.id}/open 409 — table in use: ${e.message}',
+        );
+        await _leaveTicketTableInUse(existing.number);
+      } else {
+        _showSnack('Erreur', e.message);
+      }
     } catch (_) {
       _showSnack('Erreur', 'Impossible de charger les produits.');
     } finally {
       loadingDetailOrderNumbers.remove(orderNumber);
       loadingDetailOrderNumbers.refresh();
     }
+  }
+
+  /// `/orders/{id}/open` refused the session: back to the list + occupied dialog.
+  Future<void> _leaveTicketTableInUse(String tableNumber) async {
+    if (Get.currentRoute == AppRoutes.tableDetails) {
+      Get.back<void>();
+    }
+    await TableOccupiedDialog.show(
+      userName: _currentUserDisplayName,
+      tableNumber: tableNumber,
+    );
   }
 
   bool isRowSelected({
@@ -1650,6 +1692,11 @@ class SessionController extends GetxController {
 
   /// `access-dashboard` — Statistics section.
   bool get canAccessStatistics => PosPermissions.canAccessStatistics(
+        _authRepository.cachedSession?.user,
+      );
+
+  /// JTR Mobile manager dashboard (`access-pos-dashboard`).
+  bool get canAccessDashboard => PosPermissions.canAccessJtrMobileDashboard(
         _authRepository.cachedSession?.user,
       );
 
@@ -2659,7 +2706,7 @@ class SessionController extends GetxController {
     final offeredProducts = order.products
         .map(
           (product) => product.copyWith(
-            price: '0,00 €',
+            price: '0,00',
             isOffered: true,
           ),
         )
@@ -2670,7 +2717,7 @@ class SessionController extends GetxController {
             entry.product != null)
           OrderDisplayEntry.product(
             product: entry.product!.copyWith(
-              price: '0,00 €',
+              price: '0,00',
               isOffered: true,
             ),
             lineIndex: entry.lineIndex ?? 0,
@@ -2682,7 +2729,7 @@ class SessionController extends GetxController {
           entry,
     ];
     orders[idx] = order.copyWith(
-      total: '0,00 €',
+      total: '0,00',
       products: offeredProducts,
       displayEntries: offeredEntries.isNotEmpty
           ? offeredEntries

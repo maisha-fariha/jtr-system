@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Delete Account — JTR System</title>
+  <meta name="description" content="Request deletion of your JTR System POS account and associated data." />
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a222c;
+      --text: #e8eef4;
+      --muted: #9aa8b5;
+      --accent: #e07a5f;
+      --border: rgba(255, 255, 255, 0.08);
+      --ok: #3d9a6a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(180deg, #0f1419 0%, #151c24 100%);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+    .brand { color: var(--accent); font-weight: 700; letter-spacing: 0.02em; font-size: 14px; text-transform: uppercase; }
+    h1 { font-size: 1.85rem; margin: 8px 0 6px; }
+    .meta { color: var(--muted); font-size: 0.95rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      margin-top: 8px;
+    }
+    h2 { font-size: 1.15rem; margin: 22px 0 8px; color: var(--accent); }
+    ol, ul { padding-left: 1.2rem; }
+    a { color: var(--accent); }
+    .box {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(224, 122, 95, 0.35);
+      background: rgba(224, 122, 95, 0.08);
+    }
+    .btn {
+      display: inline-block;
+      margin-top: 12px;
+      background: var(--accent);
+      color: #1a120f;
+      text-decoration: none;
+      font-weight: 700;
+      padding: 12px 18px;
+      border-radius: 10px;
+    }
+    footer { margin-top: 28px; color: var(--muted); font-size: 0.9rem; }
+    nav a { margin-right: 14px; }
+    .note { color: var(--muted); font-size: 0.95rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">JTR Innovation</div>
+      <h1>Delete Account</h1>
+      <p class="meta">App: <strong>JTR System</strong> (POS) · Account &amp; data deletion request</p>
+      <nav>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/delete-account">Delete Account</a>
+      </nav>
+    </header>
+
+    <div class="card">
+      <p>
+        JTR System accounts are managed for restaurant staff by the restaurant operator
+        (JTR POS / back office). You can request deletion of your staff account and related
+        personal data as described below.
+      </p>
+
+      <h2>What will be deleted</h2>
+      <ul>
+        <li>Your staff login / user profile associated with the restaurant POS (where applicable).</li>
+        <li>Device activation binding for your phone/tablet (device credentials revoked so the app can no longer access that restaurant server).</li>
+        <li>Local session data on your device after logout / uninstall / clear app data.</li>
+      </ul>
+
+      <h2>What may be retained</h2>
+      <p class="note">
+        Operational records required for the restaurant’s business (for example historical orders
+        or fiscal records) may be retained by the restaurant under their legal and accounting
+        obligations. Those records are controlled by the restaurant’s JTR server, not by the
+        mobile app publisher alone.
+      </p>
+
+      <h2>How to request deletion</h2>
+      <ol>
+        <li>Send an email to <a href="mailto:contact.jtrinnovation@gmail.com?subject=JTR%20System%20Account%20Deletion%20Request">contact.jtrinnovation@gmail.com</a>.</li>
+        <li>Use the subject: <strong>JTR System Account Deletion Request</strong>.</li>
+        <li>Include: your full name, restaurant / establishment name, username (if any), and the email or phone linked to your account.</li>
+        <li>We will confirm and process the request, typically within <strong>30 days</strong>.</li>
+      </ol>
+
+      <div class="box">
+        <strong>Quick request</strong><br />
+        Tap the button below to open a pre-filled email.
+        <div>
+          <a class="btn" href="mailto:contact.jtrinnovation@gmail.com?subject=JTR%20System%20Account%20Deletion%20Request&body=Please%20delete%20my%20JTR%20System%20account.%0A%0AFull%20name%3A%0ARestaurant%20name%3A%0AUsername%3A%0AContact%20email%20or%20phone%3A%0A">
+            Request account deletion
+          </a>
+        </div>
+      </div>
+
+      <h2>In-app / restaurant options</h2>
+      <ul>
+        <li>Ask your restaurant manager to deactivate your user in the JTR back office.</li>
+        <li>Uninstall the app or clear app data to remove local credentials and caches from your device.</li>
+      </ul>
+
+      <h2>Contact</h2>
+      <p>
+        Email: <a href="mailto:contact.jtrinnovation@gmail.com">contact.jtrinnovation@gmail.com</a><br />
+        Phone: +212 8 08 58 51 28 / +212 6 66 44 43 30
+      </p>
+    </div>
+
+    <footer>
+      © 2026 JTR Innovation · See also our <a href="/privacy">Privacy Policy</a>.
+    </footer>
+  </div>
+</body>
+</html>

@@ -190,7 +190,7 @@ void main() {
 
     expect(merged.products, isEmpty);
     expect(merged.displayEntries, isEmpty);
-    expect(merged.total, '0,00 €');
+    expect(merged.total, '0,00');
   });
 
   test('merge keeps revived lines after delete-all when suppress is stale', () {

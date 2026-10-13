@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../../core/config/api_config.dart';
 import '../../core/config/device_activation_bypass.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/api_endpoints.dart';
@@ -27,6 +28,8 @@ class DeviceRemoteDataSource {
             _client.dio.options.headers['X-Device-Id']?.toString(),
         'X-Device-Token':
             _client.dio.options.headers['X-Device-Token']?.toString(),
+        'X-Device-Platform': ApiConfig.devicePlatform,
+        'X-Device-Instance-Id': ApiConfig.deviceInstanceId,
       },
     };
 
@@ -237,9 +240,12 @@ class DeviceRemoteDataSource {
   /// the HTTP RESPONSE body (success or error).
   Future<DeviceActivationResult> activate({
     required String code,
+    required String type,
     required String tenantSchema,
     required String originBaseUrl,
-    String appVersion = '1.0.0',
+    required String platform,
+    required String deviceInstanceId,
+    String appVersion = '1.0.1',
     String? fingerprint,
     Map<String, dynamic>? metadata,
   }) async {
@@ -261,20 +267,19 @@ class DeviceRemoteDataSource {
     final normalizedCode = DeviceActivationMapper.normalizeCode(code);
     final isBypass = DeviceActivationBypass.enabled &&
         normalizedCode == DeviceActivationBypass.activationCode;
-    // Bypass contract: { code, type } only. Full LAN activate may include extras.
-    final body = isBypass
-        ? <String, dynamic>{
-            'code': DeviceActivationBypass.activationCode,
-            'type': DeviceActivationBypass.deviceType,
-          }
-        : <String, dynamic>{
-            'code': code,
-            'type': 'mobile',
-            'app_version': appVersion,
-            'public_key': null,
-            if (fingerprint?.isNotEmpty == true) 'fingerprint': fingerprint,
-            if (metadata != null) 'metadata': metadata,
-          };
+
+    // Shared contract for bypass + live activate (platform is top-level).
+    final body = <String, dynamic>{
+      'code': isBypass ? DeviceActivationBypass.activationCode : code,
+      'type': isBypass ? DeviceActivationBypass.deviceType : type,
+      'platform': platform,
+      'device_instance_id': deviceInstanceId,
+      'app_version': appVersion,
+      'public_key': null,
+      'fingerprint':
+          (fingerprint != null && fingerprint.isNotEmpty) ? fingerprint : null,
+      'metadata': metadata ?? const <String, dynamic>{'app': 'jtr_system'},
+    };
     final request = {
       'baseUrl': originBaseUrl,
       'url': '$originBaseUrl$path',

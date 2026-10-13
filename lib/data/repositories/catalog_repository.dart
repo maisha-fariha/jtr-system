@@ -23,6 +23,11 @@ class CatalogRepository {
 
   CatalogProductModel? _cachedSeedProduct;
 
+  /// Drops the previous server's seed product (Hive catalog is wiped separately).
+  void resetForServerSwitch() {
+    _cachedSeedProduct = null;
+  }
+
   Future<List<LeafCategoryModel>> getLeafCategories({
     bool forceRefresh = false,
   }) async {
@@ -92,6 +97,17 @@ class CatalogRepository {
       final categories = await _remote.fetchLeafCategories();
       await _local.saveLeafCategories(categories);
     } catch (_) {}
+  }
+
+  /// Product names from the local catalog cache only (no network, no refresh).
+  Map<int, String> cachedProductNamesById() {
+    final products = _local.readProducts();
+    if (products == null) return const {};
+    return <int, String>{
+      for (final product in products)
+        if (product.id > 0 && product.name.trim().isNotEmpty)
+          product.id: product.name.trim(),
+    };
   }
 
   Future<List<CatalogProductModel>> getProducts({

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:get/get.dart';
 
+import '../core/app_flavor.dart';
 import '../core/auth/pos_permissions.dart';
 import '../data/models/sales_zone_info.dart';
 import '../data/repositories/auth_repository.dart';
@@ -140,7 +141,12 @@ class ConnectController extends GetxController {
     isConnected.value = true;
     // Brief beat at 100% so the user sees completion before navigation.
     await Future<void>.delayed(const Duration(milliseconds: 280));
-    _goNext(AppRoutes.session, arguments: const {'preloaded': true});
+    _goNext(
+      AppFlavorConfig.isRapport
+          ? AppRoutes.jtrMobileDashboard
+          : AppRoutes.session,
+      arguments: const {'preloaded': true},
+    );
   }
 
   void _beginPhase({required double floor, required double ceiling}) {

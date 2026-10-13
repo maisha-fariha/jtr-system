@@ -23,6 +23,9 @@ class PosPermissions {
   // Authentication
   static const accessDashboard = 'access-dashboard';
 
+  /// JTR Mobile dashboard (V2 API middleware).
+  static const accessPosDashboard = 'access-pos-dashboard';
+
   /// Keys that imply floor-wide visibility (manager / cashier style).
   /// All keys exist on `GET /api/permissions`.
   static const _viewAllOpenOrdersKeys = <String>{
@@ -113,6 +116,14 @@ class PosPermissions {
     if (user.isSuperuser == true) return true;
 
     return keysFromUser(user).contains(accessDashboard);
+  }
+
+  /// True when the user may open the JTR Mobile manager dashboard.
+  static bool canAccessJtrMobileDashboard(AuthUserModel? user) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+
+    return keysFromUser(user).contains(accessPosDashboard);
   }
 
   /// Manager / cashier / admin: see every waiter's open (and paid) orders.

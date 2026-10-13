@@ -584,7 +584,7 @@ class PaymentController extends GetxController {
         AppSnackbar.show(
           'Paiement',
           'Le montant dépasse le reste à payer '
-              '(${remaining.value.toStringAsFixed(2).replaceAll('.', ',')} €).',
+              '(${remaining.value.toStringAsFixed(2).replaceAll('.', ',')}).',
         );
         return null;
       }
@@ -674,7 +674,7 @@ class PaymentController extends GetxController {
       AppSnackbar.show(
         'Paiement',
         'Le total des couverts dépasse le reste à payer '
-            '(${remaining.value.toStringAsFixed(2).replaceAll('.', ',')} €).',
+            '(${remaining.value.toStringAsFixed(2).replaceAll('.', ',')}).',
       );
       return null;
     }

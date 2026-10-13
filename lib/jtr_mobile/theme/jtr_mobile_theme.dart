@@ -104,10 +104,8 @@ class JtrMobileTheme {
   /// Pay tiles, buttons, activity tiles — HTML uses 8px; slightly softer.
   static const double tileRadius = 10;
 
-  static double dashboardMaxWidth(BuildContext context) {
-    final w = MediaQuery.sizeOf(context).width;
-    if (w > 720) return 480;
-    if (w > 520) return 520;
-    return w;
-  }
+  /// Same single column on phone and tablet. Tablet uses the screen width
+  /// instead of a fixed phone column.
+  static double dashboardMaxWidth(BuildContext context) =>
+      MediaQuery.sizeOf(context).width;
 }

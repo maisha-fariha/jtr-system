@@ -74,15 +74,19 @@ class _ProgressRow extends StatelessWidget {
     return Column(
       children: [
         Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              row.name,
-              style: TextStyle(
-                fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
-                color: JtrMobileTheme.textPrimary,
+            Expanded(
+              child: Text(
+                row.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+                  color: JtrMobileTheme.textPrimary,
+                ),
               ),
             ),
+            SizedBox(width: JtrResponsive.getResponsiveWidth(context, 8)),
             RichText(
               text: TextSpan(
                 style: TextStyle(

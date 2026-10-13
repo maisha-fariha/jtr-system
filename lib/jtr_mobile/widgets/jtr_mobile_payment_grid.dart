@@ -68,13 +68,16 @@ class _PaymentTile extends StatelessWidget {
             ),
           ),
           SizedBox(height: JtrResponsive.getResponsiveHeight(context, 4)),
-          Text(
-            JtrMobileFormatters.currency(item.amount),
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
-              fontWeight: FontWeight.w600,
-              color: JtrMobileTheme.textPrimary,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              JtrMobileFormatters.currency(item.amount),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: JtrResponsive.getResponsiveFontSize(context, 15),
+                fontWeight: FontWeight.w600,
+                color: JtrMobileTheme.textPrimary,
+              ),
             ),
           ),
           SizedBox(height: JtrResponsive.getResponsiveHeight(context, 2)),

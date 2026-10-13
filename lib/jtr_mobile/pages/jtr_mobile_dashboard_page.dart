@@ -98,10 +98,10 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
               onRefresh: controller.refreshDashboard,
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final maxW = JtrMobileTheme.dashboardMaxWidth(context);
+                  final wide = constraints.maxWidth >= 700;
                   final hPad = JtrResponsive.getResponsivePadding(
                     context,
-                    horizontal: 16,
+                    horizontal: wide ? 28 : 16,
                   ).horizontal;
 
                   return SingleChildScrollView(
@@ -112,99 +112,91 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                       hPad / 2,
                       JtrResponsive.getResponsiveHeight(context, 8),
                     ),
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: maxW),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            JtrMobileHeader(
-                              storeName: data.storeName,
-                              dateLabel: data.dateLabel,
-                              onChatTap: controller.toggleChat,
-                              onThemeTap: controller.toggleTheme,
-                            ),
-                            if (chatOpen) const JtrMobileChatPanel(),
-                            JtrMobileKpiCard(kpis: data.kpis),
-                            const JtrMobileSectionLabel(
-                              text: 'Mode de paiement',
-                            ),
-                            JtrMobilePaymentGrid(items: data.payments),
-                            JtrMobileGapDonutCard(
-                              segments: data.gapSegments,
-                              total: data.gapTotal,
-                              onDetailTap: controller.onGapDetailTap,
-                            ),
-                            JtrMobileProgressBarsCard(
-                              title: "Chiffre d'affaires par catégorie",
-                              rows: data.categories
-                                  .map(
-                                    (c) => JtrMobileProgressBarRow(
-                                      name: c.name,
-                                      amount: c.amount,
-                                      percent: c.percent,
-                                      color: c.color,
-                                    ),
-                                  )
-                                  .toList(),
-                              detailLabel:
-                                  'Voir détail par famille et article',
-                              onDetailTap: controller.onFamilyDetailTap,
-                            ),
-                            JtrMobileProgressBarsCard(
-                              title: "Chiffre d'affaires par zone",
-                              rows: data.zones
-                                  .map(
-                                    (z) => JtrMobileProgressBarRow(
-                                      name: z.name,
-                                      amount: z.amount,
-                                      percent: z.percent,
-                                      color: z.color,
-                                    ),
-                                  )
-                                  .toList(),
-                            ),
-                            const JtrMobileSectionLabel(text: 'Activité'),
-                            JtrMobileActivityTiles(activity: data.activity),
-                            const JtrMobileSectionLabel(
-                              text: 'Notes et mouvements',
-                            ),
-                            JtrMobileMovementsList(rows: data.movements),
-                            JtrMobileSectionLabel(
-                              text:
-                                  "Chiffre d'affaires par heure · aujourd'hui",
-                            ),
-                            JtrMobileHourlyChart(
-                              bars: data.hourlyBars,
-                              peakCaption: data.peakCaption,
-                            ),
-                            SizedBox(
-                              height: JtrResponsive.getResponsiveHeight(
-                                context,
-                                12,
-                              ),
-                            ),
-                            const JtrMobileSectionLabel(
-                              text: 'Consulter une autre période',
-                            ),
-                            JtrMobilePeriodPicker(
-                              expanded: periodOpen,
-                              from: controller.periodFrom,
-                              to: controller.periodTo,
-                              onToggle: controller.togglePeriod,
-                              onApply: controller.applyPeriod,
-                            ),
-                            SizedBox(
-                              height: JtrResponsive.getResponsiveHeight(
-                                context,
-                                20,
-                              ),
-                            ),
-                            const AppFooter(),
-                          ],
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        JtrMobileHeader(
+                          storeName: data.storeName,
+                          dateLabel: data.dateLabel,
+                          onChatTap: controller.toggleChat,
+                          onThemeTap: controller.toggleTheme,
                         ),
-                      ),
+                        if (chatOpen) const JtrMobileChatPanel(),
+                        JtrMobileKpiCard(kpis: data.kpis),
+                        const JtrMobileSectionLabel(
+                          text: 'Mode de paiement',
+                        ),
+                        JtrMobilePaymentGrid(items: data.payments),
+                        JtrMobileGapDonutCard(
+                          segments: data.gapSegments,
+                          total: data.gapTotal,
+                          onDetailTap: controller.onGapDetailTap,
+                        ),
+                        JtrMobileProgressBarsCard(
+                          title: "Chiffre d'affaires par catégorie",
+                          rows: data.categories
+                              .map(
+                                (c) => JtrMobileProgressBarRow(
+                                  name: c.name,
+                                  amount: c.amount,
+                                  percent: c.percent,
+                                  color: c.color,
+                                ),
+                              )
+                              .toList(),
+                          detailLabel: 'Voir détail par famille et article',
+                          onDetailTap: controller.onFamilyDetailTap,
+                        ),
+                        JtrMobileProgressBarsCard(
+                          title: "Chiffre d'affaires par zone",
+                          rows: data.zones
+                              .map(
+                                (z) => JtrMobileProgressBarRow(
+                                  name: z.name,
+                                  amount: z.amount,
+                                  percent: z.percent,
+                                  color: z.color,
+                                ),
+                              )
+                              .toList(),
+                        ),
+                        const JtrMobileSectionLabel(text: 'Activité'),
+                        JtrMobileActivityTiles(activity: data.activity),
+                        const JtrMobileSectionLabel(
+                          text: 'Notes et mouvements',
+                        ),
+                        JtrMobileMovementsList(rows: data.movements),
+                        const JtrMobileSectionLabel(
+                          text: "Chiffre d'affaires par heure · aujourd'hui",
+                        ),
+                        JtrMobileHourlyChart(
+                          bars: data.hourlyBars,
+                          peakCaption: data.peakCaption,
+                        ),
+                        SizedBox(
+                          height: JtrResponsive.getResponsiveHeight(
+                            context,
+                            12,
+                          ),
+                        ),
+                        const JtrMobileSectionLabel(
+                          text: 'Consulter une autre période',
+                        ),
+                        JtrMobilePeriodPicker(
+                          expanded: periodOpen,
+                          from: controller.periodFrom,
+                          to: controller.periodTo,
+                          onToggle: controller.togglePeriod,
+                          onApply: controller.applyPeriod,
+                        ),
+                        SizedBox(
+                          height: JtrResponsive.getResponsiveHeight(
+                            context,
+                            20,
+                          ),
+                        ),
+                        const AppFooter(),
+                      ],
                     ),
                   );
                 },

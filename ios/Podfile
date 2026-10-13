@@ -9,6 +9,9 @@ project 'Runner', {
   'Debug-pos' => :debug,
   'Profile-pos' => :release,
   'Release-pos' => :release,
+  'Debug-rapport' => :debug,
+  'Profile-rapport' => :release,
+  'Release-rapport' => :release,
 }
 
 def flutter_root
@@ -43,6 +46,10 @@ post_install do |installer|
       if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.0
         config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       end
+      # permission_handler compiles only the permissions enabled here;
+      # without it Permission.camera is reported denied and never prompts.
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_CAMERA=1'
     end
   end
 end

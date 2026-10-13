@@ -15,11 +15,19 @@ class ApiConfig {
   static String _tenantSchema = defaultTenantSchema;
   static String? _deviceId;
   static String? _deviceToken;
+  static String? _devicePlatform;
+  static String? _deviceInstanceId;
 
   static String get baseUrl => _baseUrl;
   static String get tenantSchema => _tenantSchema;
   static String? get deviceId => _deviceId;
   static String? get deviceToken => _deviceToken;
+
+  /// `X-Device-Platform` (`ios` | `android`).
+  static String? get devicePlatform => _devicePlatform;
+
+  /// `X-Device-Instance-Id` (ANDROID_ID / identifierForVendor).
+  static String? get deviceInstanceId => _deviceInstanceId;
 
   static const connectTimeout = Duration(seconds: 30);
   static const receiveTimeout = Duration(seconds: 30);
@@ -49,6 +57,15 @@ class ApiConfig {
     _tenantSchema = tenantSchema.trim();
     _deviceId = deviceId;
     _deviceToken = deviceToken;
+  }
+
+  /// Physical device identity — kept across credential resets.
+  static void applyDeviceIdentity({
+    required String platform,
+    required String instanceId,
+  }) {
+    _devicePlatform = platform;
+    _deviceInstanceId = instanceId;
   }
 
   static void clearDeviceCredentials() {

@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jtr_system/core/app_flavor.dart';
 import 'package:jtr_system/data/mappers/device_activation_mapper.dart';
+import 'package:jtr_system/data/models/device_activation_models.dart';
 
 void main() {
   group('DeviceActivationMapper.parseQrText', () {
@@ -15,7 +17,37 @@ void main() {
       expect(payload.type, 'mobile');
       expect(payload.version, 1);
       expect(payload.apiBaseUrl, 'http://192.168.100.116/api');
-      expect(payload.isMobile, isTrue);
+      expect(payload.matchesAppType, isTrue);
+    });
+
+    test('rapport flavor accepts mobile_rapport and rejects mobile', () {
+      AppFlavorConfig.bootstrap(AppFlavor.rapport);
+      addTearDown(() => AppFlavorConfig.bootstrap(AppFlavor.pos));
+
+      final payload = DeviceActivationMapper.parseQrText(
+        'jtrpos://activate?v=1&api_base_url=192.168.100.116%2Fapi'
+        '&code=JTR-C5CF-6860&type=mobile_rapport&tenant_schema=mocca',
+      );
+      expect(payload.type, 'mobile_rapport');
+      expect(payload.matchesAppType, isTrue);
+
+      expect(
+        () => DeviceActivationMapper.parseQrText(
+          'jtrpos://activate?v=1&api_base_url=192.168.100.116%2Fapi'
+          '&code=JTR-C5CF-6860&type=mobile&tenant_schema=mocca',
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('pos flavor rejects mobile_rapport QR', () {
+      expect(
+        () => DeviceActivationMapper.parseQrText(
+          'jtrpos://activate?v=1&api_base_url=192.168.100.116%2Fapi'
+          '&code=JTR-C5CF-6860&type=mobile_rapport&tenant_schema=mocca',
+        ),
+        throwsFormatException,
+      );
     });
 
     test('parses JSON QR payload', () {
@@ -144,6 +176,33 @@ void main() {
         responseApiBaseUrl: 'http://127.0.0.1/api',
       );
       expect(stored, 'http://192.168.0.100:8080/api');
+    });
+  });
+
+  group('DeviceActivationMapper session errors', () {
+    test('appareil mobile changé requires a new activation', () {
+      expect(
+        DeviceActivationMapper.mapSessionErrorMessage('Appareil mobile changé'),
+        DeviceGateOutcome.needsActivation,
+      );
+      expect(
+        DeviceActivationMapper.isDeviceBindingFailure('Appareil mobile changé'),
+        isTrue,
+      );
+    });
+
+    test('deactivated keeps credentials (blocked screen)', () {
+      expect(
+        DeviceActivationMapper.mapSessionErrorMessage('Device deactivated'),
+        DeviceGateOutcome.deactivated,
+      );
+    });
+
+    test('bare token revoked on other endpoints is not a device failure', () {
+      expect(
+        DeviceActivationMapper.isDeviceBindingFailure('Token revoked'),
+        isFalse,
+      );
     });
   });
 

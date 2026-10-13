@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../controllers/login_controller.dart';
 import '../core/network/api_exception.dart';
 import '../data/repositories/auth_repository.dart';
+import '../data/repositories/device_repository.dart';
 import '../data/repositories/session_repository.dart';
 import '../jtr_mobile/assistant/jtr_mobile_assistant_controller.dart';
 import '../jtr_mobile/controllers/jtr_mobile_dashboard_controller.dart';
@@ -114,6 +115,40 @@ class AppNavigation {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       forceLogoutForUnauthenticated();
     });
+  }
+
+  static bool _deviceActivationInFlight = false;
+
+  /// Schedule [forceDeviceActivation] after the current frame (Dio errors).
+  static void scheduleDeviceActivationRequired() {
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      forceDeviceActivation();
+    });
+  }
+
+  /// Device revoked / « appareil mobile changé »: wipe device credentials and
+  /// require a new activation code. Duplicate triggers are ignored.
+  static Future<void> forceDeviceActivation() async {
+    if (_deviceActivationInFlight) return;
+    if (Get.currentRoute == AppRoutes.activation) return;
+
+    _deviceActivationInFlight = true;
+    try {
+      _closeOverlays();
+      if (Get.isRegistered<SessionRepository>()) {
+        await Get.find<SessionRepository>().clearOpenOrdersCache();
+      }
+      if (Get.isRegistered<AuthRepository>()) {
+        await Get.find<AuthRepository>().logout();
+      }
+      if (Get.isRegistered<DeviceRepository>()) {
+        await Get.find<DeviceRepository>().clearDeviceCredentials();
+      }
+      _disposeSessionScopedControllers();
+      await Get.offAllNamed(AppRoutes.activation);
+    } finally {
+      _deviceActivationInFlight = false;
+    }
   }
 
   static void _closeOverlays() {

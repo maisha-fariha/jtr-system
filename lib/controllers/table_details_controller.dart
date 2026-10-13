@@ -718,7 +718,7 @@ class TableDetailsController extends GetxController {
     await _ensureResolvedOrderId();
     final resolved = resolvedOrderId;
     if (resolved != null && resolved > 0) {
-      await _refreshOrder();
+      await _refreshOrder(openSession: true);
       _refreshKitchenSentFlag(order);
       return;
     }
@@ -751,6 +751,7 @@ class TableDetailsController extends GetxController {
 
   Future<void> _refreshOrder({
     List<OrderDisplayEntry>? layoutBeforeNav,
+    bool openSession = false,
   }) async {
     // Don't refresh over a debounce window that hasn't POSTed yet.
     if (!_mutationsAreLocalOnly && _queuedSimpleAdds.isNotEmpty) {
@@ -782,6 +783,7 @@ class TableDetailsController extends GetxController {
       orderId: orderId,
       forceRefresh: true,
       previousDisplayEntries: layoutBeforeNav ?? order?.displayEntries,
+      openSession: openSession,
     );
   }
 

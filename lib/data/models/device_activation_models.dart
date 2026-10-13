@@ -1,3 +1,5 @@
+import '../../core/app_flavor.dart';
+
 class ActivationQrPayload {
   const ActivationQrPayload({
     required this.version,
@@ -13,7 +15,8 @@ class ActivationQrPayload {
   final String type;
   final String tenantSchema;
 
-  bool get isMobile => type.toLowerCase() == 'mobile';
+  bool get matchesAppType =>
+      type.toLowerCase() == AppFlavorConfig.activationDeviceType;
 }
 
 class DeviceSessionInfo {

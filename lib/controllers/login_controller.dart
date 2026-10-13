@@ -24,6 +24,7 @@ import '../routes/app_pages.dart';
 import '../services/reverb_realtime_service.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_snackbar.dart';
+import '../widgets/app_confirm_dialog.dart';
 import '../widgets/user_identifiant_field_controller.dart';
 
 class LoginController extends GetxController {
@@ -50,6 +51,9 @@ class LoginController extends GetxController {
   late final UserIdentifiantFieldController identifiantFieldController;
 
   bool get showRestaurantSwitcher => AppFlavorConfig.isRapport;
+
+  /// POS — re-scan a QR to move this device to another server.
+  bool get showServerSwitcher => !AppFlavorConfig.isRapport;
 
   RapportSavedRestaurant? get selectedRestaurant {
     final id = selectedRestaurantId.value;
@@ -219,6 +223,25 @@ class LoginController extends GetxController {
     await Get.offNamed(
       AppRoutes.activation,
       arguments: const {'returnToLogin': true},
+    );
+  }
+
+  /// Current credentials stay active until the new QR activates successfully
+  /// (cached server data is reset there); backing out keeps this server.
+  Future<void> switchServerByScan(BuildContext context) async {
+    if (!showServerSwitcher) return;
+    await AppConfirmDialog.show(
+      context: context,
+      title: 'Changer de restaurant',
+      message: 'Scanner le QR code d\'un autre restaurant ? Les données '
+          'locales du restaurant actuel seront effacées après l\'activation.',
+      onConfirm: () {
+        AppNavigation.ensureLoginControllerForNavigation(recreate: false);
+        Get.offNamed(
+          AppRoutes.activation,
+          arguments: const {'returnToLogin': true},
+        );
+      },
     );
   }
 

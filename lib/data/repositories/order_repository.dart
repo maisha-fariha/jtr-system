@@ -109,6 +109,19 @@ class OrderRepository {
     return _optimisticSyncByKey.putIfAbsent(syncKey, OrderOptimisticSync.new);
   }
 
+  /// Drops per-order memory from the previous server (order ids collide
+  /// across restaurants). Call only when no ticket screen is open.
+  void resetForServerSwitch() {
+    _local.clearMemory();
+    _emptyShellDisplayOrderIds.clear();
+    _suppressedItemIdsByOrderId.clear();
+    _pendingLocalDeleteOrderIds.clear();
+    _detailRevisionByOrderId.clear();
+    _noChangeWriteOrderIds.clear();
+    _optimisticSyncByKey.clear();
+    _cachedPaymentModes = [];
+  }
+
   /// Returns order detail mapped to [SessionOrder], using cache when offline.
   Map<String, dynamic>? cachedOrderDetail(int orderId) {
     if (orderId <= 0) return null;
@@ -154,15 +167,20 @@ class OrderRepository {
     return _remote.fetchOrderDetail(orderId);
   }
 
+  /// [openSession]: user opened the ticket — `POST /orders/{id}/open`
+  /// (session + detail). Throws on 409 when the table is in use elsewhere.
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,
     bool applyKitchenDemande = false,
+    bool openSession = false,
   }) async {
     final online = await _connectivity.isOnline;
 
     if (online) {
-      var detail = await _remote.fetchOrderDetail(orderId);
+      var detail = openSession
+          ? await _remote.openOrder(orderId)
+          : await _remote.fetchOrderDetail(orderId);
       detail = await _enrichDetailMenuSelectionNames(detail);
 
       await _local.saveOrderDetail(orderId, detail);
@@ -516,7 +534,14 @@ class OrderRepository {
 
     final detail = await _remote.fetchOrderDetail(orderId);
     final payload = OrderMapper.applyTableOffer(detail);
-    final updated = await _remote.updateOrder(orderId, payload);
+    final updated = await _ensureRenderableDetail(
+      orderId,
+      _resolveWriteResponse(
+        orderId: orderId,
+        sent: payload,
+        response: await _remote.updateOrder(orderId, payload),
+      ),
+    );
     // Ensure local lock even if API omits status on the PUT response.
     final saved = Map<String, dynamic>.from(updated);
     saved['status'] = 'offered';
@@ -553,7 +578,14 @@ class OrderRepository {
       detail,
       numberOfGuests: numberOfGuests,
     );
-    final updated = await _remote.updateOrder(orderId, payload);
+    final updated = await _ensureRenderableDetail(
+      orderId,
+      _resolveWriteResponse(
+        orderId: orderId,
+        sent: payload,
+        response: await _remote.updateOrder(orderId, payload),
+      ),
+    );
     await _local.saveOrderDetail(orderId, updated);
     await _sessionLocal.upsertOpenOrderInList(updated);
     return OrderMapper.fromOrderDetail(updated);
@@ -1323,16 +1355,24 @@ class OrderRepository {
         'PUT /api/orders/$orderId cancel=${cancelIds.length} lines=${lines.length}',
       );
       debugPrint(apiLog.toString());
+      final serverBeforePut = detail;
       try {
         detail = await _putOrderUpdate(
           orderId: orderId,
           payload: payload,
           apiLog: apiLog,
         );
-        try {
-          detail = await _remote.fetchOrderDetail(orderId);
-          apiLog.writeln('── GET /api/orders/$orderId after PUT ──');
-        } catch (_) {}
+        if (_noChangeWriteOrderIds.contains(orderId)) {
+          // Nothing applied: the pre-PUT GET is still the server state.
+          detail = serverBeforePut;
+          apiLog.writeln('── PUT has_changes=false — GET skipped ──');
+          logOrderFlow('PUT /api/orders/$orderId has_changes=false — GET skipped');
+        } else {
+          try {
+            detail = await _remote.fetchOrderDetail(orderId);
+            apiLog.writeln('── GET /api/orders/$orderId after PUT ──');
+          } catch (_) {}
+        }
       } on ApiException catch (e) {
         apiLog.writeln('── PUT draft onto existing failed: ${e.message} ──');
         // If items appeared anyway (race), keep going.
@@ -1472,10 +1512,13 @@ class OrderRepository {
       }
       detail['table_number'] = label;
       apiLog.writeln('── PUT free-zone table_number=$label ──');
-      detail = await _putOrderUpdate(
-        orderId: orderId,
-        payload: OrderMapper.buildOrderUpdatePayload(detail),
-        apiLog: apiLog,
+      detail = await _ensureRenderableDetail(
+        orderId,
+        await _putOrderUpdate(
+          orderId: orderId,
+          payload: OrderMapper.buildOrderUpdatePayload(detail),
+          apiLog: apiLog,
+        ),
       );
       detail = Map<String, dynamic>.from(detail);
       detail['table_number'] = label;
@@ -1669,7 +1712,11 @@ class OrderRepository {
     logOrderFlow('POST /api/orders ($label)');
     _remote.lastApiLog = null;
     try {
-      final created = await _remote.createOrder(payload);
+      final created = _resolveWriteResponse(
+        orderId: 0,
+        sent: payload,
+        response: await _remote.createOrder(payload),
+      );
       if (_remote.lastApiLog != null) {
         apiLog.writeln(_remote.lastApiLog);
       }
@@ -1921,7 +1968,11 @@ class OrderRepository {
       print('ORDER POST: createOrderWithFirstSimpleProduct table=$tableNumber');
     }
     logOrderFlow('createOrderWithFirstSimpleProduct → POST /api/orders');
-    final created = await _remote.createOrder(payload);
+    final created = _resolveWriteResponse(
+      orderId: 0,
+      sent: payload,
+      response: await _remote.createOrder(payload),
+    );
     var orderId = OrderMapper.extractOrderIdFromPayload(created);
     orderId ??= await _resolveOrderIdForTable(
       tableId: table.id,
@@ -1939,7 +1990,10 @@ class OrderRepository {
               OrderMapper.unwrapOrderDetail(created),
             ) ==
             orderId
-        ? OrderMapper.unwrapOrderDetail(created)
+        ? await _ensureRenderableDetail(
+            orderId,
+            OrderMapper.unwrapOrderDetail(created),
+          )
         : await _remote.fetchOrderDetail(orderId);
 
     await _local.saveOrderDetail(orderId, detail);
@@ -2006,7 +2060,11 @@ class OrderRepository {
       menuSelections: menuSelections,
     );
 
-    final created = await _remote.createOrder(payload);
+    final created = _resolveWriteResponse(
+      orderId: 0,
+      sent: payload,
+      response: await _remote.createOrder(payload),
+    );
     var orderId = OrderMapper.extractOrderIdFromPayload(created);
     orderId ??= await _resolveOrderIdForTable(
       tableId: table.id,
@@ -2024,7 +2082,10 @@ class OrderRepository {
               OrderMapper.unwrapOrderDetail(created),
             ) ==
             orderId
-        ? OrderMapper.unwrapOrderDetail(created)
+        ? await _ensureRenderableDetail(
+            orderId,
+            OrderMapper.unwrapOrderDetail(created),
+          )
         : await _remote.fetchOrderDetail(orderId);
 
     await _local.saveOrderDetail(orderId, detail);
@@ -3007,10 +3068,13 @@ class OrderRepository {
         ),
       );
 
-      final updated = await _putOrderUpdate(
-        orderId: orderId,
-        payload: payload,
-        apiLog: apiLog,
+      final updated = await _ensureRenderableDetail(
+        orderId,
+        await _putOrderUpdate(
+          orderId: orderId,
+          payload: payload,
+          apiLog: apiLog,
+        ),
       );
       _forgetEmptyShellDisplay(orderId);
       // Persist off the critical path — don't block the UI isolate on Hive JSON.
@@ -4578,7 +4642,67 @@ class OrderRepository {
     if (_remote.lastApiLog != null) {
       apiLog.writeln(_remote.lastApiLog);
     }
-    return updated;
+    return _resolveWriteResponse(
+      orderId: orderId,
+      sent: payload,
+      response: updated,
+    );
+  }
+
+  /// Orders whose latest write ack said `has_changes: false`.
+  final Set<int> _noChangeWriteOrderIds = <int>{};
+
+  /// True once (then cleared) when the latest write on [orderId] changed
+  /// nothing server-side, so a follow-up GET would return the same order.
+  bool consumeNoChangeWrite(int orderId) =>
+      _noChangeWriteOrderIds.remove(orderId);
+
+  /// POST/PUT return a slim OrderWriteAck — rebuild the full detail from the
+  /// body we sent so callers never cache / render a tree-less order.
+  Map<String, dynamic> _resolveWriteResponse({
+    required int orderId,
+    required Map<String, dynamic> sent,
+    required Map<String, dynamic> response,
+  }) {
+    final resolvedId = orderId > 0
+        ? orderId
+        : OrderMapper.orderIdFromDetail(response);
+    final merged = OrderMapper.mergeWriteAck(
+      ack: response,
+      sent: sent,
+      previous: resolvedId > 0 ? _local.readOrderDetail(resolvedId) : null,
+      catalogNamesById: _catalog.cachedProductNamesById(),
+    );
+    if (resolvedId > 0) {
+      if (response['has_changes'] == false) {
+        _noChangeWriteOrderIds.add(resolvedId);
+      } else {
+        _noChangeWriteOrderIds.remove(resolvedId);
+      }
+    }
+    logOrderFlow(
+      'WriteAck merged order=$resolvedId '
+      'has_changes=${response['has_changes']} '
+      'uid_map=${(response['item_uid_map'] as List?)?.length ?? 0} '
+      'complete=${OrderMapper.orderDetailLinesComplete(merged)}',
+    );
+    return merged;
+  }
+
+  /// For paths that render the write result directly (no follow-up GET):
+  /// GET the detail when the merged ack still lacks ids / names.
+  Future<Map<String, dynamic>> _ensureRenderableDetail(
+    int orderId,
+    Map<String, dynamic> detail,
+  ) async {
+    if (orderId <= 0 || OrderMapper.orderDetailLinesComplete(detail)) {
+      return detail;
+    }
+    try {
+      return await _remote.fetchOrderDetail(orderId);
+    } catch (_) {
+      return detail;
+    }
   }
 
   void _logDeleteTrace(
@@ -4938,7 +5062,11 @@ class OrderRepository {
       apiLog.writeln(formatApiPayload(stripPayload));
 
       try {
-        working = await _remote.updateOrder(orderId, stripPayload);
+        working = _resolveWriteResponse(
+          orderId: orderId,
+          sent: stripPayload,
+          response: await _remote.updateOrder(orderId, stripPayload),
+        );
         // Skip extra GET when PUT already returned an empty open shell.
         if (!OrderMapper.orderDetailHasNoVisibleItems(working)) {
           try {
@@ -4976,7 +5104,11 @@ class OrderRepository {
             reopen['status'] = 'open';
             reopen['payment_status'] = 'not_paid';
             reopen['payment_status_detailed'] = 'not_paid';
-            working = await _remote.updateOrder(orderId, reopen);
+            working = _resolveWriteResponse(
+              orderId: orderId,
+              sent: reopen,
+              response: await _remote.updateOrder(orderId, reopen),
+            );
             if (!OrderMapper.orderDetailHasNoVisibleItems(working) ||
                 OrderMapper.isOrderClosedOrCancelled(working) ||
                 OrderMapper.isOrderFullyPaid(working)) {
@@ -5377,13 +5509,7 @@ class OrderRepository {
       if (!requireReceipt) {
         settingsFuture = _remote.fetchPaymentSettings();
       }
-      final fromSummary = OrderMapper.paymentSummaryOrderMap(summary);
-      if (fromSummary != null) {
-        detail = fromSummary;
-        await _local.saveOrderDetail(orderId, detail);
-      } else {
-        detail = await _loadOrderDetailForPay(orderId, apiLog);
-      }
+      detail = await _detailFromPaymentSummary(orderId, summary, apiLog);
     } catch (e) {
       apiLog.writeln('── Payment summary unavailable ($e) — using order detail ──');
       detail = await _loadOrderDetailForPay(orderId, apiLog);
@@ -5458,11 +5584,11 @@ class OrderRepository {
         apiLog.writeln(_remote.lastApiLog);
       }
 
-      final processOrder = OrderMapper.parseProcessOrderMap(processResponse);
-      final cached = _local.readOrderDetail(orderId);
-      final updated = processOrder != null
-          ? Map<String, dynamic>.from(processOrder)
-          : Map<String, dynamic>.from(cached ?? detail);
+      final updated = _orderAfterPaymentResponse(
+        orderId: orderId,
+        processResponse: processResponse,
+        detail: detail,
+      );
 
       var fullyPaid = OrderMapper.parseProcessIsFullyPaid(processResponse);
       if (fullyPaid == null) {
@@ -5569,6 +5695,43 @@ class OrderRepository {
     }
   }
 
+  /// Payment summary `order` is now lean (no seat/course/item tree). Merge it
+  /// onto the cached detail; GET the full detail when nothing cached has a tree.
+  Future<Map<String, dynamic>> _detailFromPaymentSummary(
+    int orderId,
+    Map<String, dynamic> summary,
+    StringBuffer apiLog,
+  ) async {
+    final fromSummary = OrderMapper.paymentSummaryOrderMap(summary);
+    if (fromSummary == null) {
+      return _loadOrderDetailForPay(orderId, apiLog);
+    }
+    final merged = OrderMapper.mergePaymentAck(
+      base: _local.readOrderDetail(orderId),
+      lean: fromSummary,
+    );
+    if (!OrderMapper.orderDetailHasSeatTree(merged)) {
+      apiLog.writeln('── Lean payment summary order — GET full detail ──');
+      return _loadOrderDetailForPay(orderId, apiLog);
+    }
+    await _local.saveOrderDetail(orderId, merged);
+    return merged;
+  }
+
+  /// Pay response `order` is a lean PaymentOrderAck — keep the item tree from
+  /// the cached (or pre-pay) detail and apply totals / status / transactions.
+  Map<String, dynamic> _orderAfterPaymentResponse({
+    required int orderId,
+    required Map<String, dynamic>? processResponse,
+    required Map<String, dynamic> detail,
+  }) {
+    final cached = _local.readOrderDetail(orderId);
+    final base = OrderMapper.orderDetailHasSeatTree(cached) ? cached! : detail;
+    final processOrder = OrderMapper.parseProcessOrderMap(processResponse);
+    if (processOrder == null) return Map<String, dynamic>.from(base);
+    return OrderMapper.mergePaymentAck(base: base, lean: processOrder);
+  }
+
   Future<Map<String, dynamic>> _loadOrderDetailForPay(
     int orderId,
     StringBuffer apiLog,
@@ -5645,8 +5808,7 @@ class OrderRepository {
       if (!requireReceipt) {
         settingsFuture = _remote.fetchPaymentSettings();
       }
-      detail = OrderMapper.paymentSummaryOrderMap(summary) ??
-          await _loadOrderDetailForPay(orderId, apiLog);
+      detail = await _detailFromPaymentSummary(orderId, summary, apiLog);
     } catch (e) {
       apiLog.writeln('── Payment summary unavailable ($e) ──');
       detail = await _loadOrderDetailForPay(orderId, apiLog);
@@ -5878,11 +6040,11 @@ class OrderRepository {
     List<OrderDisplayEntry>? previousDisplayEntries,
     required StringBuffer apiLog,
   }) async {
-    final processOrder = OrderMapper.parseProcessOrderMap(processResponse);
-    final cached = _local.readOrderDetail(orderId);
-    final updated = processOrder != null
-        ? Map<String, dynamic>.from(processOrder)
-        : Map<String, dynamic>.from(cached ?? detail);
+    final updated = _orderAfterPaymentResponse(
+      orderId: orderId,
+      processResponse: processResponse,
+      detail: detail,
+    );
 
     var fullyPaid = OrderMapper.parseProcessIsFullyPaid(processResponse);
     if (fullyPaid == null && paidAmount > 0) {

@@ -421,12 +421,27 @@ class OrderRepository {
                 apiLog: apiLog,
               );
             }
-          } on ApiException {
-            rethrow;
+          } on ApiException catch (e) {
+            // Cancelling every line (common on 0 DH tickets) can auto-close /
+            // remove the order on the API before POST /close runs.
+            if (!_isOrderNotFoundError(e)) rethrow;
+            logOrderFlow(
+              'CLOSE order=$orderId — already gone after cancel PUT '
+              '(${e.message})',
+            );
           }
         }
 
-        await _remote.closeOrder(orderId);
+        try {
+          await _remote.closeOrder(orderId);
+        } on ApiException catch (e) {
+          // Order already closed/removed by cancel-all PUT — treat as success.
+          if (!_isOrderNotFoundError(e)) rethrow;
+          logOrderFlow(
+            'CLOSE order=$orderId — POST /close not found '
+            '(already closed: ${e.message})',
+          );
+        }
         await _local.removeOrderDetail(orderId);
         await _sessionLocal.removeOpenOrderFromList(orderId);
       }

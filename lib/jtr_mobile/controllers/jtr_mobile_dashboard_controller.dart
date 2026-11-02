@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:get/get.dart';
 
 import '../../controllers/theme_controller.dart';
+import '../../core/auth/pos_permissions.dart';
 import '../../core/network/api_exception.dart';
+import '../../data/repositories/auth_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../data/jtr_mobile_dashboard_filters.dart';
 import '../data/repositories/jtr_mobile_dashboard_repository.dart';
@@ -76,7 +78,23 @@ class JtrMobileDashboardController extends GetxController {
         );
   }
 
-  void toggleChat() => chatOpen.value = !chatOpen.value;
+  void toggleChat() {
+    if (chatOpen.value) {
+      chatOpen.value = false;
+      return;
+    }
+    final user = Get.isRegistered<AuthRepository>()
+        ? Get.find<AuthRepository>().cachedSession?.user
+        : null;
+    if (!PosPermissions.canAccessPosChat(user)) {
+      AppSnackbar.show(
+        'Action non autorisée',
+        'Permission « access-pos-chat » requise.',
+      );
+      return;
+    }
+    chatOpen.value = true;
+  }
 
   void togglePeriod() => periodOpen.value = !periodOpen.value;
 

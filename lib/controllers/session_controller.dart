@@ -1690,7 +1690,7 @@ class SessionController extends GetxController {
         _authRepository.cachedSession?.user,
       );
 
-  /// `access-dashboard` — Statistics section.
+  /// `access-pos-dashboard` — Statistics section (not admin `access-dashboard`).
   bool get canAccessStatistics => PosPermissions.canAccessStatistics(
         _authRepository.cachedSession?.user,
       );
@@ -1702,6 +1702,11 @@ class SessionController extends GetxController {
 
   /// `access-offert` — table / line offer actions.
   bool get canAccessOffert => PosPermissions.canAccessOffert(
+        _authRepository.cachedSession?.user,
+      );
+
+  /// `access-annulation-table` — cancel entire table.
+  bool get canCancelTable => PosPermissions.canCancelTable(
         _authRepository.cachedSession?.user,
       );
 
@@ -2570,6 +2575,15 @@ class SessionController extends GetxController {
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
     if (findOrder(orderNumber: orderNumber) == null) return;
+    if (!canCancelTable) {
+      AppSnackbar.show(
+        'Action non autorisée',
+        'Permission « access-annulation-table » requise pour annuler une table.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
 
     CancelTableDialog.show(
       context: context,
@@ -2582,6 +2596,13 @@ class SessionController extends GetxController {
           userOrId: userOrId,
           passcode: passcode,
         );
+        if (!PosPermissions.canCancelTable(authorizer.user)) {
+          throw ApiException(
+            message:
+                'Permission « access-annulation-table » requise pour annuler '
+                'une table.',
+          );
+        }
 
         // Open step 2 after step 1 closes (same old two-dialog flow).
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -2683,7 +2704,15 @@ class SessionController extends GetxController {
   }
 
   void requestApplyOffer(String orderNumber, {required BuildContext context}) {
-    if (!canAccessOffert) return;
+    if (!canAccessOffert) {
+      AppSnackbar.show(
+        'Action non autorisée',
+        'Permission « access-offert » requise.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
     if (findOrder(orderNumber: orderNumber) == null) return;
 
     CancelTableDialog.show(
@@ -2693,10 +2722,15 @@ class SessionController extends GetxController {
         required String userOrId,
         required String passcode,
       }) async {
-        await _authRepository.verifyCredentials(
+        final authorizer = await _authRepository.verifyCredentials(
           userOrId: userOrId,
           passcode: passcode,
         );
+        if (!PosPermissions.canAccessOffert(authorizer.user)) {
+          throw ApiException(
+            message: 'Permission « access-offert » requise.',
+          );
+        }
         await applyOffer(orderNumber);
       },
     );

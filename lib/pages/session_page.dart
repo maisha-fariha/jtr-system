@@ -722,10 +722,16 @@ class _OrderRow extends GetView<SessionController> {
             extentRatio: 0.14,
             children: [
               SlidableAction(
-                onPressed: (_) =>
-                    controller.requestDeleteOrder(order.number, context: context),
+                onPressed: controller.canCancelTable
+                    ? (_) => controller.requestDeleteOrder(
+                          order.number,
+                          context: context,
+                        )
+                    : null,
                 backgroundColor: AppTheme.background,
-                foregroundColor: const Color(0xFFE74C3C),
+                foregroundColor: controller.canCancelTable
+                    ? const Color(0xFFE74C3C)
+                    : AppTheme.darkText.withValues(alpha: 0.28),
                 icon: CupertinoIcons.delete,
                 spacing: 0,
                 padding: EdgeInsets.zero,

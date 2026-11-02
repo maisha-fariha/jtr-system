@@ -104,7 +104,7 @@ class TableDetailsController extends GetxController {
   bool _isNavigatingBack = false;
 
   /// Lines present at last kitchen sync / remote open — waiters without
-  /// `access-edit-table-details` cannot delete/decrease these. Newly added
+  /// `access-annulation-article` cannot delete/decrease these. Newly added
   /// local lines (before next Send) are not in this set and stay removable.
   final Set<String> _sentKitchenLineKeys = <String>{};
 
@@ -1374,10 +1374,18 @@ class TableDetailsController extends GetxController {
     return false;
   }
 
-  /// `access-edit-table-details` (or superuser) — delete/decrease after send.
-  bool get hasEditTableDetailsAccess {
+  /// `access-annulation-article` — delete/decrease **sent** kitchen lines.
+  bool get hasCancelArticleAccess {
     if (!Get.isRegistered<AuthRepository>()) return false;
-    return PosPermissions.canEditTableDetailsAfterSend(
+    return PosPermissions.canCancelSentArticle(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// `access-annulation-seat` — cancel À SUIVRE / seat with sent items.
+  bool get hasCancelSeatAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canCancelSeat(
       Get.find<AuthRepository>().cachedSession?.user,
     );
   }
@@ -1446,12 +1454,32 @@ class TableDetailsController extends GetxController {
     return const Color(0xFF27AE60);
   }
 
-  /// Before send: everyone.
-  /// After send: synced kitchen lines need permission; new local lines do not.
+  /// Before send / unsent lines: everyone.
+  /// Sent kitchen lines: `access-annulation-article`.
   bool canDeleteOrDecreaseLine(int productIndex) {
-    if (hasEditTableDetailsAccess) return true;
     if (!orderSentToKitchen) return true;
-    return !_isSentKitchenLine(productIndex);
+    if (!_isSentKitchenLine(productIndex)) return true;
+    return hasCancelArticleAccess;
+  }
+
+  /// True when [sectionIndex] still contains at least one sent kitchen line.
+  bool _suivreSectionHasSentItems(int sectionIndex) {
+    final current = order;
+    if (current == null) return false;
+    for (final entry in current.displayEntries) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      if ((entry.sectionIndex ?? 0) != sectionIndex) continue;
+      final line = entry.lineIndex;
+      if (line != null && _isSentKitchenLine(line)) return true;
+      if ((entry.itemId ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
+  /// Cancel À SUIVRE section: unsent-only sections are free; sent need seat perm.
+  bool canCancelSuivreSection(int sectionIndex) {
+    if (!_suivreSectionHasSentItems(sectionIndex)) return true;
+    return hasCancelSeatAccess;
   }
 
   /// Message add/edit only for lines not yet sent to kitchen.
@@ -1465,8 +1493,21 @@ class TableDetailsController extends GetxController {
     if (canDeleteOrDecreaseLine(productIndex)) return false;
     AppSnackbar.show(
       'Action non autorisée',
-      'Seul un utilisateur autorisé peut supprimer ou diminuer un article '
-      'après l\'envoi en cuisine.',
+      'Permission « access-annulation-article » requise pour annuler un '
+      'article déjà envoyé en cuisine.',
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 3),
+      margin: const EdgeInsets.all(16),
+    );
+    return true;
+  }
+
+  bool _blockIfCannotCancelSuivreSection(int sectionIndex) {
+    if (canCancelSuivreSection(sectionIndex)) return false;
+    AppSnackbar.show(
+      'Action non autorisée',
+      'Permission « access-annulation-seat » requise pour annuler une suite '
+      'déjà envoyée en cuisine.',
       snackPosition: SnackPosition.BOTTOM,
       duration: const Duration(seconds: 3),
       margin: const EdgeInsets.all(16),
@@ -3888,6 +3929,7 @@ class TableDetailsController extends GetxController {
 
   Future<void> cancelSuivreSection(int sectionIndex) async {
     if (_blockIfOrderOffered()) return;
+    if (_blockIfCannotCancelSuivreSection(sectionIndex)) return;
 
     final currentOrder = order;
     if (currentOrder == null) return;

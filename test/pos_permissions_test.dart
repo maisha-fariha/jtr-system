@@ -4,32 +4,59 @@ import 'package:jtr_system/data/models/auth_user_model.dart';
 
 void main() {
   group('PosPermissions', () {
-    test('superuser can edit after send', () {
+    test('superuser bypasses all checks', () {
       const user = AuthUserModel(
         id: 1,
         name: 'Admin',
         isSuperuser: true,
         permissions: [],
       );
-      expect(PosPermissions.canEditTableDetailsAfterSend(user), isTrue);
+      expect(PosPermissions.canCancelSentArticle(user), isTrue);
+      expect(PosPermissions.canCancelTable(user), isTrue);
+      expect(PosPermissions.canCancelSeat(user), isTrue);
+      expect(PosPermissions.canAccessOffert(user), isTrue);
+      expect(PosPermissions.canAccessStatistics(user), isTrue);
+      expect(PosPermissions.canViewAllOpenOrders(user), isTrue);
     });
 
-    test('cashier without keys cannot edit after send', () {
+    test('cashier without keys cannot cancel sent article', () {
       const user = AuthUserModel(
         id: 2,
         name: 'Cashier',
         permissions: ['access-payment-button'],
       );
-      expect(PosPermissions.canEditTableDetailsAfterSend(user), isFalse);
+      expect(PosPermissions.canCancelSentArticle(user), isFalse);
+      expect(PosPermissions.canCancelTable(user), isFalse);
     });
 
-    test('manager with access-edit-table-details can edit after send', () {
+    test('access-annulation-article grants sent-article cancel', () {
       const user = AuthUserModel(
         id: 3,
         name: 'Manager',
-        permissions: [PosPermissions.accessEditTableDetails],
+        permissions: [PosPermissions.accessAnnulationArticle],
       );
-      expect(PosPermissions.canEditTableDetailsAfterSend(user), isTrue);
+      expect(PosPermissions.canCancelSentArticle(user), isTrue);
+      expect(PosPermissions.canCancelTable(user), isFalse);
+      expect(PosPermissions.canCancelSeat(user), isFalse);
+    });
+
+    test('access-annulation-table grants table cancel', () {
+      const user = AuthUserModel(
+        id: 31,
+        name: 'Manager',
+        permissions: [PosPermissions.accessAnnulationTable],
+      );
+      expect(PosPermissions.canCancelTable(user), isTrue);
+      expect(PosPermissions.canCancelSentArticle(user), isFalse);
+    });
+
+    test('access-annulation-seat grants seat/course cancel', () {
+      const user = AuthUserModel(
+        id: 32,
+        name: 'Manager',
+        permissions: [PosPermissions.accessAnnulationSeat],
+      );
+      expect(PosPermissions.canCancelSeat(user), isTrue);
     });
 
     test('parses permission objects with key field', () {
@@ -37,10 +64,10 @@ void main() {
         id: 4,
         name: 'Manager',
         permissions: [
-          {'key': PosPermissions.accessEditTableDetails, 'name': 'Edit'},
+          {'key': PosPermissions.accessAnnulationArticle, 'name': 'Annulation'},
         ],
       );
-      expect(PosPermissions.canEditTableDetailsAfterSend(user), isTrue);
+      expect(PosPermissions.canCancelSentArticle(user), isTrue);
     });
 
     test('access-stock-visual grants Stock Visuel UI', () {
@@ -50,12 +77,15 @@ void main() {
         permissions: [PosPermissions.accessStockVisual],
       );
       expect(PosPermissions.canAccessStockVisual(user), isTrue);
-      expect(PosPermissions.canAccessStockVisual(
-        const AuthUserModel(id: 6, name: 'Cashier', permissions: []),
-      ), isFalse);
+      expect(
+        PosPermissions.canAccessStockVisual(
+          const AuthUserModel(id: 6, name: 'Cashier', permissions: []),
+        ),
+        isFalse,
+      );
     });
 
-    test('manager / cashier can view all open orders via real API keys', () {
+    test('view all open orders uses access-edit-table-details only', () {
       expect(
         PosPermissions.canViewAllOpenOrders(
           const AuthUserModel(
@@ -64,7 +94,7 @@ void main() {
             permissions: [PosPermissions.accessPaymentButton],
           ),
         ),
-        isTrue,
+        isFalse,
       );
       expect(
         PosPermissions.canViewAllOpenOrders(
@@ -84,13 +114,14 @@ void main() {
             permissions: [PosPermissions.accessCloseDay],
           ),
         ),
-        isTrue,
+        isFalse,
       );
+      // Role names must not grant access (doc: prefer permissions[]).
       expect(
         PosPermissions.canViewAllOpenOrders(
           const AuthUserModel(id: 4, name: 'M', role: 'Manager'),
         ),
-        isTrue,
+        isFalse,
       );
       expect(
         PosPermissions.canViewAllOpenOrders(
@@ -98,31 +129,76 @@ void main() {
         ),
         isFalse,
       );
-      expect(
-        PosPermissions.canViewAllOpenOrders(
-          const AuthUserModel(id: 6, name: 'W', permissions: []),
-        ),
-        isFalse,
-      );
     });
-    test('access-pos-dashboard grants JTR Mobile dashboard', () {
+
+    test('access-pos-dashboard grants Statistics and JTR Mobile dashboard', () {
       const user = AuthUserModel(
         id: 7,
         name: 'Manager',
         permissions: [PosPermissions.accessPosDashboard],
       );
       expect(PosPermissions.canAccessJtrMobileDashboard(user), isTrue);
-      expect(PosPermissions.canAccessStatistics(user), isFalse);
+      expect(PosPermissions.canAccessStatistics(user), isTrue);
     });
 
-    test('access-dashboard grants Statistics but not JTR Mobile dashboard', () {
+    test('access-dashboard (admin web) does not grant mobile analytics', () {
       const user = AuthUserModel(
         id: 8,
         name: 'Manager',
         permissions: [PosPermissions.accessDashboard],
       );
-      expect(PosPermissions.canAccessStatistics(user), isTrue);
+      expect(PosPermissions.canAccessStatistics(user), isFalse);
       expect(PosPermissions.canAccessJtrMobileDashboard(user), isFalse);
+    });
+
+    test('table lock override accepts either override or edit-table-details', () {
+      expect(
+        PosPermissions.canOverrideTableLock(
+          const AuthUserModel(
+            id: 9,
+            name: 'A',
+            permissions: [PosPermissions.accessTableLockOverride],
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canOverrideTableLock(
+          const AuthUserModel(
+            id: 10,
+            name: 'B',
+            permissions: [PosPermissions.accessEditTableDetails],
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canOverrideTableLock(
+          const AuthUserModel(id: 11, name: 'C', permissions: []),
+        ),
+        isFalse,
+      );
+    });
+
+    test('hasAnyPermission matches desktop helper', () {
+      const user = AuthUserModel(
+        id: 12,
+        name: 'U',
+        permissions: [PosPermissions.accessOffert],
+      );
+      expect(
+        PosPermissions.hasAnyPermission(user, [
+          PosPermissions.accessAnnulationTable,
+          PosPermissions.accessOffert,
+        ]),
+        isTrue,
+      );
+      expect(
+        PosPermissions.hasAnyPermission(user, [
+          PosPermissions.accessAnnulationTable,
+        ]),
+        isFalse,
+      );
     });
   });
 }

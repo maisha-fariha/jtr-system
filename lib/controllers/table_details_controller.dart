@@ -776,8 +776,8 @@ class TableDetailsController extends GetxController {
       orderId = current.id;
     }
 
-    // Session list rows are lightweight (total only, no lines). Always fetch
-    // GET /api/orders/:id so table details can show seat_orders items.
+    // Session list rows are lightweight (total only, no lines). Opening the
+    // ticket uses POST /api/orders/:id/open when [openSession] is true.
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,

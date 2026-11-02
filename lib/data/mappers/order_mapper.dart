@@ -248,9 +248,7 @@ class OrderMapper {
       couverts: '${data['number_of_guests'] ?? data['guests'] ?? 0}',
       impressionCount: printCount,
       impressionColor: impressionColorFor(printCount),
-      total: formatPrice(
-        '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
-      ),
+      total: formatPrice('${orderAmountRaw(data)}'),
       products: const [],
       itemCount: _itemCountFromListMap(data, 0),
       displayEntries: const [],
@@ -982,9 +980,7 @@ class OrderMapper {
       couverts: '${data['number_of_guests'] ?? 0}',
       impressionCount: printCount,
       impressionColor: impressionColorFor(printCount),
-      total: formatPrice(
-        '${data['total_price'] ?? data['remaining_amount'] ?? '0'}',
-      ),
+      total: formatPrice('${orderAmountRaw(data)}'),
       products: resolvedProducts,
       itemCount: resolvedProducts.length,
       displayEntries: displayEntries.isNotEmpty
@@ -8299,14 +8295,22 @@ class OrderMapper {
           if (item is! Map) continue;
           if (item['status']?.toString().toLowerCase() == 'cancelled') continue;
           if (item['is_offered'] == true || item['offered'] == true) continue;
-          final raw = item['total_price'] ??
+          // Backend: item amounts come from sub_total (not client recomputation).
+          final raw = item['sub_total'] ??
+              item['subtotal'] ??
+              item['total_price'] ??
               item['total'] ??
               item['price'] ??
               item['unit_price'];
           if (raw is num) {
-            final qty = (item['quantity'] as num?)?.toDouble() ?? 1;
-            // total_price is usually already qty * unit; unit_price needs qty.
-            if (item['total_price'] != null || item['total'] != null) {
+            final qty = (item['quantity'] as num?)?.toDouble() ??
+                (item['qty'] as num?)?.toDouble() ??
+                1;
+            final usesLineTotal = item['sub_total'] != null ||
+                item['subtotal'] != null ||
+                item['total_price'] != null ||
+                item['total'] != null;
+            if (usesLineTotal) {
               sum += raw.toDouble();
             } else {
               sum += raw.toDouble() * qty;
@@ -8331,15 +8335,31 @@ class OrderMapper {
     return formatted;
   }
 
+  /// Order-level amount from API: prefer `sub_total` / `subtotal`, then totals.
+  static Object orderAmountRaw(Map<String, dynamic> data) {
+    return data['sub_total'] ??
+        data['subtotal'] ??
+        data['total_price'] ??
+        data['remaining_amount'] ??
+        data['total'] ??
+        '0';
+  }
+
   static double parseOrderTotalAmount(Map<String, dynamic> data) {
     final order = unwrapOrderDetail(data);
-    final raw = order['total_price'] ??
-        order['remaining_amount'] ??
-        order['total'] ??
-        data['total_price'];
+    var raw = orderAmountRaw(order);
+    // Parent envelope may carry totals when the unwrapped map does not.
+    if (raw == '0' &&
+        order['sub_total'] == null &&
+        order['subtotal'] == null &&
+        order['total_price'] == null) {
+      raw = data['total_price'] ?? data['sub_total'] ?? data['subtotal'] ?? '0';
+    }
     if (raw is num) return raw.toDouble();
     if (raw is String) {
-      return double.tryParse(raw.replaceAll(',', '.').replaceAll('€', '').trim()) ??
+      return double.tryParse(
+            raw.replaceAll(',', '.').replaceAll('€', '').trim(),
+          ) ??
           0;
     }
     return 0;
@@ -9262,7 +9282,9 @@ class OrderMapper {
         ? (product['name'] as String? ?? 'Article')
         : 'Article';
     final qty = item['qty'] ?? 1;
-    final subTotal = item['sub_total']?.toString() ?? '0';
+    // Backend: item amount is `sub_total` (alias `subtotal` tolerated).
+    final subTotal =
+        (item['sub_total'] ?? item['subtotal'] ?? '0').toString();
     final isOffer = _isOfferedLineItem(item);
     final comment = item['comment'];
     final message = comment is String && comment.trim().isNotEmpty

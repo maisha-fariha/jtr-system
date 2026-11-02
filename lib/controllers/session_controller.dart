@@ -1621,8 +1621,8 @@ class SessionController extends GetxController {
       final user = _authRepository.cachedSession?.user;
       final ownsOrder = waiterId > 0 && existing.waiterId == waiterId;
       final canOpenAny = PosPermissions.canViewAllOpenOrders(user);
-      // Backend: reopen via Open Order — cashiers must not be limited to own tickets.
-      useOpen = openSession && (ownsOrder || canOpenAny);
+      // Backend: entering/opening a table must call POST /api/orders/{id}/open.
+      useOpen = openSession;
 
       // Reopen: do not pin a stale live layout over waiter updates.
       final layoutHints = openSession

@@ -848,6 +848,18 @@ class TableDetailsController extends GetxController {
     return 0;
   }
 
+  /// Waiter id for send/update payloads.
+  ///
+  /// Backend: keep the original assigned waiter. Managers adding items must
+  /// still send that id (only an explicit waiter change may replace it).
+  int get _orderWaiterIdForWrite {
+    final fromLive = _rawSessionOrder?.waiterId;
+    if (fromLive != null && fromLive > 0) return fromLive;
+    final fromSeed = seedOrder?.waiterId;
+    if (fromSeed != null && fromSeed > 0) return fromSeed;
+    return _currentWaiterId;
+  }
+
   Future<int?> _ensureResolvedOrderId() async {
     if (orderId != null && orderId! > 0) {
       if (await _verifyOrderExists(orderId!)) return orderId;
@@ -2027,7 +2039,7 @@ class TableDetailsController extends GetxController {
           final sent = await _orderRepository.createAndSendLocalDraft(
             tableNumber: orderNumber,
             numberOfGuests: guests,
-            waiterId: _currentWaiterId,
+            waiterId: _orderWaiterIdForWrite,
             lines: draftLines,
             salesZoneId: salesZoneId,
             customerId: live.customerId ?? seedOrder?.customerId,
@@ -2083,7 +2095,7 @@ class TableDetailsController extends GetxController {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
           salesZoneId: salesZoneId,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
@@ -2118,7 +2130,7 @@ class TableDetailsController extends GetxController {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
           salesZoneId: salesZoneId,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
@@ -2384,7 +2396,7 @@ class TableDetailsController extends GetxController {
       sent = await _orderRepository.createAndSendLocalDraft(
         tableNumber: orderNumber,
         numberOfGuests: guests,
-        waiterId: _currentWaiterId,
+        waiterId: _orderWaiterIdForWrite,
         lines: draftLines,
         salesZoneId: salesZoneId,
         customerId: live.customerId ?? seedOrder?.customerId,
@@ -2403,7 +2415,7 @@ class TableDetailsController extends GetxController {
       final recovered = await _orderRepository.tryRecoverCreatedOrder(
         tableNumber: orderNumber,
         salesZoneId: salesZoneId,
-        waiterId: _currentWaiterId,
+        waiterId: _orderWaiterIdForWrite,
       );
       if (recovered == null || recovered.order.id <= 0) rethrow;
       sent = recovered.order;
@@ -3033,7 +3045,7 @@ class TableDetailsController extends GetxController {
               final created =
                   await _orderRepository.createOrderWithFirstSimpleProduct(
                 tableNumber: orderNumber,
-                waiterId: _currentWaiterId,
+                waiterId: _orderWaiterIdForWrite,
                 productId: first.product.id,
                 unitPrice: _resolveSimpleAddUnitPrice(
                   first.product,
@@ -3060,7 +3072,7 @@ class TableDetailsController extends GetxController {
                   layoutHints: created.displayEntries,
                   selectedSuivreSectionIndex: selectedSuivreSection.value,
                   tableNumber: orderNumber,
-                  waiterId: _currentWaiterId,
+                  waiterId: _orderWaiterIdForWrite,
                 );
                 orderId = lastResult.id;
               }
@@ -3073,7 +3085,7 @@ class TableDetailsController extends GetxController {
                 layoutHints: layoutHints,
                 selectedSuivreSectionIndex: selectedSuivreSection.value,
                 tableNumber: orderNumber,
-                waiterId: _currentWaiterId,
+                waiterId: _orderWaiterIdForWrite,
                 expectEmptyShell: reopeningEmpty,
               );
               if (epochAtEnqueue != _ticketMutationEpoch ||
@@ -3349,7 +3361,7 @@ class TableDetailsController extends GetxController {
           final created =
               await _orderRepository.createOrderWithFirstComposedProduct(
             tableNumber: orderNumber,
-            waiterId: _currentWaiterId,
+            waiterId: _orderWaiterIdForWrite,
             productId: product.id,
             basePrice: product.unitPrice,
             menuSelections: menuSelections,
@@ -3377,7 +3389,7 @@ class TableDetailsController extends GetxController {
           layoutHints: hints,
           selectedSuivreSectionIndex: suivreTarget,
           tableNumber: orderNumber,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
           expectEmptyShell: snapshot.products.isEmpty,
         );
         if (epochAtEnqueue != _ticketMutationEpoch ||

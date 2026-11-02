@@ -1621,7 +1621,7 @@ class SessionController extends GetxController {
       final user = _authRepository.cachedSession?.user;
       final ownsOrder = waiterId > 0 && existing.waiterId == waiterId;
       final canOpenAny = PosPermissions.canViewAllOpenOrders(user);
-      // Backend: entering/opening a table must call POST /api/orders/{id}/open.
+      // Backend: entering a table uses POST /api/orders/{id}/open.
       useOpen = openSession;
 
       // Reopen: do not pin a stale live layout over waiter updates.
@@ -1629,18 +1629,10 @@ class SessionController extends GetxController {
           ? null
           : (OrderMapper.coalesceLayoutHints(previousDisplayEntries) ??
               OrderMapper.coalesceLayoutHints(previous.displayEntries));
-      final detail = await _orderRepository.getOrderDetail(
-        existing.id,
-        previousDisplayEntries: layoutHints,
-        openSession: useOpen,
-      );
-      // Re-resolve the row by id — a background list refresh may have
-      // mutated `orders` while this request was in flight, so the index
-      // captured before the `await` can no longer be trusted (writing to
-      // a stale index silently drops the fetched detail on the floor,
-      // leaving the row showing its lightweight total with no items).
-      final freshIdx = orders.indexWhere((order) => order.id == existing.id);
-      if (freshIdx >= 0) {
+
+      Future<void> applyDetail(SessionOrder detail) async {
+        final freshIdx = orders.indexWhere((order) => order.id == existing.id);
+        if (freshIdx < 0) return;
         final live = orders[freshIdx];
         final suppress =
             _orderRepository.suppressedItemIdsFor(existing.id);
@@ -1648,9 +1640,6 @@ class SessionController extends GetxController {
             _orderRepository.hasPendingLocalDelete(existing.id);
         final liveHasOptimistic =
             OrderMapper.hasOptimisticProductEntries(live.displayEntries);
-        // Cashier/manager viewing another waiter's ticket: always take server
-        // on force refresh. Own ticket reopen: take server unless local
-        // optimistic lines are still unsynced.
         final viewingOthersTicket = canOpenAny && !ownsOrder;
         final adoptServerSnapshot = suppress.isEmpty &&
             !pendingDelete &&
@@ -1658,11 +1647,16 @@ class SessionController extends GetxController {
             (openSession || (forceRefresh && viewingOthersTicket));
 
         if (adoptServerSnapshot) {
-          // Server snapshot is source of truth (waiter↔cashier sync).
-          // Do not merge with thinner/stale live memory — that drops new lines.
-          orders[freshIdx] = detail;
+          // Keep the known owning waiter when a manager views another's ticket.
+          final keepWaiterId = existing.waiterId;
+          orders[freshIdx] =
+              (viewingOthersTicket &&
+                      keepWaiterId != null &&
+                      keepWaiterId > 0 &&
+                      detail.waiterId != keepWaiterId)
+                  ? detail.copyWith(waiterId: keepWaiterId)
+                  : detail;
         } else {
-          // Stale GET during delete undo must not flash removed lines back.
           orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
             server: detail,
             live: live,
@@ -1672,15 +1666,42 @@ class SessionController extends GetxController {
         }
         orders.refresh();
       }
-    } on ApiException catch (e) {
-      if (useOpen && e.statusCode == 409) {
-        logOrderFlow(
-          'POST /api/orders/${existing.id}/open 409 — table in use: ${e.message}',
+
+      try {
+        final detail = await _orderRepository.getOrderDetail(
+          existing.id,
+          previousDisplayEntries: layoutHints,
+          openSession: useOpen,
         );
-        await _leaveTicketTableInUse(existing.number);
-      } else {
-        _showSnack('Erreur', e.message);
+        await applyDetail(detail);
+      } on ApiException catch (e) {
+        if (useOpen && e.statusCode == 409) {
+          // Backend: lock owner / assigned waiter / override may still access.
+          final mayAccess = PosPermissions.canAccessLockedTable(
+            user,
+            assignedWaiterId: existing.waiterId,
+          );
+          logOrderFlow(
+            'POST /api/orders/${existing.id}/open 409 — '
+            '${mayAccess ? 'fallback GET (override/assigned)' : 'blocked'}: '
+            '${e.message}',
+          );
+          if (mayAccess) {
+            final detail = await _orderRepository.getOrderDetail(
+              existing.id,
+              previousDisplayEntries: layoutHints,
+              openSession: false,
+            );
+            await applyDetail(detail);
+          } else {
+            await _leaveTicketTableInUse(existing.number);
+          }
+        } else {
+          rethrow;
+        }
       }
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
     } catch (_) {
       _showSnack('Erreur', 'Impossible de charger les produits.');
     } finally {

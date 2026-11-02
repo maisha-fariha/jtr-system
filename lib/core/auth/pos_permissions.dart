@@ -136,6 +136,27 @@ class PosPermissions {
         const [accessTableLockOverride, accessEditTableDetails],
       );
 
+  /// Whether [user] may access a locked order/table.
+  ///
+  /// Backend rule: allow if current user is [lockedBy], or the assigned
+  /// [assignedWaiterId], or has lock-override / edit-table-details.
+  static bool canAccessLockedTable(
+    AuthUserModel? user, {
+    int? lockedBy,
+    int? assignedWaiterId,
+  }) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+    final uid = user.id;
+    if (lockedBy != null && lockedBy > 0 && lockedBy == uid) return true;
+    if (assignedWaiterId != null &&
+        assignedWaiterId > 0 &&
+        assignedWaiterId == uid) {
+      return true;
+    }
+    return canOverrideTableLock(user);
+  }
+
   /// Edit table details / choose waiter.
   static bool canEditTableDetails(AuthUserModel? user) =>
       hasPermission(user, accessEditTableDetails);

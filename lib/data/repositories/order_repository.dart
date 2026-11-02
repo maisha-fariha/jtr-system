@@ -1331,7 +1331,13 @@ class OrderRepository {
         lines: lines,
         layoutHints: layoutHints,
       );
-      payload['waiter_id'] = waiterId;
+      // Backend: keep the original assigned waiter unless explicitly changed.
+      // A manager adding/sending must not stamp their own user id here.
+      final originalWaiter = OrderMapper.waiterIdFromOrderMap(detail);
+      payload['waiter_id'] =
+          (originalWaiter != null && originalWaiter > 0)
+              ? originalWaiter
+              : waiterId;
       payload['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
       if (salesZoneId != null && salesZoneId > 0) {
         payload['sales_zone_id'] = salesZoneId;
@@ -3276,8 +3282,9 @@ class OrderRepository {
           orderId: oldOrderId,
           tableNumber: OrderMapper.tableNumberFromDetail(detail),
         );
+    // Prefer the order's existing waiter — manager edits must not reassign.
     final resolvedWaiter =
-        waiterId ?? OrderMapper.waiterIdFromOrderMap(detail) ?? 0;
+        OrderMapper.waiterIdFromOrderMap(detail) ?? waiterId ?? 0;
     final guests = (detail['number_of_guests'] as num?)?.toInt();
 
     apiLog.writeln(
@@ -3590,8 +3597,9 @@ class OrderRepository {
           orderId: oldOrderId,
           tableNumber: OrderMapper.tableNumberFromDetail(detail),
         );
+    // Prefer the order's existing waiter (same as simple recreate).
     final resolvedWaiter =
-        waiterId ?? OrderMapper.waiterIdFromOrderMap(detail) ?? 0;
+        OrderMapper.waiterIdFromOrderMap(detail) ?? waiterId ?? 0;
     final guests = (detail['number_of_guests'] as num?)?.toInt();
 
     apiLog.writeln(

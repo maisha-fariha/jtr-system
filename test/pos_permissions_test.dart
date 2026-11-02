@@ -180,6 +180,49 @@ void main() {
       );
     });
 
+    test('canAccessLockedTable: lock owner, assigned waiter, or override', () {
+      const waiter = AuthUserModel(id: 5, name: 'Serveur', permissions: []);
+      const other = AuthUserModel(id: 8, name: 'Other', permissions: []);
+      const manager = AuthUserModel(
+        id: 9,
+        name: 'Manager',
+        permissions: [PosPermissions.accessEditTableDetails],
+      );
+
+      expect(
+        PosPermissions.canAccessLockedTable(
+          waiter,
+          lockedBy: 99,
+          assignedWaiterId: 5,
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canAccessLockedTable(
+          waiter,
+          lockedBy: 5,
+          assignedWaiterId: 7,
+        ),
+        isTrue,
+      );
+      expect(
+        PosPermissions.canAccessLockedTable(
+          other,
+          lockedBy: 99,
+          assignedWaiterId: 5,
+        ),
+        isFalse,
+      );
+      expect(
+        PosPermissions.canAccessLockedTable(
+          manager,
+          lockedBy: 99,
+          assignedWaiterId: 5,
+        ),
+        isTrue,
+      );
+    });
+
     test('hasAnyPermission matches desktop helper', () {
       const user = AuthUserModel(
         id: 12,

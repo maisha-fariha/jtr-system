@@ -7,6 +7,7 @@ import '../core/network/api_exception.dart';
 import '../data/mappers/menu_mapper.dart';
 import '../data/repositories/catalog_repository.dart';
 import '../data/repositories/order_repository.dart';
+import '../data/models/catalog/catalog_product_model.dart';
 import '../models/menu_active_selection.dart';
 import '../models/menu_item.dart';
 import '../models/menu_message_target.dart';
@@ -83,8 +84,10 @@ class MenuSelectionController extends GetxController {
     try {
       // Cache-first: products/list is heavy; refresh in background after show.
       final products = await _catalogRepository.getProducts();
-      final composed = products.where((product) => product.isComposed).toList()
-        ..sort((a, b) => a.name.compareTo(b.name));
+      final composed = CatalogProductModel.sortedByPosition([
+        for (final product in products)
+          if (product.isComposed) product,
+      ]);
 
       menus.assignAll([
         for (var i = 0; i < composed.length; i++)

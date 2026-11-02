@@ -235,10 +235,12 @@ class CatalogRepository {
     List<CatalogProductModel> products,
     int categoryId,
   ) {
-    return products
-        .where((product) => product.categoryId == categoryId)
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    // Filter first (keeps API relative order), then position — ties stay as API.
+    final forCategory = [
+      for (final product in products)
+        if (product.categoryId == categoryId) product,
+    ];
+    return CatalogProductModel.sortedByPosition(forCategory);
   }
 
   /// POS placeholder for POST /api/orders on empty table open.

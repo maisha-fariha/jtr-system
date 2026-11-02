@@ -1553,7 +1553,8 @@ class SessionController extends GetxController {
       clearExpanded: !willExpand,
     );
     if (willExpand) {
-      loadOrderDetails(orderNumber);
+      // Always refetch — hydrated memory/Hive can lag waiter updates.
+      unawaited(loadOrderDetails(orderNumber, forceRefresh: true));
     }
   }
 
@@ -1585,12 +1586,13 @@ class SessionController extends GetxController {
     );
 
     if (willExpand) {
-      loadOrderDetails(orderNumber);
+      // Always refetch — hydrated memory/Hive can lag waiter updates.
+      unawaited(loadOrderDetails(orderNumber, forceRefresh: true));
     }
   }
 
-  /// [openSession]: user opened the ticket screen. Only the waiter's own
-  /// ticket takes the server lock (`POST /orders/{id}/open`).
+  /// [openSession]: user opened the ticket screen → `POST /orders/{id}/open`
+  /// when they own the ticket or can view all open orders (cashier/manager).
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
@@ -1615,13 +1617,18 @@ class SessionController extends GetxController {
     var useOpen = false;
     try {
       final previous = orders[idx];
-      // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
-      final layoutHints = OrderMapper.coalesceLayoutHints(
-            previousDisplayEntries,
-          ) ??
-          OrderMapper.coalesceLayoutHints(previous.displayEntries);
       final waiterId = _currentWaiterId;
-      useOpen = openSession && waiterId > 0 && existing.waiterId == waiterId;
+      final user = _authRepository.cachedSession?.user;
+      final ownsOrder = waiterId > 0 && existing.waiterId == waiterId;
+      final canOpenAny = PosPermissions.canViewAllOpenOrders(user);
+      // Backend: reopen via Open Order — cashiers must not be limited to own tickets.
+      useOpen = openSession && (ownsOrder || canOpenAny);
+
+      // Reopen: do not pin a stale live layout over waiter updates.
+      final layoutHints = openSession
+          ? null
+          : (OrderMapper.coalesceLayoutHints(previousDisplayEntries) ??
+              OrderMapper.coalesceLayoutHints(previous.displayEntries));
       final detail = await _orderRepository.getOrderDetail(
         existing.id,
         previousDisplayEntries: layoutHints,
@@ -1635,12 +1642,34 @@ class SessionController extends GetxController {
       final freshIdx = orders.indexWhere((order) => order.id == existing.id);
       if (freshIdx >= 0) {
         final live = orders[freshIdx];
-        // Stale GET during delete undo must not flash removed lines back.
-        orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
-          server: detail,
-          live: live,
-          suppressItemIds: _orderRepository.suppressedItemIdsFor(existing.id),
-        );
+        final suppress =
+            _orderRepository.suppressedItemIdsFor(existing.id);
+        final pendingDelete =
+            _orderRepository.hasPendingLocalDelete(existing.id);
+        final liveHasOptimistic =
+            OrderMapper.hasOptimisticProductEntries(live.displayEntries);
+        // Cashier/manager viewing another waiter's ticket: always take server
+        // on force refresh. Own ticket reopen: take server unless local
+        // optimistic lines are still unsynced.
+        final viewingOthersTicket = canOpenAny && !ownsOrder;
+        final adoptServerSnapshot = suppress.isEmpty &&
+            !pendingDelete &&
+            !liveHasOptimistic &&
+            (openSession || (forceRefresh && viewingOthersTicket));
+
+        if (adoptServerSnapshot) {
+          // Server snapshot is source of truth (waiter↔cashier sync).
+          // Do not merge with thinner/stale live memory — that drops new lines.
+          orders[freshIdx] = detail;
+        } else {
+          // Stale GET during delete undo must not flash removed lines back.
+          orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
+            server: detail,
+            live: live,
+            suppressItemIds: suppress,
+            preferAdoptingNewServerLines: forceRefresh && suppress.isEmpty,
+          );
+        }
         orders.refresh();
       }
     } on ApiException catch (e) {

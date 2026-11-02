@@ -29,7 +29,7 @@ class CatalogProductModel {
   final int position;
   final List<ProductMenuCategoryModel> menuCategories;
 
-  /// Prix libre — catalog [price] is usually 0; cashier must enter unit price.
+  /// Prix libre — only when products/list `price_type` is free (not by price).
   bool get isPrixLibre {
     final normalized = priceType?.trim().toLowerCase();
     return normalized == 'free' ||
@@ -38,13 +38,9 @@ class CatalogProductModel {
         normalized == 'open';
   }
 
-  /// True when the cashier must enter a unit price before adding (prix libre).
-  /// List API often omits [priceType]; zero-price simple products still qualify.
-  bool get requiresCashierPrice {
-    if (isComposed) return false;
-    if (isPrixLibre) return true;
-    return unitPrice <= 0.0001;
-  }
+  /// Cashier must enter a unit price — solely when [isPrixLibre].
+  /// `price_type: normal` with price 0 is a normal 0 DH product (no prompt).
+  bool get requiresCashierPrice => !isComposed && isPrixLibre;
 
   double get unitPrice =>
       double.tryParse(price.replaceAll(',', '.')) ?? 0;

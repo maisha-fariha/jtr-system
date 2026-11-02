@@ -1789,8 +1789,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                           ),
                                         ),
                                         Text(
-                                          product.isPrixLibre ||
-                                                  product.requiresCashierPrice
+                                          product.isPrixLibre
                                               ? 'Prix libre'
                                               : product.formattedPrice,
                                           textAlign: TextAlign.center,

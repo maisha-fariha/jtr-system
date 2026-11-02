@@ -2738,37 +2738,12 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _handleSimpleProductTap(CatalogProductModel product) async {
-    final resolved = await _resolveProductForAdd(product);
-    if (resolved.requiresCashierPrice) {
-      await _addPrixLibreSimpleProduct(resolved);
+    // Free-priced only when products/list `price_type` is free — never by price.
+    if (product.requiresCashierPrice) {
+      await _addPrixLibreSimpleProduct(product);
       return;
     }
-    await _addSimpleProductWithStockGate(resolved);
-  }
-
-  /// List cache may omit `price_type`; fetch detail for zero-price simple items.
-  Future<CatalogProductModel> _resolveProductForAdd(
-    CatalogProductModel product,
-  ) async {
-    if (product.isComposed) return product;
-    if (product.isPrixLibre) return product;
-    if (product.unitPrice > 0.0001) return product;
-
-    try {
-      final detailed =
-          await _catalogRepository.getProductDetail(product.id);
-      _upsertCatalogProduct(detailed);
-      return detailed;
-    } catch (_) {
-      return product;
-    }
-  }
-
-  void _upsertCatalogProduct(CatalogProductModel product) {
-    final index = products.indexWhere((p) => p.id == product.id);
-    if (index >= 0) {
-      products[index] = product;
-    }
+    await _addSimpleProductWithStockGate(product);
   }
 
   Future<void> _addPrixLibreSimpleProduct(CatalogProductModel product) async {

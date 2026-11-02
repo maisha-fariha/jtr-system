@@ -1035,6 +1035,28 @@ class SessionController extends GetxController {
     final lostPendingSuivre = incomingSuivre < previousSuivre &&
         incomingDividers < previousDividers;
 
+    // Manager table-offer zeros the total — must not keep the waiter's old amount.
+    if (_incomingLooksLikeTableOffer(incoming, previous)) {
+      if (incoming.products.isNotEmpty) {
+        return incoming.isPartiallyPaid || !previous.isPartiallyPaid
+            ? incoming
+            : incoming.copyWith(isPartiallyPaid: true);
+      }
+      return _applyOfferPresentation(
+        previous,
+        total: incoming.total,
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
+      );
+    }
+
     // Lightweight / stale background rows must not demote a richer ticket.
     final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
         (incomingLines > 0 &&
@@ -1107,7 +1129,8 @@ class SessionController extends GetxController {
       );
     }
 
-    // Same line count but lower total → stale GET/list after Send.
+    // Same line count but lower total → stale GET/list after Send
+    // (not a table-offer — those are handled above).
     if (incomingLines > 0 &&
         incomingLines == previousLines &&
         _sessionTotalValue(incoming.total) + 0.009 <
@@ -1128,6 +1151,68 @@ class SessionController extends GetxController {
     return incoming.isPartiallyPaid || !previous.isPartiallyPaid
         ? incoming
         : incoming.copyWith(isPartiallyPaid: true);
+  }
+
+  /// List/API total dropped to ~0 (or lines flagged offered) after a manager offer.
+  bool _incomingLooksLikeTableOffer(
+    SessionOrder incoming,
+    SessionOrder previous,
+  ) {
+    final inTotal = _sessionTotalValue(incoming.total);
+    final prevTotal = _sessionTotalValue(previous.total);
+    if (prevTotal <= 0.009) return false;
+    if (incoming.products.isNotEmpty &&
+        incoming.products.every((p) => p.isOffered)) {
+      return true;
+    }
+    // Thin list row after offer: total becomes 0 while lines stay in memory.
+    return inTotal <= 0.009;
+  }
+
+  SessionOrder _applyOfferPresentation(
+    SessionOrder base, {
+    required String total,
+    required int impressionCount,
+    required Color impressionColor,
+    required String poste,
+    required String profitCenter,
+    required String couverts,
+    int? waiterId,
+    required bool isPartiallyPaid,
+  }) {
+    final offeredProducts = [
+      for (final product in base.products)
+        product.copyWith(price: '0,00', isOffered: true),
+    ];
+    final offeredEntries = [
+      for (final entry in base.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(price: '0,00', isOffered: true),
+            lineIndex: entry.lineIndex ?? 0,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    return base.copyWith(
+      total: total,
+      impressionCount: impressionCount,
+      impressionColor: impressionColor,
+      poste: poste,
+      profitCenter: profitCenter,
+      couverts: couverts,
+      waiterId: waiterId,
+      isPartiallyPaid: isPartiallyPaid,
+      products: offeredProducts,
+      displayEntries: offeredEntries.isNotEmpty
+          ? offeredEntries
+          : base.displayEntries,
+      itemCount: offeredProducts.isNotEmpty
+          ? offeredProducts.length
+          : base.itemCount,
+    );
   }
 
   double _sessionTotalValue(String total) {
@@ -1193,8 +1278,12 @@ class SessionController extends GetxController {
           final previous = findOrder(orderId: summary.id);
 
           final cached = _orderRepository.cachedOrderDetail(summary.id);
+          // If the list total dropped (manager offer), skip stale Hive and
+          // refetch so the waiter sees 0 / offered lines without re-login.
+          final listLooksOffered = previous != null &&
+              _incomingLooksLikeTableOffer(summary, previous);
           SessionOrder detail;
-          if (cached != null) {
+          if (cached != null && !listLooksOffered) {
             detail = OrderMapper.fromOrderDetail(cached).copyWith(
               id: summary.id,
             );
@@ -1237,6 +1326,10 @@ class SessionController extends GetxController {
   /// or resurrect lines the waiter already deleted (suppress in flight).
   bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
     if (previous == null) return false;
+    // Table offer zeros totals — that is an upgrade of truth, not a downgrade.
+    if (_incomingLooksLikeTableOffer(incoming, previous)) {
+      return false;
+    }
     if (incoming.products.isEmpty && previous.products.isNotEmpty) {
       return true;
     }

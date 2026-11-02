@@ -2633,11 +2633,11 @@ class SessionController extends GetxController {
           );
         }
 
-        // Open step 2 after step 1 closes (same old two-dialog flow).
+        // Step 2 after step 1 closes. Do NOT use the slidable/row [context]:
+        // verifyCredentials can refresh the session and rebuild the list,
+        // unmounting that context so the note dialog never appears.
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!context.mounted) return;
           CancelTableNoteDialog.show(
-            context: context,
             title: 'Annulation après édition\nnote',
             onConfirm: ({
               required String toWhom,

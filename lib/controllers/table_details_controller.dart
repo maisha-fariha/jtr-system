@@ -93,6 +93,9 @@ class TableDetailsController extends GetxController {
   late final String orderNumber;
   int? orderId;
 
+  /// Floor table row id for `POST /api/orders/{id}/open` body `table_id`.
+  int? tableId;
+
   /// When true (fresh empty create), skip blocking GET detail on open.
   bool _deferDetailFetch = false;
 
@@ -669,6 +672,10 @@ class TableDetailsController extends GetxController {
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    final rawTableId = args is Map ? args['tableId'] : null;
+    tableId = rawTableId is int
+        ? rawTableId
+        : (rawTableId is num ? rawTableId.toInt() : null);
     _deferDetailFetch = args is Map && args['deferDetailFetch'] == true;
     final rawSeed = args is Map ? args['seedOrder'] : null;
     if (rawSeed is SessionOrder) {
@@ -697,7 +704,8 @@ class TableDetailsController extends GetxController {
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
-      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch '
+      'orderId=${orderId ?? 'none'} tableId=${tableId ?? 'none'} '
+      'deferDetailFetch=$_deferDetailFetch '
       'hasSeed=${seedOrder != null}',
     );
 
@@ -784,6 +792,7 @@ class TableDetailsController extends GetxController {
       forceRefresh: true,
       previousDisplayEntries: layoutBeforeNav ?? order?.displayEntries,
       openSession: openSession,
+      tableId: tableId,
     );
   }
 

@@ -1684,12 +1684,12 @@ class SessionController extends GetxController {
     }
   }
 
-  /// [openSession]: user opened the ticket screen → `POST /orders/{id}/open`
-  /// when they own the ticket or can view all open orders (cashier/manager).
+  /// [openSession]: user opened the ticket screen → `POST /orders/{id}/open`.
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
+    int? tableId,
     List<OrderDisplayEntry>? previousDisplayEntries,
     bool openSession = false,
   }) async {
@@ -1716,6 +1716,9 @@ class SessionController extends GetxController {
       final canOpenAny = PosPermissions.canViewAllOpenOrders(user);
       // Backend: entering a table uses POST /api/orders/{id}/open.
       useOpen = openSession;
+
+      final resolvedTableId =
+          tableId ?? await _resolveTableIdForOrder(existing);
 
       // Reopen: do not pin a stale live layout over waiter updates.
       final layoutHints = openSession
@@ -1765,6 +1768,7 @@ class SessionController extends GetxController {
           existing.id,
           previousDisplayEntries: layoutHints,
           openSession: useOpen,
+          tableId: resolvedTableId,
         );
         await applyDetail(detail);
       } on ApiException catch (e) {
@@ -1784,6 +1788,7 @@ class SessionController extends GetxController {
               existing.id,
               previousDisplayEntries: layoutHints,
               openSession: false,
+              tableId: resolvedTableId,
             );
             await applyDetail(detail);
           } else {
@@ -1801,6 +1806,58 @@ class SessionController extends GetxController {
       loadingDetailOrderNumbers.remove(orderNumber);
       loadingDetailOrderNumbers.refresh();
     }
+  }
+
+  /// Resolves floor `table_id` by table **number** (never row id == typed number).
+  /// Cache-first for enter latency; network only when the number is unknown.
+  Future<int?> _resolveTableIdForOrder(SessionOrder order) async {
+    final fromMemory = _tableIdFromCachedTables(order.number);
+    if (fromMemory != null) return fromMemory;
+
+    if (order.id > 0) {
+      final cached = _orderRepository.cachedOrderDetail(order.id);
+      if (cached != null) {
+        final fromDetail = (cached['table_id'] as num?)?.toInt();
+        if (fromDetail != null && fromDetail > 0) return fromDetail;
+      }
+    }
+
+    try {
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final resolved = OrderMapper.resolveTableForNewOrder(tables, order.number);
+      if (resolved != null && resolved.id > 0) return resolved.id;
+    } catch (_) {}
+    return null;
+  }
+
+  int? _tableIdFromCachedTables(String tableNumber) {
+    final tables = _sessionRepository.cachedTables;
+    if (tables.isEmpty) return null;
+    final resolved = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+    if (resolved != null && resolved.id > 0) return resolved.id;
+    return null;
+  }
+
+  /// Resolve typed table **number** → floor row. Uses memory first; network only
+  /// when the number is missing from cache (avoids waiting on every enter).
+  Future<ResolvedTable?> _resolveFloorTableByNumber(String tableNumber) async {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    final cached = _sessionRepository.cachedTables;
+    final fromCache = OrderMapper.resolveTableForNewOrder(cached, normalized);
+    if (fromCache != null && fromCache.id > 0 && fromCache.tableNumber > 0) {
+      // Keep list warm for the next enter without blocking this one.
+      unawaited(_sessionRepository.getTablesList(forceRefresh: true));
+      return fromCache;
+    }
+
+    final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+    final resolved = OrderMapper.resolveTableForNewOrder(tables, normalized);
+    if (resolved == null || resolved.id <= 0 || resolved.tableNumber <= 0) {
+      return null;
+    }
+    return resolved;
   }
 
   /// `/orders/{id}/open` refused the session: back to the list + occupied dialog.
@@ -1973,12 +2030,14 @@ class SessionController extends GetxController {
   void openTableDetails(
     String orderNumber, {
     int? orderId,
+    int? tableId,
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) {
     logOrderFlow(
       'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
-      'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',
+      'tableId=${tableId ?? 'none'} deferDetailFetch=$deferDetailFetch '
+      'hasSeed=${seedOrder != null}',
     );
     final resolvedId = orderId != null && orderId > 0
         ? orderId
@@ -1988,60 +2047,58 @@ class SessionController extends GetxController {
       arguments: {
         'orderNumber': orderNumber,
         if (resolvedId != null) 'orderId': resolvedId,
+        if (tableId != null && tableId > 0) 'tableId': tableId,
         'deferDetailFetch': deferDetailFetch,
         if (seedOrder != null) 'seedOrder': seedOrder,
       },
     );
   }
 
-  /// Same as [openTableDetails], but if the seed is a lightweight list row
-  /// (no lines), waits for one GET detail first. Used after login / other
-  /// manager so the ticket is not empty. Does not change Send/POST/PUT.
+  /// Same as [openTableDetails]. Prefer cache for lines/`table_id` so navigation
+  /// is instant — table details bootstrap does the single `POST .../open`.
   Future<void> openTableDetailsEnsuringLines(
     String orderNumber, {
     int? orderId,
+    int? tableId,
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) async {
     var seed =
         seedOrder ?? findOrder(orderNumber: orderNumber, orderId: orderId);
+    // Hive/memory only — do not await GET here; open on details supplies lines.
     if (seed != null && !deferDetailFetch && !seed.isLocalOnly) {
-      seed = await _withFetchedLinesIfNeeded(seed);
+      seed = _withCachedLinesIfAvailable(seed);
     }
+    final resolvedTableId = tableId ??
+        (seed != null
+            ? (_tableIdFromCachedTables(seed.number) ??
+                await _resolveTableIdForOrder(seed))
+            : null);
     openTableDetails(
       seed?.number ?? orderNumber,
       orderId: orderId ?? (seed != null && seed.id > 0 ? seed.id : null),
+      tableId: resolvedTableId,
       deferDetailFetch: deferDetailFetch,
       seedOrder: seed,
     );
   }
 
-  /// List API rows often have total only. Prefetch GET /api/orders/:id when
-  /// lines are missing (fresh login / other device). No Send side effects.
-  Future<SessionOrder> _withFetchedLinesIfNeeded(SessionOrder order) async {
+  /// Hydrate list row from Hive only (no network). Open on details fills gaps.
+  SessionOrder _withCachedLinesIfAvailable(SessionOrder order) {
     if (order.id <= 0 || order.isLocalOnly) return order;
     if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
       return order;
     }
 
     final cached = _orderRepository.cachedOrderDetail(order.id);
-    if (cached != null) {
-      final fromCache =
-          OrderMapper.fromOrderDetail(cached).copyWith(id: order.id);
-      if (fromCache.products.isNotEmpty ||
-          fromCache.displayEntries.isNotEmpty) {
-        _upsertOrderInList(fromCache);
-        return fromCache;
-      }
-    }
-
-    try {
-      final detail = await _orderRepository.getOrderDetail(order.id);
-      _upsertOrderInList(detail);
-      return detail;
-    } catch (_) {
+    if (cached == null) return order;
+    final fromCache =
+        OrderMapper.fromOrderDetail(cached).copyWith(id: order.id);
+    if (fromCache.products.isEmpty && fromCache.displayEntries.isEmpty) {
       return order;
     }
+    _upsertOrderInList(fromCache);
+    return fromCache;
   }
 
   Future<void> _onTableNumberConfirmed(
@@ -2057,10 +2114,39 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Fast path: own order already in session list — no tables API wait.
-    final existingOwn = _findOwnOpenOrderForTable(normalized);
+    // Number-only resolve; cache-first so enter is not blocked on tables list.
+    ResolvedTable resolved;
+    try {
+      final found = await _resolveFloorTableByNumber(normalized);
+      if (found == null) {
+        _showSnack(
+          'Table introuvable',
+          'Aucune table avec le numéro $normalized.',
+        );
+        return;
+      }
+      resolved = found;
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+      return;
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible de charger la liste des tables.');
+      return;
+    }
+
+    final displayNumber = OrderMapper.displayKey(
+      orderId: 0,
+      tableNumber: resolved.tableNumber,
+    );
+
+    // Fast path: own order already in session list for this table number.
+    final existingOwn = _findOwnOpenOrderForTable(displayNumber) ??
+        _findOwnOpenOrderForTable(normalized);
     if (existingOwn != null) {
-      await _reopenOwnOrderWithoutGuestPrompt(existingOwn);
+      await _reopenOwnOrderWithoutGuestPrompt(
+        existingOwn,
+        tableId: resolved.id,
+      );
       return;
     }
 
@@ -2085,7 +2171,8 @@ class SessionController extends GetxController {
     if (ownActiveOrderId != null && ownActiveOrderId > 0) {
       await _reopenServerOwnedOrderWithoutGuestPrompt(
         orderId: ownActiveOrderId,
-        tableNumber: normalized,
+        tableNumber: '${resolved.tableNumber}',
+        tableId: resolved.id,
       );
       return;
     }
@@ -2100,7 +2187,8 @@ class SessionController extends GetxController {
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
           context: context,
-          tableNumber: tableNumber,
+          tableNumber: '${resolved.tableNumber}',
+          tableId: resolved.id,
           couverts: couverts,
         ));
       },
@@ -2219,8 +2307,12 @@ class SessionController extends GetxController {
     required BuildContext context,
     required String tableNumber,
     required String couverts,
+    int? tableId,
   }) async {
-    logOrderFlow('_createTableAndOpenDetails START table=$tableNumber couverts=$couverts');
+    logOrderFlow(
+      '_createTableAndOpenDetails START table=$tableNumber '
+      'tableId=${tableId ?? 'none'} couverts=$couverts',
+    );
     final guests = int.tryParse(couverts.trim()) ?? 0;
     if (guests < 1) {
       logOrderFlow('_createTableAndOpenDetails ABORT guests must be > 0');
@@ -2247,6 +2339,7 @@ class SessionController extends GetxController {
       await _reopenOwnOrderAndUpdateGuests(
         existing: existingOwn,
         guests: guests,
+        tableId: tableId,
       );
       return;
     }
@@ -2278,15 +2371,17 @@ class SessionController extends GetxController {
     final placeholder = OrderMapper.buildSessionPlaceholderOrder(
       tableNumber: parsedTableNumber,
       numberOfGuests: guests,
+      tableId: tableId,
     );
 
     _upsertOrderInList(placeholder);
     logOrderFlow(
       '_createTableAndOpenDetails LOCAL DRAFT table=$parsedTableNumber '
-      'guests=$guests',
+      'tableId=${tableId ?? 'none'} guests=$guests',
     );
     openTableDetails(
       placeholder.number,
+      tableId: tableId,
       deferDetailFetch: true,
       seedOrder: placeholder,
     );
@@ -2339,17 +2434,22 @@ class SessionController extends GetxController {
     return null;
   }
 
-  Future<void> _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) async {
+  Future<void> _reopenOwnOrderWithoutGuestPrompt(
+    SessionOrder existing, {
+    int? tableId,
+  }) async {
     logOrderFlow(
       '_reopenOwnOrderWithoutGuestPrompt '
-      'table=${existing.number} orderId=${existing.id}',
+      'table=${existing.number} orderId=${existing.id} '
+      'tableId=${tableId ?? 'none'}',
     );
 
-    final target = await _withFetchedLinesIfNeeded(existing);
-
+    // Navigate immediately; table details bootstrap does the single POST …/open.
+    final target = _withCachedLinesIfAvailable(existing);
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      tableId: tableId,
       deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );
@@ -2358,35 +2458,43 @@ class SessionController extends GetxController {
   Future<void> _reopenServerOwnedOrderWithoutGuestPrompt({
     required int orderId,
     required String tableNumber,
+    int? tableId,
   }) async {
     logOrderFlow(
       '_reopenServerOwnedOrderWithoutGuestPrompt '
-      'table=$tableNumber orderId=$orderId',
+      'table=$tableNumber orderId=$orderId tableId=${tableId ?? 'none'}',
     );
 
+    final parsed =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
+            int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
+            0;
+    final displayNumber = OrderMapper.displayKey(
+      orderId: 0,
+      tableNumber: parsed > 0 ? parsed : null,
+      tableLabel: parsed > 0 ? null : tableNumber,
+    );
+
+    // Lightweight shell for navigation only — bootstrap POST …/open is source of truth.
     SessionOrder seed;
     final cached = _orderRepository.cachedOrderDetail(orderId);
     if (cached != null) {
       seed = OrderMapper.fromOrderDetail(cached).copyWith(id: orderId);
     } else {
-      final parsed =
-          OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
-              int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
-              0;
       seed = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: parsed > 0 ? parsed : 1,
         numberOfGuests: 1,
+        tableId: tableId,
       ).copyWith(id: orderId);
     }
 
-    seed = await _withFetchedLinesIfNeeded(seed);
-
     _clearSuppressedTable(seed.number);
+    _clearSuppressedTable(displayNumber);
     _upsertOrderInList(seed);
     openTableDetails(
       seed.number,
       orderId: orderId,
-      deferDetailFetch: false,
+      tableId: tableId,
       seedOrder: seed,
     );
   }
@@ -2394,9 +2502,11 @@ class SessionController extends GetxController {
   Future<void> _reopenOwnOrderAndUpdateGuests({
     required SessionOrder existing,
     required int guests,
+    int? tableId,
   }) async {
     logOrderFlow(
-      '_reopenOwnOrderAndUpdateGuests table=${existing.number} orderId=${existing.id} guests=$guests',
+      '_reopenOwnOrderAndUpdateGuests table=${existing.number} '
+      'orderId=${existing.id} tableId=${tableId ?? 'none'} guests=$guests',
     );
 
     var target = existing;
@@ -2428,23 +2538,12 @@ class SessionController extends GetxController {
       _upsertOrderInList(target);
     }
 
-    // List rows are lightweight (total only). Load full seat_orders before
-    // opening table details so items are visible (same as tapping the list).
-    if (target.id > 0 && target.products.isEmpty) {
-      isCreatingOrder.value = true;
-      try {
-        target = await _orderRepository.getOrderDetail(target.id);
-        _upsertOrderInList(target);
-      } catch (_) {
-        // Table details bootstrap will retry loadOrderDetails.
-      } finally {
-        isCreatingOrder.value = false;
-      }
-    }
-
+    // Navigate with cache; single POST …/open happens in table-details bootstrap.
+    target = _withCachedLinesIfAvailable(target);
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      tableId: tableId,
       deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );

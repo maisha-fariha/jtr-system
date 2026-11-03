@@ -169,17 +169,20 @@ class OrderRepository {
 
   /// [openSession]: user opened the ticket — `POST /orders/{id}/open`
   /// (session + detail). Throws on 409 when the table is in use elsewhere.
+  ///
+  /// [tableId] is sent as `table_id` on open when known (floor table row id).
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,
     bool applyKitchenDemande = false,
     bool openSession = false,
+    int? tableId,
   }) async {
     final online = await _connectivity.isOnline;
 
     if (online) {
       var detail = openSession
-          ? await _remote.openOrder(orderId)
+          ? await _remote.openOrder(orderId, tableId: tableId)
           : await _remote.fetchOrderDetail(orderId);
       detail = await _enrichDetailMenuSelectionNames(detail);
 

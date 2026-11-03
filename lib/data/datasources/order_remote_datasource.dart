@@ -40,11 +40,19 @@ class OrderRemoteDataSource {
   }
 
   /// `POST /api/orders/{id}/open` — table session (lock) + full detail.
-  Future<Map<String, dynamic>> openOrder(int orderId) async {
+  ///
+  /// Pass [tableId] when known so the backend binds the correct floor table.
+  Future<Map<String, dynamic>> openOrder(
+    int orderId, {
+    int? tableId,
+  }) async {
     final path = ApiEndpoints.openOrder(orderId);
+    final body = <String, dynamic>{
+      if (tableId != null && tableId > 0) 'table_id': tableId,
+    };
     final response = await _client.post<Map<String, dynamic>>(
       path,
-      data: const {},
+      data: body,
     );
     final envelope = ApiEnvelope<Map<String, dynamic>>.fromJson(
       response.data!,

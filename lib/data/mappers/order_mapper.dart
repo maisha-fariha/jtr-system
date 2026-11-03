@@ -4814,13 +4814,14 @@ class OrderMapper {
     return _toResolvedTable(preferred);
   }
 
+  /// Match by user-facing table number only — never by database `id`.
   static List<Map<String, dynamic>> _tablesMatchingNumber(
     List<Map<String, dynamic>> tables,
     String normalized,
   ) {
     final matches = <Map<String, dynamic>>[];
     final key = normalizeTableKey(normalized);
-    final parsed = int.tryParse(key);
+    if (key.isEmpty) return matches;
 
     for (final table in tables) {
       final number = table['table_number']?.toString() ??
@@ -4836,13 +4837,7 @@ class OrderMapper {
             nested['table_number']?.toString() ?? nested['number']?.toString();
         if (nestedNumber != null && normalizeTableKey(nestedNumber) == key) {
           matches.add(table);
-          continue;
         }
-      }
-
-      final id = table['id'];
-      if (parsed != null && id is num && id.toInt() == parsed) {
-        matches.add(table);
       }
     }
 
@@ -4933,7 +4928,11 @@ class OrderMapper {
     int? orderId,
   }) {
     final id = (table['id'] as num?)?.toInt() ?? 0;
-    final tableNumber = (table['table_number'] as num?)?.toInt() ?? id;
+    // Prefer real table_number (num or string). Never invent from row id —
+    // that caused typed "36" to open a different floor label.
+    final tableNumber = _readTableNumberField(table['table_number']) ??
+        _readTableNumberField(table['number']) ??
+        0;
 
     return ResolvedTable(
       id: id,

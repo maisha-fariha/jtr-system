@@ -152,6 +152,26 @@ void main() {
       expect(adapter.calls, ['POST /api/orders/12/open']);
     });
 
+    test('sends table_id in the open body when provided', () async {
+      late Map<String, dynamic> body;
+      final (client, _) = _client((options) {
+        body = Map<String, dynamic>.from(options.data as Map);
+        return (
+          status: 200,
+          body: {
+            'success': true,
+            'data': {
+              'order': {'id': 12, 'seat_orders': const []},
+            },
+          },
+        );
+      });
+
+      await OrderRemoteDataSource(client).openOrder(12, tableId: 2789);
+
+      expect(body['table_id'], 2789);
+    });
+
     test('409 table in use surfaces as ApiException',
         () async {
       final (client, _) = _client(

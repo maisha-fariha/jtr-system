@@ -1035,6 +1035,28 @@ class SessionController extends GetxController {
     final lostPendingSuivre = incomingSuivre < previousSuivre &&
         incomingDividers < previousDividers;
 
+    // Manager table-offer zeros the total — must not keep the waiter's old amount.
+    if (_incomingLooksLikeTableOffer(incoming, previous)) {
+      if (incoming.products.isNotEmpty) {
+        return incoming.isPartiallyPaid || !previous.isPartiallyPaid
+            ? incoming
+            : incoming.copyWith(isPartiallyPaid: true);
+      }
+      return _applyOfferPresentation(
+        previous,
+        total: incoming.total,
+        impressionCount: incoming.impressionCount,
+        impressionColor: incoming.impressionColor,
+        poste: incoming.poste,
+        profitCenter: incoming.profitCenter,
+        couverts: incoming.couverts.isNotEmpty
+            ? incoming.couverts
+            : previous.couverts,
+        waiterId: incoming.waiterId ?? previous.waiterId,
+        isPartiallyPaid: incoming.isPartiallyPaid || previous.isPartiallyPaid,
+      );
+    }
+
     // Lightweight / stale background rows must not demote a richer ticket.
     final incomingThinner = (incomingLines == 0 && previousLines > 0) ||
         (incomingLines > 0 &&
@@ -1107,7 +1129,8 @@ class SessionController extends GetxController {
       );
     }
 
-    // Same line count but lower total → stale GET/list after Send.
+    // Same line count but lower total → stale GET/list after Send
+    // (not a table-offer — those are handled above).
     if (incomingLines > 0 &&
         incomingLines == previousLines &&
         _sessionTotalValue(incoming.total) + 0.009 <
@@ -1128,6 +1151,68 @@ class SessionController extends GetxController {
     return incoming.isPartiallyPaid || !previous.isPartiallyPaid
         ? incoming
         : incoming.copyWith(isPartiallyPaid: true);
+  }
+
+  /// List/API total dropped to ~0 (or lines flagged offered) after a manager offer.
+  bool _incomingLooksLikeTableOffer(
+    SessionOrder incoming,
+    SessionOrder previous,
+  ) {
+    final inTotal = _sessionTotalValue(incoming.total);
+    final prevTotal = _sessionTotalValue(previous.total);
+    if (prevTotal <= 0.009) return false;
+    if (incoming.products.isNotEmpty &&
+        incoming.products.every((p) => p.isOffered)) {
+      return true;
+    }
+    // Thin list row after offer: total becomes 0 while lines stay in memory.
+    return inTotal <= 0.009;
+  }
+
+  SessionOrder _applyOfferPresentation(
+    SessionOrder base, {
+    required String total,
+    required int impressionCount,
+    required Color impressionColor,
+    required String poste,
+    required String profitCenter,
+    required String couverts,
+    int? waiterId,
+    required bool isPartiallyPaid,
+  }) {
+    final offeredProducts = [
+      for (final product in base.products)
+        product.copyWith(price: '0,00', isOffered: true),
+    ];
+    final offeredEntries = [
+      for (final entry in base.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(price: '0,00', isOffered: true),
+            lineIndex: entry.lineIndex ?? 0,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    return base.copyWith(
+      total: total,
+      impressionCount: impressionCount,
+      impressionColor: impressionColor,
+      poste: poste,
+      profitCenter: profitCenter,
+      couverts: couverts,
+      waiterId: waiterId,
+      isPartiallyPaid: isPartiallyPaid,
+      products: offeredProducts,
+      displayEntries: offeredEntries.isNotEmpty
+          ? offeredEntries
+          : base.displayEntries,
+      itemCount: offeredProducts.isNotEmpty
+          ? offeredProducts.length
+          : base.itemCount,
+    );
   }
 
   double _sessionTotalValue(String total) {
@@ -1193,8 +1278,12 @@ class SessionController extends GetxController {
           final previous = findOrder(orderId: summary.id);
 
           final cached = _orderRepository.cachedOrderDetail(summary.id);
+          // If the list total dropped (manager offer), skip stale Hive and
+          // refetch so the waiter sees 0 / offered lines without re-login.
+          final listLooksOffered = previous != null &&
+              _incomingLooksLikeTableOffer(summary, previous);
           SessionOrder detail;
-          if (cached != null) {
+          if (cached != null && !listLooksOffered) {
             detail = OrderMapper.fromOrderDetail(cached).copyWith(
               id: summary.id,
             );
@@ -1237,6 +1326,10 @@ class SessionController extends GetxController {
   /// or resurrect lines the waiter already deleted (suppress in flight).
   bool _wouldDowngradeDetail(SessionOrder incoming, SessionOrder? previous) {
     if (previous == null) return false;
+    // Table offer zeros totals — that is an upgrade of truth, not a downgrade.
+    if (_incomingLooksLikeTableOffer(incoming, previous)) {
+      return false;
+    }
     if (incoming.products.isEmpty && previous.products.isNotEmpty) {
       return true;
     }
@@ -1553,7 +1646,8 @@ class SessionController extends GetxController {
       clearExpanded: !willExpand,
     );
     if (willExpand) {
-      loadOrderDetails(orderNumber);
+      // Always refetch — hydrated memory/Hive can lag waiter updates.
+      unawaited(loadOrderDetails(orderNumber, forceRefresh: true));
     }
   }
 
@@ -1585,16 +1679,17 @@ class SessionController extends GetxController {
     );
 
     if (willExpand) {
-      loadOrderDetails(orderNumber);
+      // Always refetch — hydrated memory/Hive can lag waiter updates.
+      unawaited(loadOrderDetails(orderNumber, forceRefresh: true));
     }
   }
 
-  /// [openSession]: user opened the ticket screen. Only the waiter's own
-  /// ticket takes the server lock (`POST /orders/{id}/open`).
+  /// [openSession]: user opened the ticket screen → `POST /orders/{id}/open`.
   Future<void> loadOrderDetails(
     String orderNumber, {
     bool forceRefresh = false,
     int? orderId,
+    int? tableId,
     List<OrderDisplayEntry>? previousDisplayEntries,
     bool openSession = false,
   }) async {
@@ -1615,49 +1710,154 @@ class SessionController extends GetxController {
     var useOpen = false;
     try {
       final previous = orders[idx];
-      // Prefer non-empty layout; otherwise let repository use Hive suivre hints.
-      final layoutHints = OrderMapper.coalesceLayoutHints(
-            previousDisplayEntries,
-          ) ??
-          OrderMapper.coalesceLayoutHints(previous.displayEntries);
       final waiterId = _currentWaiterId;
-      useOpen = openSession && waiterId > 0 && existing.waiterId == waiterId;
-      final detail = await _orderRepository.getOrderDetail(
-        existing.id,
-        previousDisplayEntries: layoutHints,
-        openSession: useOpen,
-      );
-      // Re-resolve the row by id — a background list refresh may have
-      // mutated `orders` while this request was in flight, so the index
-      // captured before the `await` can no longer be trusted (writing to
-      // a stale index silently drops the fetched detail on the floor,
-      // leaving the row showing its lightweight total with no items).
-      final freshIdx = orders.indexWhere((order) => order.id == existing.id);
-      if (freshIdx >= 0) {
+      final user = _authRepository.cachedSession?.user;
+      final ownsOrder = waiterId > 0 && existing.waiterId == waiterId;
+      final canOpenAny = PosPermissions.canViewAllOpenOrders(user);
+      // Backend: entering a table uses POST /api/orders/{id}/open.
+      useOpen = openSession;
+
+      final resolvedTableId =
+          tableId ?? await _resolveTableIdForOrder(existing);
+
+      // Reopen: do not pin a stale live layout over waiter updates.
+      final layoutHints = openSession
+          ? null
+          : (OrderMapper.coalesceLayoutHints(previousDisplayEntries) ??
+              OrderMapper.coalesceLayoutHints(previous.displayEntries));
+
+      Future<void> applyDetail(SessionOrder detail) async {
+        final freshIdx = orders.indexWhere((order) => order.id == existing.id);
+        if (freshIdx < 0) return;
         final live = orders[freshIdx];
-        // Stale GET during delete undo must not flash removed lines back.
-        orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
-          server: detail,
-          live: live,
-          suppressItemIds: _orderRepository.suppressedItemIdsFor(existing.id),
-        );
+        final suppress =
+            _orderRepository.suppressedItemIdsFor(existing.id);
+        final pendingDelete =
+            _orderRepository.hasPendingLocalDelete(existing.id);
+        final liveHasOptimistic =
+            OrderMapper.hasOptimisticProductEntries(live.displayEntries);
+        final viewingOthersTicket = canOpenAny && !ownsOrder;
+        final adoptServerSnapshot = suppress.isEmpty &&
+            !pendingDelete &&
+            !liveHasOptimistic &&
+            (openSession || (forceRefresh && viewingOthersTicket));
+
+        if (adoptServerSnapshot) {
+          // Keep the known owning waiter when a manager views another's ticket.
+          final keepWaiterId = existing.waiterId;
+          orders[freshIdx] =
+              (viewingOthersTicket &&
+                      keepWaiterId != null &&
+                      keepWaiterId > 0 &&
+                      detail.waiterId != keepWaiterId)
+                  ? detail.copyWith(waiterId: keepWaiterId)
+                  : detail;
+        } else {
+          orders[freshIdx] = OrderMapper.mergeLiveOptimisticDetail(
+            server: detail,
+            live: live,
+            suppressItemIds: suppress,
+            preferAdoptingNewServerLines: forceRefresh && suppress.isEmpty,
+          );
+        }
         orders.refresh();
       }
-    } on ApiException catch (e) {
-      if (useOpen && e.statusCode == 409) {
-        logOrderFlow(
-          'POST /api/orders/${existing.id}/open 409 — table in use: ${e.message}',
+
+      try {
+        final detail = await _orderRepository.getOrderDetail(
+          existing.id,
+          previousDisplayEntries: layoutHints,
+          openSession: useOpen,
+          tableId: resolvedTableId,
         );
-        await _leaveTicketTableInUse(existing.number);
-      } else {
-        _showSnack('Erreur', e.message);
+        await applyDetail(detail);
+      } on ApiException catch (e) {
+        if (useOpen && e.statusCode == 409) {
+          // Backend: lock owner / assigned waiter / override may still access.
+          final mayAccess = PosPermissions.canAccessLockedTable(
+            user,
+            assignedWaiterId: existing.waiterId,
+          );
+          logOrderFlow(
+            'POST /api/orders/${existing.id}/open 409 — '
+            '${mayAccess ? 'fallback GET (override/assigned)' : 'blocked'}: '
+            '${e.message}',
+          );
+          if (mayAccess) {
+            final detail = await _orderRepository.getOrderDetail(
+              existing.id,
+              previousDisplayEntries: layoutHints,
+              openSession: false,
+              tableId: resolvedTableId,
+            );
+            await applyDetail(detail);
+          } else {
+            await _leaveTicketTableInUse(existing.number);
+          }
+        } else {
+          rethrow;
+        }
       }
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
     } catch (_) {
       _showSnack('Erreur', 'Impossible de charger les produits.');
     } finally {
       loadingDetailOrderNumbers.remove(orderNumber);
       loadingDetailOrderNumbers.refresh();
     }
+  }
+
+  /// Resolves floor `table_id` by table **number** (never row id == typed number).
+  /// Cache-first for enter latency; network only when the number is unknown.
+  Future<int?> _resolveTableIdForOrder(SessionOrder order) async {
+    final fromMemory = _tableIdFromCachedTables(order.number);
+    if (fromMemory != null) return fromMemory;
+
+    if (order.id > 0) {
+      final cached = _orderRepository.cachedOrderDetail(order.id);
+      if (cached != null) {
+        final fromDetail = (cached['table_id'] as num?)?.toInt();
+        if (fromDetail != null && fromDetail > 0) return fromDetail;
+      }
+    }
+
+    try {
+      final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+      final resolved = OrderMapper.resolveTableForNewOrder(tables, order.number);
+      if (resolved != null && resolved.id > 0) return resolved.id;
+    } catch (_) {}
+    return null;
+  }
+
+  int? _tableIdFromCachedTables(String tableNumber) {
+    final tables = _sessionRepository.cachedTables;
+    if (tables.isEmpty) return null;
+    final resolved = OrderMapper.resolveTableForNewOrder(tables, tableNumber);
+    if (resolved != null && resolved.id > 0) return resolved.id;
+    return null;
+  }
+
+  /// Resolve typed table **number** → floor row. Uses memory first; network only
+  /// when the number is missing from cache (avoids waiting on every enter).
+  Future<ResolvedTable?> _resolveFloorTableByNumber(String tableNumber) async {
+    final normalized = tableNumber.trim();
+    if (normalized.isEmpty) return null;
+
+    final cached = _sessionRepository.cachedTables;
+    final fromCache = OrderMapper.resolveTableForNewOrder(cached, normalized);
+    if (fromCache != null && fromCache.id > 0 && fromCache.tableNumber > 0) {
+      // Keep list warm for the next enter without blocking this one.
+      unawaited(_sessionRepository.getTablesList(forceRefresh: true));
+      return fromCache;
+    }
+
+    final tables = await _sessionRepository.getTablesList(forceRefresh: true);
+    final resolved = OrderMapper.resolveTableForNewOrder(tables, normalized);
+    if (resolved == null || resolved.id <= 0 || resolved.tableNumber <= 0) {
+      return null;
+    }
+    return resolved;
   }
 
   /// `/orders/{id}/open` refused the session: back to the list + occupied dialog.
@@ -1690,7 +1890,7 @@ class SessionController extends GetxController {
         _authRepository.cachedSession?.user,
       );
 
-  /// `access-dashboard` — Statistics section.
+  /// `access-pos-dashboard` — Statistics section (not admin `access-dashboard`).
   bool get canAccessStatistics => PosPermissions.canAccessStatistics(
         _authRepository.cachedSession?.user,
       );
@@ -1702,6 +1902,11 @@ class SessionController extends GetxController {
 
   /// `access-offert` — table / line offer actions.
   bool get canAccessOffert => PosPermissions.canAccessOffert(
+        _authRepository.cachedSession?.user,
+      );
+
+  /// `access-annulation-table` — cancel entire table.
+  bool get canCancelTable => PosPermissions.canCancelTable(
         _authRepository.cachedSession?.user,
       );
 
@@ -1825,12 +2030,14 @@ class SessionController extends GetxController {
   void openTableDetails(
     String orderNumber, {
     int? orderId,
+    int? tableId,
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) {
     logOrderFlow(
       'openTableDetails table=$orderNumber orderId=${orderId ?? 'none'} '
-      'deferDetailFetch=$deferDetailFetch hasSeed=${seedOrder != null}',
+      'tableId=${tableId ?? 'none'} deferDetailFetch=$deferDetailFetch '
+      'hasSeed=${seedOrder != null}',
     );
     final resolvedId = orderId != null && orderId > 0
         ? orderId
@@ -1840,60 +2047,58 @@ class SessionController extends GetxController {
       arguments: {
         'orderNumber': orderNumber,
         if (resolvedId != null) 'orderId': resolvedId,
+        if (tableId != null && tableId > 0) 'tableId': tableId,
         'deferDetailFetch': deferDetailFetch,
         if (seedOrder != null) 'seedOrder': seedOrder,
       },
     );
   }
 
-  /// Same as [openTableDetails], but if the seed is a lightweight list row
-  /// (no lines), waits for one GET detail first. Used after login / other
-  /// manager so the ticket is not empty. Does not change Send/POST/PUT.
+  /// Same as [openTableDetails]. Prefer cache for lines/`table_id` so navigation
+  /// is instant — table details bootstrap does the single `POST .../open`.
   Future<void> openTableDetailsEnsuringLines(
     String orderNumber, {
     int? orderId,
+    int? tableId,
     bool deferDetailFetch = false,
     SessionOrder? seedOrder,
   }) async {
     var seed =
         seedOrder ?? findOrder(orderNumber: orderNumber, orderId: orderId);
+    // Hive/memory only — do not await GET here; open on details supplies lines.
     if (seed != null && !deferDetailFetch && !seed.isLocalOnly) {
-      seed = await _withFetchedLinesIfNeeded(seed);
+      seed = _withCachedLinesIfAvailable(seed);
     }
+    final resolvedTableId = tableId ??
+        (seed != null
+            ? (_tableIdFromCachedTables(seed.number) ??
+                await _resolveTableIdForOrder(seed))
+            : null);
     openTableDetails(
       seed?.number ?? orderNumber,
       orderId: orderId ?? (seed != null && seed.id > 0 ? seed.id : null),
+      tableId: resolvedTableId,
       deferDetailFetch: deferDetailFetch,
       seedOrder: seed,
     );
   }
 
-  /// List API rows often have total only. Prefetch GET /api/orders/:id when
-  /// lines are missing (fresh login / other device). No Send side effects.
-  Future<SessionOrder> _withFetchedLinesIfNeeded(SessionOrder order) async {
+  /// Hydrate list row from Hive only (no network). Open on details fills gaps.
+  SessionOrder _withCachedLinesIfAvailable(SessionOrder order) {
     if (order.id <= 0 || order.isLocalOnly) return order;
     if (order.products.isNotEmpty || order.displayEntries.isNotEmpty) {
       return order;
     }
 
     final cached = _orderRepository.cachedOrderDetail(order.id);
-    if (cached != null) {
-      final fromCache =
-          OrderMapper.fromOrderDetail(cached).copyWith(id: order.id);
-      if (fromCache.products.isNotEmpty ||
-          fromCache.displayEntries.isNotEmpty) {
-        _upsertOrderInList(fromCache);
-        return fromCache;
-      }
-    }
-
-    try {
-      final detail = await _orderRepository.getOrderDetail(order.id);
-      _upsertOrderInList(detail);
-      return detail;
-    } catch (_) {
+    if (cached == null) return order;
+    final fromCache =
+        OrderMapper.fromOrderDetail(cached).copyWith(id: order.id);
+    if (fromCache.products.isEmpty && fromCache.displayEntries.isEmpty) {
       return order;
     }
+    _upsertOrderInList(fromCache);
+    return fromCache;
   }
 
   Future<void> _onTableNumberConfirmed(
@@ -1909,10 +2114,39 @@ class SessionController extends GetxController {
       return;
     }
 
-    // Fast path: own order already in session list — no tables API wait.
-    final existingOwn = _findOwnOpenOrderForTable(normalized);
+    // Number-only resolve; cache-first so enter is not blocked on tables list.
+    ResolvedTable resolved;
+    try {
+      final found = await _resolveFloorTableByNumber(normalized);
+      if (found == null) {
+        _showSnack(
+          'Table introuvable',
+          'Aucune table avec le numéro $normalized.',
+        );
+        return;
+      }
+      resolved = found;
+    } on ApiException catch (e) {
+      _showSnack('Erreur', e.message);
+      return;
+    } catch (_) {
+      _showSnack('Erreur', 'Impossible de charger la liste des tables.');
+      return;
+    }
+
+    final displayNumber = OrderMapper.displayKey(
+      orderId: 0,
+      tableNumber: resolved.tableNumber,
+    );
+
+    // Fast path: own order already in session list for this table number.
+    final existingOwn = _findOwnOpenOrderForTable(displayNumber) ??
+        _findOwnOpenOrderForTable(normalized);
     if (existingOwn != null) {
-      await _reopenOwnOrderWithoutGuestPrompt(existingOwn);
+      await _reopenOwnOrderWithoutGuestPrompt(
+        existingOwn,
+        tableId: resolved.id,
+      );
       return;
     }
 
@@ -1937,7 +2171,8 @@ class SessionController extends GetxController {
     if (ownActiveOrderId != null && ownActiveOrderId > 0) {
       await _reopenServerOwnedOrderWithoutGuestPrompt(
         orderId: ownActiveOrderId,
-        tableNumber: normalized,
+        tableNumber: '${resolved.tableNumber}',
+        tableId: resolved.id,
       );
       return;
     }
@@ -1952,7 +2187,8 @@ class SessionController extends GetxController {
       onConfirm: (couverts) {
         unawaited(_createTableAndOpenDetails(
           context: context,
-          tableNumber: tableNumber,
+          tableNumber: '${resolved.tableNumber}',
+          tableId: resolved.id,
           couverts: couverts,
         ));
       },
@@ -2071,8 +2307,12 @@ class SessionController extends GetxController {
     required BuildContext context,
     required String tableNumber,
     required String couverts,
+    int? tableId,
   }) async {
-    logOrderFlow('_createTableAndOpenDetails START table=$tableNumber couverts=$couverts');
+    logOrderFlow(
+      '_createTableAndOpenDetails START table=$tableNumber '
+      'tableId=${tableId ?? 'none'} couverts=$couverts',
+    );
     final guests = int.tryParse(couverts.trim()) ?? 0;
     if (guests < 1) {
       logOrderFlow('_createTableAndOpenDetails ABORT guests must be > 0');
@@ -2099,6 +2339,7 @@ class SessionController extends GetxController {
       await _reopenOwnOrderAndUpdateGuests(
         existing: existingOwn,
         guests: guests,
+        tableId: tableId,
       );
       return;
     }
@@ -2130,15 +2371,17 @@ class SessionController extends GetxController {
     final placeholder = OrderMapper.buildSessionPlaceholderOrder(
       tableNumber: parsedTableNumber,
       numberOfGuests: guests,
+      tableId: tableId,
     );
 
     _upsertOrderInList(placeholder);
     logOrderFlow(
       '_createTableAndOpenDetails LOCAL DRAFT table=$parsedTableNumber '
-      'guests=$guests',
+      'tableId=${tableId ?? 'none'} guests=$guests',
     );
     openTableDetails(
       placeholder.number,
+      tableId: tableId,
       deferDetailFetch: true,
       seedOrder: placeholder,
     );
@@ -2191,17 +2434,22 @@ class SessionController extends GetxController {
     return null;
   }
 
-  Future<void> _reopenOwnOrderWithoutGuestPrompt(SessionOrder existing) async {
+  Future<void> _reopenOwnOrderWithoutGuestPrompt(
+    SessionOrder existing, {
+    int? tableId,
+  }) async {
     logOrderFlow(
       '_reopenOwnOrderWithoutGuestPrompt '
-      'table=${existing.number} orderId=${existing.id}',
+      'table=${existing.number} orderId=${existing.id} '
+      'tableId=${tableId ?? 'none'}',
     );
 
-    final target = await _withFetchedLinesIfNeeded(existing);
-
+    // Navigate immediately; table details bootstrap does the single POST …/open.
+    final target = _withCachedLinesIfAvailable(existing);
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      tableId: tableId,
       deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );
@@ -2210,35 +2458,43 @@ class SessionController extends GetxController {
   Future<void> _reopenServerOwnedOrderWithoutGuestPrompt({
     required int orderId,
     required String tableNumber,
+    int? tableId,
   }) async {
     logOrderFlow(
       '_reopenServerOwnedOrderWithoutGuestPrompt '
-      'table=$tableNumber orderId=$orderId',
+      'table=$tableNumber orderId=$orderId tableId=${tableId ?? 'none'}',
     );
 
+    final parsed =
+        OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
+            int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
+            0;
+    final displayNumber = OrderMapper.displayKey(
+      orderId: 0,
+      tableNumber: parsed > 0 ? parsed : null,
+      tableLabel: parsed > 0 ? null : tableNumber,
+    );
+
+    // Lightweight shell for navigation only — bootstrap POST …/open is source of truth.
     SessionOrder seed;
     final cached = _orderRepository.cachedOrderDetail(orderId);
     if (cached != null) {
       seed = OrderMapper.fromOrderDetail(cached).copyWith(id: orderId);
     } else {
-      final parsed =
-          OrderMapper.parseTableNumberForOpenByNumber(tableNumber) ??
-              int.tryParse(tableNumber.replaceFirst(RegExp(r'^T'), '').trim()) ??
-              0;
       seed = OrderMapper.buildSessionPlaceholderOrder(
         tableNumber: parsed > 0 ? parsed : 1,
         numberOfGuests: 1,
+        tableId: tableId,
       ).copyWith(id: orderId);
     }
 
-    seed = await _withFetchedLinesIfNeeded(seed);
-
     _clearSuppressedTable(seed.number);
+    _clearSuppressedTable(displayNumber);
     _upsertOrderInList(seed);
     openTableDetails(
       seed.number,
       orderId: orderId,
-      deferDetailFetch: false,
+      tableId: tableId,
       seedOrder: seed,
     );
   }
@@ -2246,9 +2502,11 @@ class SessionController extends GetxController {
   Future<void> _reopenOwnOrderAndUpdateGuests({
     required SessionOrder existing,
     required int guests,
+    int? tableId,
   }) async {
     logOrderFlow(
-      '_reopenOwnOrderAndUpdateGuests table=${existing.number} orderId=${existing.id} guests=$guests',
+      '_reopenOwnOrderAndUpdateGuests table=${existing.number} '
+      'orderId=${existing.id} tableId=${tableId ?? 'none'} guests=$guests',
     );
 
     var target = existing;
@@ -2280,23 +2538,12 @@ class SessionController extends GetxController {
       _upsertOrderInList(target);
     }
 
-    // List rows are lightweight (total only). Load full seat_orders before
-    // opening table details so items are visible (same as tapping the list).
-    if (target.id > 0 && target.products.isEmpty) {
-      isCreatingOrder.value = true;
-      try {
-        target = await _orderRepository.getOrderDetail(target.id);
-        _upsertOrderInList(target);
-      } catch (_) {
-        // Table details bootstrap will retry loadOrderDetails.
-      } finally {
-        isCreatingOrder.value = false;
-      }
-    }
-
+    // Navigate with cache; single POST …/open happens in table-details bootstrap.
+    target = _withCachedLinesIfAvailable(target);
     openTableDetails(
       target.number,
       orderId: target.id > 0 ? target.id : null,
+      tableId: tableId,
       deferDetailFetch: target.isLocalOnly,
       seedOrder: target,
     );
@@ -2570,6 +2817,15 @@ class SessionController extends GetxController {
 
   void requestDeleteOrder(String orderNumber, {required BuildContext context}) {
     if (findOrder(orderNumber: orderNumber) == null) return;
+    if (!canCancelTable) {
+      AppSnackbar.show(
+        'Action non autorisée',
+        'Permission « access-annulation-table » requise pour annuler une table.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
 
     CancelTableDialog.show(
       context: context,
@@ -2582,12 +2838,19 @@ class SessionController extends GetxController {
           userOrId: userOrId,
           passcode: passcode,
         );
+        if (!PosPermissions.canCancelTable(authorizer.user)) {
+          throw ApiException(
+            message:
+                'Permission « access-annulation-table » requise pour annuler '
+                'une table.',
+          );
+        }
 
-        // Open step 2 after step 1 closes (same old two-dialog flow).
+        // Step 2 after step 1 closes. Do NOT use the slidable/row [context]:
+        // verifyCredentials can refresh the session and rebuild the list,
+        // unmounting that context so the note dialog never appears.
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!context.mounted) return;
           CancelTableNoteDialog.show(
-            context: context,
             title: 'Annulation après édition\nnote',
             onConfirm: ({
               required String toWhom,
@@ -2683,7 +2946,15 @@ class SessionController extends GetxController {
   }
 
   void requestApplyOffer(String orderNumber, {required BuildContext context}) {
-    if (!canAccessOffert) return;
+    if (!canAccessOffert) {
+      AppSnackbar.show(
+        'Action non autorisée',
+        'Permission « access-offert » requise.',
+        snackPosition: SnackPosition.BOTTOM,
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
     if (findOrder(orderNumber: orderNumber) == null) return;
 
     CancelTableDialog.show(
@@ -2693,10 +2964,15 @@ class SessionController extends GetxController {
         required String userOrId,
         required String passcode,
       }) async {
-        await _authRepository.verifyCredentials(
+        final authorizer = await _authRepository.verifyCredentials(
           userOrId: userOrId,
           passcode: passcode,
         );
+        if (!PosPermissions.canAccessOffert(authorizer.user)) {
+          throw ApiException(
+            message: 'Permission « access-offert » requise.',
+          );
+        }
         await applyOffer(orderNumber);
       },
     );

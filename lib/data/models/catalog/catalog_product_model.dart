@@ -10,6 +10,7 @@ class CatalogProductModel {
     this.priceType,
     this.description,
     this.image,
+    this.position = 0,
     this.menuCategories = const [],
   });
 
@@ -24,9 +25,11 @@ class CatalogProductModel {
   final String? priceType;
   final String? description;
   final String? image;
+  /// Backend catalog `position` — display order within a category (ascending).
+  final int position;
   final List<ProductMenuCategoryModel> menuCategories;
 
-  /// Prix libre — catalog [price] is usually 0; cashier must enter unit price.
+  /// Prix libre — only when products/list `price_type` is free (not by price).
   bool get isPrixLibre {
     final normalized = priceType?.trim().toLowerCase();
     return normalized == 'free' ||
@@ -35,13 +38,9 @@ class CatalogProductModel {
         normalized == 'open';
   }
 
-  /// True when the cashier must enter a unit price before adding (prix libre).
-  /// List API often omits [priceType]; zero-price simple products still qualify.
-  bool get requiresCashierPrice {
-    if (isComposed) return false;
-    if (isPrixLibre) return true;
-    return unitPrice <= 0.0001;
-  }
+  /// Cashier must enter a unit price — solely when [isPrixLibre].
+  /// `price_type: normal` with price 0 is a normal 0 DH product (no prompt).
+  bool get requiresCashierPrice => !isComposed && isPrixLibre;
 
   double get unitPrice =>
       double.tryParse(price.replaceAll(',', '.')) ?? 0;
@@ -60,6 +59,7 @@ class CatalogProductModel {
     String? priceType,
     String? description,
     String? image,
+    int? position,
     List<ProductMenuCategoryModel>? menuCategories,
   }) {
     return CatalogProductModel(
@@ -73,6 +73,7 @@ class CatalogProductModel {
       priceType: priceType ?? this.priceType,
       description: description ?? this.description,
       image: image ?? this.image,
+      position: position ?? this.position,
       menuCategories: menuCategories ?? this.menuCategories,
     );
   }
@@ -86,6 +87,10 @@ class CatalogProductModel {
           ? menuCategories
           : previous.menuCategories,
       description: description ?? previous.description,
+      // Keep prior position if this payload omitted it (parsed as 0).
+      position: position != 0 || previous.position == 0
+          ? position
+          : previous.position,
     );
   }
 
@@ -94,6 +99,52 @@ class CatalogProductModel {
     if (raw == null) return null;
     final value = raw.toString().trim();
     return value.isEmpty ? null : value;
+  }
+
+  /// Null / missing / invalid → `0` (sorts first; never throws).
+  static int positionFromJson(Map<String, dynamic> json) {
+    final raw = json['position'];
+    if (raw is num) return raw.toInt();
+    if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+    return 0;
+  }
+
+  /// Ascending [position]. Equal positions keep caller-defined order
+  /// (pass original list index via [compareByPositionThenIndex], or use id).
+  static int compareByPosition(CatalogProductModel a, CatalogProductModel b) {
+    final byPos = a.position.compareTo(b.position);
+    if (byPos != 0) return byPos;
+    // Do not sort by name — when position ties, preserve API list order.
+    return a.id.compareTo(b.id);
+  }
+
+  /// Ascending [position], then original list index (exact API order on ties).
+  static int compareByPositionThenIndex(
+    int indexA,
+    CatalogProductModel a,
+    int indexB,
+    CatalogProductModel b,
+  ) {
+    final byPos = a.position.compareTo(b.position);
+    if (byPos != 0) return byPos;
+    return indexA.compareTo(indexB);
+  }
+
+  /// Sort [products] by [position] ascending; equal positions keep list order.
+  static List<CatalogProductModel> sortedByPosition(
+    List<CatalogProductModel> products,
+  ) {
+    final indexed = [
+      for (var i = 0; i < products.length; i++) MapEntry(i, products[i]),
+    ]..sort(
+        (a, b) => compareByPositionThenIndex(
+          a.key,
+          a.value,
+          b.key,
+          b.value,
+        ),
+      );
+    return [for (final entry in indexed) entry.value];
   }
 
   factory CatalogProductModel.fromJson(Map<String, dynamic> json) {
@@ -124,6 +175,7 @@ class CatalogProductModel {
       priceType: _priceTypeFromJson(json),
       description: json['description'] as String?,
       image: json['image'] as String?,
+      position: positionFromJson(json),
       menuCategories: menus,
     );
   }
@@ -138,6 +190,7 @@ class CatalogProductModel {
         if (priceType != null) 'price_type': priceType,
         'description': description,
         'image': image,
+        'position': position,
         'menu_categories':
             menuCategories.map((menu) => menu.toJson()).toList(),
       };

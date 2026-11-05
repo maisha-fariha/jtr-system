@@ -258,7 +258,14 @@ class CancelTableNoteDialog extends StatefulWidget {
     required CancelTableNoteConfirm onConfirm,
     BuildContext? context,
   }) {
-    final dialogContext = context ?? Get.overlayContext ?? Get.context;
+    // Prefer overlay — caller row contexts often unmount after auth refresh.
+    BuildContext? dialogContext = Get.overlayContext;
+    if (dialogContext == null || !dialogContext.mounted) {
+      dialogContext = context;
+    }
+    if (dialogContext == null || !dialogContext.mounted) {
+      dialogContext = Get.context;
+    }
     if (dialogContext == null || !dialogContext.mounted) {
       return Future.value();
     }

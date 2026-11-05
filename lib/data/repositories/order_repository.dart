@@ -169,17 +169,20 @@ class OrderRepository {
 
   /// [openSession]: user opened the ticket — `POST /orders/{id}/open`
   /// (session + detail). Throws on 409 when the table is in use elsewhere.
+  ///
+  /// [tableId] is sent as `table_id` on open when known (floor table row id).
   Future<SessionOrder> getOrderDetail(
     int orderId, {
     List<OrderDisplayEntry>? previousDisplayEntries,
     bool applyKitchenDemande = false,
     bool openSession = false,
+    int? tableId,
   }) async {
     final online = await _connectivity.isOnline;
 
     if (online) {
       var detail = openSession
-          ? await _remote.openOrder(orderId)
+          ? await _remote.openOrder(orderId, tableId: tableId)
           : await _remote.fetchOrderDetail(orderId);
       detail = await _enrichDetailMenuSelectionNames(detail);
 
@@ -421,12 +424,27 @@ class OrderRepository {
                 apiLog: apiLog,
               );
             }
-          } on ApiException {
-            rethrow;
+          } on ApiException catch (e) {
+            // Cancelling every line (common on 0 DH tickets) can auto-close /
+            // remove the order on the API before POST /close runs.
+            if (!_isOrderNotFoundError(e)) rethrow;
+            logOrderFlow(
+              'CLOSE order=$orderId — already gone after cancel PUT '
+              '(${e.message})',
+            );
           }
         }
 
-        await _remote.closeOrder(orderId);
+        try {
+          await _remote.closeOrder(orderId);
+        } on ApiException catch (e) {
+          // Order already closed/removed by cancel-all PUT — treat as success.
+          if (!_isOrderNotFoundError(e)) rethrow;
+          logOrderFlow(
+            'CLOSE order=$orderId — POST /close not found '
+            '(already closed: ${e.message})',
+          );
+        }
         await _local.removeOrderDetail(orderId);
         await _sessionLocal.removeOpenOrderFromList(orderId);
       }
@@ -1331,7 +1349,13 @@ class OrderRepository {
         lines: lines,
         layoutHints: layoutHints,
       );
-      payload['waiter_id'] = waiterId;
+      // Backend: keep the original assigned waiter unless explicitly changed.
+      // A manager adding/sending must not stamp their own user id here.
+      final originalWaiter = OrderMapper.waiterIdFromOrderMap(detail);
+      payload['waiter_id'] =
+          (originalWaiter != null && originalWaiter > 0)
+              ? originalWaiter
+              : waiterId;
       payload['number_of_guests'] = numberOfGuests < 1 ? 1 : numberOfGuests;
       if (salesZoneId != null && salesZoneId > 0) {
         payload['sales_zone_id'] = salesZoneId;
@@ -3276,8 +3300,9 @@ class OrderRepository {
           orderId: oldOrderId,
           tableNumber: OrderMapper.tableNumberFromDetail(detail),
         );
+    // Prefer the order's existing waiter — manager edits must not reassign.
     final resolvedWaiter =
-        waiterId ?? OrderMapper.waiterIdFromOrderMap(detail) ?? 0;
+        OrderMapper.waiterIdFromOrderMap(detail) ?? waiterId ?? 0;
     final guests = (detail['number_of_guests'] as num?)?.toInt();
 
     apiLog.writeln(
@@ -3590,8 +3615,9 @@ class OrderRepository {
           orderId: oldOrderId,
           tableNumber: OrderMapper.tableNumberFromDetail(detail),
         );
+    // Prefer the order's existing waiter (same as simple recreate).
     final resolvedWaiter =
-        waiterId ?? OrderMapper.waiterIdFromOrderMap(detail) ?? 0;
+        OrderMapper.waiterIdFromOrderMap(detail) ?? waiterId ?? 0;
     final guests = (detail['number_of_guests'] as num?)?.toInt();
 
     apiLog.writeln(

@@ -745,6 +745,8 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
         );
       }
 
+      final canCancelSection =
+          canModify && controller.canCancelSuivreSection(sectionIndex);
       return Slidable(
         key: ValueKey('suivre-$sectionIndex'),
         groupTag: groupTag,
@@ -754,9 +756,13 @@ class _CourseSectionDivider extends GetView<TableDetailsController> {
           extentRatio: 0.14,
           children: [
             SlidableAction(
-              onPressed: (_) => controller.cancelSuivreSection(sectionIndex),
+              onPressed: canCancelSection
+                  ? (_) => controller.cancelSuivreSection(sectionIndex)
+                  : null,
               backgroundColor: AppTheme.background,
-              foregroundColor: const Color(0xFFE74C3C),
+              foregroundColor: canCancelSection
+                  ? const Color(0xFFE74C3C)
+                  : AppTheme.darkText.withValues(alpha: 0.28),
               icon: CupertinoIcons.delete,
               spacing: 0,
               padding: EdgeInsets.zero,
@@ -803,23 +809,24 @@ class _ProductLine extends GetView<TableDetailsController> {
         key: ValueKey('$orderNumber-$productIndex-${product.name}'),
         groupTag: groupTag,
         enabled: canModify,
-        startActionPane: canDeleteLine
-            ? ActionPane(
-                motion: const ScrollMotion(),
-                extentRatio: 0.14,
-                children: [
-                  SlidableAction(
-                    onPressed: (_) =>
-                        controller.cancelOrderLine(productIndex),
-                    backgroundColor: AppTheme.background,
-                    foregroundColor: const Color(0xFFE74C3C),
-                    icon: CupertinoIcons.delete,
-                    spacing: 0,
-                    padding: EdgeInsets.zero,
-                  ),
-                ],
-              )
-            : null,
+        startActionPane: ActionPane(
+          motion: const ScrollMotion(),
+          extentRatio: 0.14,
+          children: [
+            SlidableAction(
+              onPressed: canDeleteLine
+                  ? (_) => controller.cancelOrderLine(productIndex)
+                  : null,
+              backgroundColor: AppTheme.background,
+              foregroundColor: canDeleteLine
+                  ? const Color(0xFFE74C3C)
+                  : AppTheme.darkText.withValues(alpha: 0.28),
+              icon: CupertinoIcons.delete,
+              spacing: 0,
+              padding: EdgeInsets.zero,
+            ),
+          ],
+        ),
         endActionPane: ActionPane(
           motion: const ScrollMotion(),
           extentRatio: canDeleteLine ? 0.52 : 0.39,
@@ -1782,8 +1789,7 @@ class _MenuGrid extends GetView<TableDetailsController> {
                                           ),
                                         ),
                                         Text(
-                                          product.isPrixLibre ||
-                                                  product.requiresCashierPrice
+                                          product.isPrixLibre
                                               ? 'Prix libre'
                                               : product.formattedPrice,
                                           textAlign: TextAlign.center,

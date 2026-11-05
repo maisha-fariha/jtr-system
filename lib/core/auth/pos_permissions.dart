@@ -1,6 +1,8 @@
 import '../../data/models/auth_user_model.dart';
 
-/// Permission keys from `GET /api/permissions` (grouped in API response).
+/// Permission keys from login `user.permissions` (exact backend strings).
+///
+/// Source: JTR POS — Permissions (Mobile Implementation Guide).
 class PosPermissions {
   PosPermissions._();
 
@@ -11,31 +13,28 @@ class PosPermissions {
       'access-delete-payment-transaction';
 
   // Order
+  static const accessPrintButton = 'access-print-button';
+  static const accessSeparateButton = 'access-separate-button';
+  static const accessTransferButton = 'access-transfer-button';
+  static const accessAnnulationTable = 'access-annulation-table';
+  static const accessAnnulationSeat = 'access-annulation-seat';
+  static const accessAnnulationArticle = 'access-annulation-article';
+  static const accessOffert = 'access-offert';
+  static const accessRemise = 'access-remise';
+  static const accessTableLoss = 'access-table-loss';
+  static const accessSeatLoss = 'access-seat-loss';
+  static const accessArticleLoss = 'access-article-loss';
   static const accessStockVisual = 'access-stock-visual';
   static const accessCloseDay = 'access-close-day';
-  static const accessPrintButton = 'access-print-button';
-  static const accessOffert = 'access-offert';
+  static const accessPosDashboard = 'access-pos-dashboard';
+  static const accessPosChat = 'access-pos-chat';
 
   // Table
-  static const accessEditTableDetails = 'access-edit-table-details';
   static const accessTableLockOverride = 'access-table-lock-override';
+  static const accessEditTableDetails = 'access-edit-table-details';
 
-  // Authentication
+  // Authentication (admin web — not used to gate mobile POS UI)
   static const accessDashboard = 'access-dashboard';
-
-  /// JTR Mobile dashboard (V2 API middleware).
-  static const accessPosDashboard = 'access-pos-dashboard';
-
-  /// Keys that imply floor-wide visibility (manager / cashier style).
-  /// All keys exist on `GET /api/permissions`.
-  static const _viewAllOpenOrdersKeys = <String>{
-    accessPaymentButton,
-    accessEditTableDetails,
-    accessStockVisual,
-    accessCloseDay,
-    accessDashboard,
-    accessTableLockOverride,
-  };
 
   /// Parses permission keys from login user payload (`permissions` list).
   static Set<String> keysFromUser(AuthUserModel? user) {
@@ -56,105 +55,115 @@ class PosPermissions {
     return keys;
   }
 
-  /// True when the user may delete/decrease lines after kitchen send.
-  static bool canEditTableDetailsAfterSend(AuthUserModel? user) {
+  /// Mirrors desktop `hasPermission`.
+  static bool hasPermission(AuthUserModel? user, String permission) {
     if (user == null) return false;
     if (user.isSuperuser == true) return true;
+    return keysFromUser(user).contains(permission);
+  }
 
+  /// Mirrors desktop `hasAnyPermission`.
+  static bool hasAnyPermission(
+    AuthUserModel? user,
+    Iterable<String> permissions,
+  ) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
     final keys = keysFromUser(user);
-    return keys.contains(accessEditTableDetails);
-  }
-
-  /// True when the user may open Stock Visuel manager UI.
-  static bool canAccessStockVisual(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    final keys = keysFromUser(user);
-    return keys.contains(accessStockVisual);
-  }
-
-  /// True when the user may print / ticket (session + table-details).
-  static bool canPrintTicket(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    return keysFromUser(user).contains(accessPrintButton);
-  }
-
-  /// True when the user may open payment (cash / card).
-  static bool canAccessPayment(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    return keysFromUser(user).contains(accessPaymentButton);
-  }
-
-  static bool canEditPaymentTransaction(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-    return keysFromUser(user).contains(accessEditPaymentTransaction);
-  }
-
-  static bool canDeletePaymentTransaction(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-    return keysFromUser(user).contains(accessDeletePaymentTransaction);
-  }
-
-  /// True when the user may offer a line or table (offert).
-  static bool canAccessOffert(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    return keysFromUser(user).contains(accessOffert);
-  }
-
-  /// True when the user may open Statistics.
-  static bool canAccessStatistics(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    return keysFromUser(user).contains(accessDashboard);
-  }
-
-  /// True when the user may open the JTR Mobile manager dashboard.
-  static bool canAccessJtrMobileDashboard(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    return keysFromUser(user).contains(accessPosDashboard);
-  }
-
-  /// Manager / cashier / admin: see every waiter's open (and paid) orders.
-  ///
-  /// Uses only keys from `GET /api/permissions` (no invented keys), plus
-  /// common role name fallbacks when the role string is present.
-  static bool canViewAllOpenOrders(AuthUserModel? user) {
-    if (user == null) return false;
-    if (user.isSuperuser == true) return true;
-
-    final keys = keysFromUser(user);
-    for (final key in _viewAllOpenOrdersKeys) {
-      if (keys.contains(key)) return true;
-    }
-
-    final role = (user.role ?? '').toLowerCase().trim();
-    if (role.isEmpty) return false;
-
-    const roleNeedles = <String>[
-      'manager',
-      'gérant',
-      'gerant',
-      'cashier',
-      'caissier',
-      'caisse',
-      'admin',
-      'administrateur',
-    ];
-    for (final needle in roleNeedles) {
-      if (role.contains(needle)) return true;
+    for (final permission in permissions) {
+      if (keys.contains(permission)) return true;
     }
     return false;
   }
+
+  /// Cancel entire table (`access-annulation-table`).
+  static bool canCancelTable(AuthUserModel? user) =>
+      hasPermission(user, accessAnnulationTable);
+
+  /// Cancel seat / course / À SUIVRE section with sent items.
+  static bool canCancelSeat(AuthUserModel? user) =>
+      hasPermission(user, accessAnnulationSeat);
+
+  /// Cancel a sent article (`access-annulation-article`).
+  /// Unsent lines do not require this — callers must check sent state.
+  static bool canCancelSentArticle(AuthUserModel? user) =>
+      hasPermission(user, accessAnnulationArticle);
+
+  /// True when the user may delete/decrease **sent** kitchen lines.
+  @Deprecated('Use canCancelSentArticle')
+  static bool canEditTableDetailsAfterSend(AuthUserModel? user) =>
+      canCancelSentArticle(user);
+
+  /// True when the user may open Stock Visuel manager UI.
+  static bool canAccessStockVisual(AuthUserModel? user) =>
+      hasPermission(user, accessStockVisual);
+
+  /// True when the user may print / ticket (session + table-details).
+  static bool canPrintTicket(AuthUserModel? user) =>
+      hasPermission(user, accessPrintButton);
+
+  /// True when the user may open payment (cash / card).
+  static bool canAccessPayment(AuthUserModel? user) =>
+      hasPermission(user, accessPaymentButton);
+
+  static bool canEditPaymentTransaction(AuthUserModel? user) =>
+      hasPermission(user, accessEditPaymentTransaction);
+
+  static bool canDeletePaymentTransaction(AuthUserModel? user) =>
+      hasPermission(user, accessDeletePaymentTransaction);
+
+  /// True when the user may offer a line or table (offert).
+  static bool canAccessOffert(AuthUserModel? user) =>
+      hasPermission(user, accessOffert);
+
+  /// POS Statistics / analytics (`access-pos-dashboard`).
+  ///
+  /// Not [accessDashboard] — that key is admin web only.
+  static bool canAccessStatistics(AuthUserModel? user) =>
+      hasPermission(user, accessPosDashboard);
+
+  /// JTR Mobile / Rapport manager dashboard (`access-pos-dashboard`).
+  static bool canAccessJtrMobileDashboard(AuthUserModel? user) =>
+      hasPermission(user, accessPosDashboard);
+
+  /// POS AI chat (`access-pos-chat`).
+  static bool canAccessPosChat(AuthUserModel? user) =>
+      hasPermission(user, accessPosChat);
+
+  /// Open a table locked by another user.
+  static bool canOverrideTableLock(AuthUserModel? user) => hasAnyPermission(
+        user,
+        const [accessTableLockOverride, accessEditTableDetails],
+      );
+
+  /// Whether [user] may access a locked order/table.
+  ///
+  /// Backend rule: allow if current user is [lockedBy], or the assigned
+  /// [assignedWaiterId], or has lock-override / edit-table-details.
+  static bool canAccessLockedTable(
+    AuthUserModel? user, {
+    int? lockedBy,
+    int? assignedWaiterId,
+  }) {
+    if (user == null) return false;
+    if (user.isSuperuser == true) return true;
+    final uid = user.id;
+    if (lockedBy != null && lockedBy > 0 && lockedBy == uid) return true;
+    if (assignedWaiterId != null &&
+        assignedWaiterId > 0 &&
+        assignedWaiterId == uid) {
+      return true;
+    }
+    return canOverrideTableLock(user);
+  }
+
+  /// Edit table details / choose waiter.
+  static bool canEditTableDetails(AuthUserModel? user) =>
+      hasPermission(user, accessEditTableDetails);
+
+  /// Manager / cashier: see every waiter's open (and paid) orders.
+  ///
+  /// Desktop TableList uses [accessEditTableDetails] only.
+  static bool canViewAllOpenOrders(AuthUserModel? user) =>
+      hasPermission(user, accessEditTableDetails);
 }

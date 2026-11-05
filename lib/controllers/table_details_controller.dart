@@ -93,6 +93,9 @@ class TableDetailsController extends GetxController {
   late final String orderNumber;
   int? orderId;
 
+  /// Floor table row id for `POST /api/orders/{id}/open` body `table_id`.
+  int? tableId;
+
   /// When true (fresh empty create), skip blocking GET detail on open.
   bool _deferDetailFetch = false;
 
@@ -104,7 +107,7 @@ class TableDetailsController extends GetxController {
   bool _isNavigatingBack = false;
 
   /// Lines present at last kitchen sync / remote open — waiters without
-  /// `access-edit-table-details` cannot delete/decrease these. Newly added
+  /// `access-annulation-article` cannot delete/decrease these. Newly added
   /// local lines (before next Send) are not in this set and stay removable.
   final Set<String> _sentKitchenLineKeys = <String>{};
 
@@ -669,6 +672,10 @@ class TableDetailsController extends GetxController {
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
     orderId = rawId is int ? rawId : (rawId is num ? rawId.toInt() : null);
+    final rawTableId = args is Map ? args['tableId'] : null;
+    tableId = rawTableId is int
+        ? rawTableId
+        : (rawTableId is num ? rawTableId.toInt() : null);
     _deferDetailFetch = args is Map && args['deferDetailFetch'] == true;
     final rawSeed = args is Map ? args['seedOrder'] : null;
     if (rawSeed is SessionOrder) {
@@ -697,7 +704,8 @@ class TableDetailsController extends GetxController {
     }
     logOrderFlow(
       'TableDetailsController.onInit table=$orderNumber '
-      'orderId=${orderId ?? 'none'} deferDetailFetch=$_deferDetailFetch '
+      'orderId=${orderId ?? 'none'} tableId=${tableId ?? 'none'} '
+      'deferDetailFetch=$_deferDetailFetch '
       'hasSeed=${seedOrder != null}',
     );
 
@@ -776,14 +784,15 @@ class TableDetailsController extends GetxController {
       orderId = current.id;
     }
 
-    // Session list rows are lightweight (total only, no lines). Always fetch
-    // GET /api/orders/:id so table details can show seat_orders items.
+    // Session list rows are lightweight (total only, no lines). Opening the
+    // ticket uses POST /api/orders/:id/open when [openSession] is true.
     await Get.find<SessionController>().loadOrderDetails(
       orderNumber,
       orderId: orderId,
       forceRefresh: true,
       previousDisplayEntries: layoutBeforeNav ?? order?.displayEntries,
       openSession: openSession,
+      tableId: tableId,
     );
   }
 
@@ -846,6 +855,18 @@ class TableDetailsController extends GetxController {
       return Get.find<AuthRepository>().cachedSession?.user.id ?? 0;
     }
     return 0;
+  }
+
+  /// Waiter id for send/update payloads.
+  ///
+  /// Backend: keep the original assigned waiter. Managers adding items must
+  /// still send that id (only an explicit waiter change may replace it).
+  int get _orderWaiterIdForWrite {
+    final fromLive = _rawSessionOrder?.waiterId;
+    if (fromLive != null && fromLive > 0) return fromLive;
+    final fromSeed = seedOrder?.waiterId;
+    if (fromSeed != null && fromSeed > 0) return fromSeed;
+    return _currentWaiterId;
   }
 
   Future<int?> _ensureResolvedOrderId() async {
@@ -1374,10 +1395,18 @@ class TableDetailsController extends GetxController {
     return false;
   }
 
-  /// `access-edit-table-details` (or superuser) — delete/decrease after send.
-  bool get hasEditTableDetailsAccess {
+  /// `access-annulation-article` — delete/decrease **sent** kitchen lines.
+  bool get hasCancelArticleAccess {
     if (!Get.isRegistered<AuthRepository>()) return false;
-    return PosPermissions.canEditTableDetailsAfterSend(
+    return PosPermissions.canCancelSentArticle(
+      Get.find<AuthRepository>().cachedSession?.user,
+    );
+  }
+
+  /// `access-annulation-seat` — cancel À SUIVRE / seat with sent items.
+  bool get hasCancelSeatAccess {
+    if (!Get.isRegistered<AuthRepository>()) return false;
+    return PosPermissions.canCancelSeat(
       Get.find<AuthRepository>().cachedSession?.user,
     );
   }
@@ -1446,12 +1475,32 @@ class TableDetailsController extends GetxController {
     return const Color(0xFF27AE60);
   }
 
-  /// Before send: everyone.
-  /// After send: synced kitchen lines need permission; new local lines do not.
+  /// Before send / unsent lines: everyone.
+  /// Sent kitchen lines: `access-annulation-article`.
   bool canDeleteOrDecreaseLine(int productIndex) {
-    if (hasEditTableDetailsAccess) return true;
     if (!orderSentToKitchen) return true;
-    return !_isSentKitchenLine(productIndex);
+    if (!_isSentKitchenLine(productIndex)) return true;
+    return hasCancelArticleAccess;
+  }
+
+  /// True when [sectionIndex] still contains at least one sent kitchen line.
+  bool _suivreSectionHasSentItems(int sectionIndex) {
+    final current = order;
+    if (current == null) return false;
+    for (final entry in current.displayEntries) {
+      if (entry.type != OrderDisplayEntryType.product) continue;
+      if ((entry.sectionIndex ?? 0) != sectionIndex) continue;
+      final line = entry.lineIndex;
+      if (line != null && _isSentKitchenLine(line)) return true;
+      if ((entry.itemId ?? 0) > 0) return true;
+    }
+    return false;
+  }
+
+  /// Cancel À SUIVRE section: unsent-only sections are free; sent need seat perm.
+  bool canCancelSuivreSection(int sectionIndex) {
+    if (!_suivreSectionHasSentItems(sectionIndex)) return true;
+    return hasCancelSeatAccess;
   }
 
   /// Message add/edit only for lines not yet sent to kitchen.
@@ -1465,8 +1514,21 @@ class TableDetailsController extends GetxController {
     if (canDeleteOrDecreaseLine(productIndex)) return false;
     AppSnackbar.show(
       'Action non autorisée',
-      'Seul un utilisateur autorisé peut supprimer ou diminuer un article '
-      'après l\'envoi en cuisine.',
+      'Permission « access-annulation-article » requise pour annuler un '
+      'article déjà envoyé en cuisine.',
+      snackPosition: SnackPosition.BOTTOM,
+      duration: const Duration(seconds: 3),
+      margin: const EdgeInsets.all(16),
+    );
+    return true;
+  }
+
+  bool _blockIfCannotCancelSuivreSection(int sectionIndex) {
+    if (canCancelSuivreSection(sectionIndex)) return false;
+    AppSnackbar.show(
+      'Action non autorisée',
+      'Permission « access-annulation-seat » requise pour annuler une suite '
+      'déjà envoyée en cuisine.',
       snackPosition: SnackPosition.BOTTOM,
       duration: const Duration(seconds: 3),
       margin: const EdgeInsets.all(16),
@@ -1986,7 +2048,7 @@ class TableDetailsController extends GetxController {
           final sent = await _orderRepository.createAndSendLocalDraft(
             tableNumber: orderNumber,
             numberOfGuests: guests,
-            waiterId: _currentWaiterId,
+            waiterId: _orderWaiterIdForWrite,
             lines: draftLines,
             salesZoneId: salesZoneId,
             customerId: live.customerId ?? seedOrder?.customerId,
@@ -2042,7 +2104,7 @@ class TableDetailsController extends GetxController {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
           salesZoneId: salesZoneId,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
@@ -2077,7 +2139,7 @@ class TableDetailsController extends GetxController {
         final recovered = await _orderRepository.tryRecoverCreatedOrder(
           tableNumber: orderNumber,
           salesZoneId: salesZoneId,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
         );
         if (recovered != null && recovered.order.id > 0) {
           var recoveredOrder = recovered.order;
@@ -2343,7 +2405,7 @@ class TableDetailsController extends GetxController {
       sent = await _orderRepository.createAndSendLocalDraft(
         tableNumber: orderNumber,
         numberOfGuests: guests,
-        waiterId: _currentWaiterId,
+        waiterId: _orderWaiterIdForWrite,
         lines: draftLines,
         salesZoneId: salesZoneId,
         customerId: live.customerId ?? seedOrder?.customerId,
@@ -2362,7 +2424,7 @@ class TableDetailsController extends GetxController {
       final recovered = await _orderRepository.tryRecoverCreatedOrder(
         tableNumber: orderNumber,
         salesZoneId: salesZoneId,
-        waiterId: _currentWaiterId,
+        waiterId: _orderWaiterIdForWrite,
       );
       if (recovered == null || recovered.order.id <= 0) rethrow;
       sent = recovered.order;
@@ -2697,37 +2759,12 @@ class TableDetailsController extends GetxController {
   }
 
   Future<void> _handleSimpleProductTap(CatalogProductModel product) async {
-    final resolved = await _resolveProductForAdd(product);
-    if (resolved.requiresCashierPrice) {
-      await _addPrixLibreSimpleProduct(resolved);
+    // Free-priced only when products/list `price_type` is free — never by price.
+    if (product.requiresCashierPrice) {
+      await _addPrixLibreSimpleProduct(product);
       return;
     }
-    await _addSimpleProductWithStockGate(resolved);
-  }
-
-  /// List cache may omit `price_type`; fetch detail for zero-price simple items.
-  Future<CatalogProductModel> _resolveProductForAdd(
-    CatalogProductModel product,
-  ) async {
-    if (product.isComposed) return product;
-    if (product.isPrixLibre) return product;
-    if (product.unitPrice > 0.0001) return product;
-
-    try {
-      final detailed =
-          await _catalogRepository.getProductDetail(product.id);
-      _upsertCatalogProduct(detailed);
-      return detailed;
-    } catch (_) {
-      return product;
-    }
-  }
-
-  void _upsertCatalogProduct(CatalogProductModel product) {
-    final index = products.indexWhere((p) => p.id == product.id);
-    if (index >= 0) {
-      products[index] = product;
-    }
+    await _addSimpleProductWithStockGate(product);
   }
 
   Future<void> _addPrixLibreSimpleProduct(CatalogProductModel product) async {
@@ -3017,7 +3054,7 @@ class TableDetailsController extends GetxController {
               final created =
                   await _orderRepository.createOrderWithFirstSimpleProduct(
                 tableNumber: orderNumber,
-                waiterId: _currentWaiterId,
+                waiterId: _orderWaiterIdForWrite,
                 productId: first.product.id,
                 unitPrice: _resolveSimpleAddUnitPrice(
                   first.product,
@@ -3044,7 +3081,7 @@ class TableDetailsController extends GetxController {
                   layoutHints: created.displayEntries,
                   selectedSuivreSectionIndex: selectedSuivreSection.value,
                   tableNumber: orderNumber,
-                  waiterId: _currentWaiterId,
+                  waiterId: _orderWaiterIdForWrite,
                 );
                 orderId = lastResult.id;
               }
@@ -3057,7 +3094,7 @@ class TableDetailsController extends GetxController {
                 layoutHints: layoutHints,
                 selectedSuivreSectionIndex: selectedSuivreSection.value,
                 tableNumber: orderNumber,
-                waiterId: _currentWaiterId,
+                waiterId: _orderWaiterIdForWrite,
                 expectEmptyShell: reopeningEmpty,
               );
               if (epochAtEnqueue != _ticketMutationEpoch ||
@@ -3333,7 +3370,7 @@ class TableDetailsController extends GetxController {
           final created =
               await _orderRepository.createOrderWithFirstComposedProduct(
             tableNumber: orderNumber,
-            waiterId: _currentWaiterId,
+            waiterId: _orderWaiterIdForWrite,
             productId: product.id,
             basePrice: product.unitPrice,
             menuSelections: menuSelections,
@@ -3361,7 +3398,7 @@ class TableDetailsController extends GetxController {
           layoutHints: hints,
           selectedSuivreSectionIndex: suivreTarget,
           tableNumber: orderNumber,
-          waiterId: _currentWaiterId,
+          waiterId: _orderWaiterIdForWrite,
           expectEmptyShell: snapshot.products.isEmpty,
         );
         if (epochAtEnqueue != _ticketMutationEpoch ||
@@ -3888,6 +3925,7 @@ class TableDetailsController extends GetxController {
 
   Future<void> cancelSuivreSection(int sectionIndex) async {
     if (_blockIfOrderOffered()) return;
+    if (_blockIfCannotCancelSuivreSection(sectionIndex)) return;
 
     final currentOrder = order;
     if (currentOrder == null) return;

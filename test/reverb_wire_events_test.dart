@@ -147,6 +147,33 @@ void main() {
     });
   });
 
+  group('TableActiveOrderClearedWireEvent', () {
+    test('parses clear payload with order_id and table fields', () {
+      final event = TableActiveOrderClearedWireEvent.fromJson({
+        'id': 45,
+        'order_id': 2599,
+        'table_number': 36,
+        'sales_zone_id': 1,
+        'active_order': null,
+      });
+      expect(event.tableId, 45);
+      expect(event.orderId, 2599);
+      expect(event.tableNumber, '36');
+      expect(event.salesZoneId, 1);
+    });
+
+    test('reads nested table / order ids when flat fields missing', () {
+      final event = TableActiveOrderClearedWireEvent.fromJson({
+        'table': {'id': 12, 'table_number': '7', 'sales_zone_id': 2},
+        'order': {'id': 88},
+      });
+      expect(event.tableId, 12);
+      expect(event.orderId, 88);
+      expect(event.tableNumber, '7');
+      expect(event.salesZoneId, 2);
+    });
+  });
+
   group('ForceLogoutWireEvent', () {
     test('parses force.logout payload', () {
       final event = ForceLogoutWireEvent.fromJson({

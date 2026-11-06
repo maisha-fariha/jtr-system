@@ -283,11 +283,11 @@ class OrderMapper {
     return productsLength;
   }
 
-  /// Keeps only unpaid open orders for the active business day list.
+  /// Keeps Ouvertes rows: unpaid + `pending` / `processing` only.
   static bool isActiveDayOpenOrder(Map<String, dynamic> order) {
     if (isOrderFullyPaid(order)) return false;
-    final status = order['status']?.toString().toLowerCase();
-    return status != 'closed' && status != 'cancelled';
+    final status = order['status']?.toString().trim().toLowerCase();
+    return status == 'pending' || status == 'processing';
   }
 
   /// Paid-orders screen: only `status == completed` and fully paid.

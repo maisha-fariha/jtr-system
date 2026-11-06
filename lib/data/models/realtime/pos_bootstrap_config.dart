@@ -145,6 +145,60 @@ class TableSessionWireEvent {
   }
 }
 
+/// Fired when desktop/full pay/close clears the table's active order.
+///
+/// Payload fields: `order_id`, `table_number`, `id` (table), `sales_zone_id`,
+/// `active_order: null`. Clients drop the order from Ouvertes — no refetch.
+class TableActiveOrderClearedWireEvent {
+  const TableActiveOrderClearedWireEvent({
+    required this.tableId,
+    required this.orderId,
+    this.tableNumber,
+    this.salesZoneId,
+  });
+
+  final int tableId;
+  final int orderId;
+  final String? tableNumber;
+  final int? salesZoneId;
+
+  factory TableActiveOrderClearedWireEvent.fromJson(Map<String, dynamic> json) {
+    int? asInt(dynamic v) {
+      if (v is num) return v.toInt();
+      return int.tryParse(v?.toString() ?? '');
+    }
+
+    final nestedTable = json['table'] is Map
+        ? Map<String, dynamic>.from(json['table'] as Map)
+        : null;
+    final nestedOrder = json['active_order'] is Map
+        ? Map<String, dynamic>.from(json['active_order'] as Map)
+        : (json['order'] is Map
+            ? Map<String, dynamic>.from(json['order'] as Map)
+            : null);
+
+    final tableId = asInt(json['id']) ??
+        asInt(json['table_id']) ??
+        asInt(nestedTable?['id']) ??
+        0;
+    final orderId = asInt(json['order_id']) ??
+        asInt(nestedOrder?['id']) ??
+        0;
+    final tableNumber = json['table_number']?.toString() ??
+        nestedTable?['table_number']?.toString() ??
+        nestedTable?['number']?.toString();
+    final salesZoneId = asInt(json['sales_zone_id']) ??
+        asInt(nestedTable?['sales_zone_id']);
+
+    return TableActiveOrderClearedWireEvent(
+      tableId: tableId,
+      orderId: orderId,
+      tableNumber: tableNumber?.trim().isEmpty == true ? null : tableNumber?.trim(),
+      salesZoneId: salesZoneId,
+    );
+  }
+}
+
 class ForceLogoutWireEvent {
   const ForceLogoutWireEvent({
     required this.userId,

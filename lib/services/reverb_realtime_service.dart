@@ -35,6 +35,7 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
 
   static const eventTableSessionStarted = 'TableSessionStarted';
   static const eventTableSessionEnded = 'TableSessionEnded';
+  static const eventTableActiveOrderCleared = 'TableActiveOrderCleared';
   static const eventForceLogout = 'force.logout';
 
   PusherChannelsClient? _client;
@@ -42,6 +43,7 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
   final List<StreamSubscription<ChannelReadEvent>> _eventSubs = [];
 
   final Set<int> _subscribedFloorIds = {};
+  final Set<int> _subscribedOrderZoneIds = {};
   bool _starting = false;
   bool _stopping = false;
   bool _forceLogoutHandling = false;
@@ -53,6 +55,13 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
 
   final isConnected = false.obs;
   final tablesLockRevision = 0.obs;
+
+  /// Set by [SessionController] to drop Ouvertes rows without a circular import.
+  void Function({
+    required int orderId,
+    int? tableId,
+    String? tableNumber,
+  })? onActiveOrderClearedUi;
 
   @override
   void onInit() {
@@ -155,6 +164,7 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
       final client = _client;
       _client = null;
       _subscribedFloorIds.clear();
+      _subscribedOrderZoneIds.clear();
       if (client != null) {
         try {
           await client.disconnect().timeout(_disconnectTimeout);
@@ -182,7 +192,21 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
     );
   }
 
-  /// Re-bind core + floor channels after tables cache is refreshed.
+  /// Subscribe to `private-orders.zone.{id}` for zone-scoped order clears.
+  Future<void> subscribeOrdersZone(int zoneId) async {
+    if (zoneId <= 0) return;
+    if (_subscribedOrderZoneIds.contains(zoneId)) return;
+    final client = _client;
+    if (client == null || !isConnected.value) return;
+    _subscribedOrderZoneIds.add(zoneId);
+    _subscribePrivateChannel(
+      client,
+      'private-orders.zone.$zoneId',
+      bindTableEvents: true,
+    );
+  }
+
+  /// Re-bind core + floor + zone channels after tables cache is refreshed.
   void resyncSubscriptions() {
     final client = _client;
     if (client == null || !isConnected.value) return;
@@ -292,6 +316,7 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
 
     // Floor channels for known floors in tables cache + active day zone.
     final floorIds = <int>{};
+    final orderZoneIds = <int>{};
     for (final table in _sessionRepository.cachedTables) {
       final floor = table['floor_id'];
       if (floor is num && floor.toInt() > 0) {
@@ -300,9 +325,22 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
         final parsed = int.tryParse(floor?.toString() ?? '');
         if (parsed != null && parsed > 0) floorIds.add(parsed);
       }
+      final zone = table['sales_zone_id'];
+      if (zone is num && zone.toInt() > 0) {
+        orderZoneIds.add(zone.toInt());
+      } else {
+        final nested = table['sales_zone'];
+        if (nested is Map) {
+          final zid = nested['id'];
+          if (zid is num && zid.toInt() > 0) orderZoneIds.add(zid.toInt());
+        }
+      }
     }
     final zoneId = _sessionRepository.cachedActiveDay?.salesZoneId;
-    if (zoneId != null && zoneId > 0) floorIds.add(zoneId);
+    if (zoneId != null && zoneId > 0) {
+      floorIds.add(zoneId);
+      orderZoneIds.add(zoneId);
+    }
 
     _subscribedFloorIds
       ..clear()
@@ -311,6 +349,17 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
       _subscribePrivateChannel(
         client,
         'private-tables.floor.$floorId',
+        bindTableEvents: true,
+      );
+    }
+
+    _subscribedOrderZoneIds
+      ..clear()
+      ..addAll(orderZoneIds);
+    for (final ordersZoneId in orderZoneIds) {
+      _subscribePrivateChannel(
+        client,
+        'private-orders.zone.$ordersZoneId',
         bindTableEvents: true,
       );
     }
@@ -347,6 +396,11 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
       );
       _eventSubs.add(
         channel.bind(eventTableSessionEnded).listen(_onTableSessionEnded),
+      );
+      _eventSubs.add(
+        channel
+            .bind(eventTableActiveOrderCleared)
+            .listen(_onTableActiveOrderCleared),
       );
     }
     if (bindForceLogout) {
@@ -419,6 +473,21 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
     unawaited(_applyTableWireEvent(wire));
   }
 
+  void _onTableActiveOrderCleared(ChannelReadEvent event) {
+    final payload = event.tryGetDataAsMap();
+    if (payload == null) {
+      _log('TableActiveOrderCleared: unparseable data=${event.data}');
+      return;
+    }
+    final wire = TableActiveOrderClearedWireEvent.fromJson(payload);
+    if (wire.orderId <= 0 && wire.tableId <= 0) return;
+    _log(
+      'TableActiveOrderCleared order=${wire.orderId} '
+      'table=${wire.tableId} number=${wire.tableNumber ?? '—'}',
+    );
+    unawaited(_applyActiveOrderCleared(wire));
+  }
+
   /// Persist lock patch first, then bump revision so readers see fresh cache.
   Future<void> _applyTableWireEvent(
     TableSessionWireEvent wire, {
@@ -431,6 +500,22 @@ class ReverbRealtimeService extends GetxService with WidgetsBindingObserver {
         wire.floorId! > 0) {
       await subscribeFloor(wire.floorId!);
     }
+  }
+
+  /// Drop cleared order from Ouvertes caches/UI — no REST refetch.
+  Future<void> _applyActiveOrderCleared(
+    TableActiveOrderClearedWireEvent wire,
+  ) async {
+    await _sessionRepository.applyTableActiveOrderCleared(wire);
+    tablesLockRevision.value++;
+    if (wire.salesZoneId != null && wire.salesZoneId! > 0) {
+      await subscribeOrdersZone(wire.salesZoneId!);
+    }
+    onActiveOrderClearedUi?.call(
+      orderId: wire.orderId,
+      tableId: wire.tableId > 0 ? wire.tableId : null,
+      tableNumber: wire.tableNumber,
+    );
   }
 
   void _onForceLogout(ChannelReadEvent event) {

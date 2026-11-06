@@ -95,14 +95,19 @@ void main() {
         return (status: 200, body: _page(const []));
       });
 
-      await SessionRemoteDataSource(client)
-          .fetchOrdersFirstPage(waiterId: 3, salesZoneId: 2);
+      await SessionRemoteDataSource(client).fetchOrdersFirstPage(
+        waiterId: 3,
+        salesZoneId: 2,
+        statuses: SessionRemoteDataSource.openSummaryStatuses,
+        activeDay: true,
+      );
 
-      expect(query['active_day'], false);
+      expect(query['active_day'], 1);
       expect(query['page'], 1);
       expect(query['per_page'], SessionRemoteDataSource.ordersPageSize);
       expect(query['waiter_id'], 3);
       expect(query['sales_zone_id'], 2);
+      expect(query['status'], ['pending', 'processing']);
     });
 
     test('unknown payload shape is an error, not an empty list', () async {

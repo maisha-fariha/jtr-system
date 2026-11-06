@@ -214,7 +214,10 @@ class SessionRepository {
       }
     } catch (_) {}
     try {
-      final first = await _remote.fetchOrdersFirstPage();
+      final first = await _remote.fetchOrdersFirstPage(
+        statuses: openSummaryStatuses,
+        activeDay: true,
+      );
       _occupancyOpenOrders = first.orders;
       return _occupancyOpenOrders;
     } catch (_) {
@@ -244,6 +247,85 @@ class SessionRepository {
       }
       await _local.saveTablesList(tables);
     } catch (_) {}
+  }
+
+  /// Ouvertes statuses for `GET /api/orders/summary`.
+  static const openSummaryStatuses = <String>['pending', 'processing'];
+
+  /// Soldées / autres statuses for `GET /api/orders/summary`.
+  static const settledSummaryStatuses = <String>[
+    'completed',
+    'closed',
+    'cancelled',
+    'offered',
+    'loss',
+  ];
+
+  /// Apply `TableActiveOrderCleared`: drop [orderId] from open-orders caches and
+  /// clear `active_order` on the floor table — no network refetch.
+  Future<void> applyTableActiveOrderCleared(
+    TableActiveOrderClearedWireEvent event,
+  ) async {
+    final orderId = event.orderId;
+    if (orderId > 0) {
+      if (_openOrdersMemory != null) {
+        _openOrdersMemory = _openOrdersMemory!
+            .where((row) => OrderMapper.orderIdFromDetail(row) != orderId)
+            .toList(growable: false);
+      }
+      await _local.removeOpenOrderFromList(orderId);
+
+      if (_occupancyOpenOrders.isNotEmpty) {
+        _occupancyOpenOrders = _occupancyOpenOrders
+            .where((row) => OrderMapper.orderIdFromDetail(row) != orderId)
+            .toList(growable: false);
+      }
+
+      if (_preloadedSessionOrders != null) {
+        _preloadedSessionOrders = _preloadedSessionOrders!
+            .where((o) => o.id != orderId)
+            .toList(growable: false);
+      }
+    }
+
+    if (event.tableId <= 0 &&
+        (event.tableNumber == null || event.tableNumber!.isEmpty)) {
+      return;
+    }
+
+    final current = List<Map<String, dynamic>>.from(_local.readTablesList());
+    var changed = false;
+    for (var i = 0; i < current.length; i++) {
+      final row = current[i];
+      final matchesId =
+          event.tableId > 0 && _rowTableId(row) == event.tableId;
+      final matchesNumber = event.tableNumber != null &&
+          event.tableNumber!.isNotEmpty &&
+          OrderMapper.normalizeTableKey(
+                row['table_number']?.toString() ??
+                    row['number']?.toString() ??
+                    '',
+              ) ==
+              OrderMapper.normalizeTableKey(event.tableNumber!);
+      if (!matchesId && !matchesNumber) continue;
+
+      final active = row['active_order'];
+      final activeId = active is Map
+          ? OrderMapper.orderIdFromDetail(Map<String, dynamic>.from(active))
+          : 0;
+      // Clear when order matches, or when event says this table's active is gone.
+      if (orderId > 0 && activeId > 0 && activeId != orderId) continue;
+
+      current[i] = {
+        ...row,
+        'active_order': null,
+      };
+      changed = true;
+    }
+    if (changed) {
+      await _local.saveTablesList(current);
+      _tablesWireEpoch++;
+    }
   }
 
   /// Apply live Reverb `TableSessionStarted` / `TableSessionEnded` onto the
@@ -394,6 +476,7 @@ class SessionRepository {
   Future<List<SessionOrder>> getPaidOrders({
     bool forceRefresh = false,
     int? waiterId,
+    int? salesZoneId,
   }) async {
     if (!forceRefresh) {
       final cached = getCachedPaidOrders(waiterId: waiterId);
@@ -405,7 +488,10 @@ class SessionRepository {
     }
 
     try {
-      final maps = await _remote.fetchPaidOrdersList(waiterId: waiterId);
+      final maps = await _remote.fetchPaidOrdersList(
+        waiterId: waiterId,
+        salesZoneId: salesZoneId,
+      );
       // Keep local just-paid rows that are completed+paid and fresher.
       final local = _local
           .readPaidOrdersList()
@@ -506,6 +592,8 @@ class SessionRepository {
       page: page,
       waiterId: scopedId,
       salesZoneId: zoneId,
+      statuses: openSummaryStatuses,
+      activeDay: true,
     );
 
     if (epochAtStart != _openOrdersEpoch) {
@@ -595,6 +683,8 @@ class SessionRepository {
     final first = await _remote.fetchOrdersFirstPage(
       waiterId: scopedId,
       salesZoneId: zoneId,
+      statuses: openSummaryStatuses,
+      activeDay: true,
     );
     var pageMaps = first.orders;
     var lastPage = first.lastPage;
@@ -602,7 +692,11 @@ class SessionRepository {
 
     // Prefer waiter-scoped page 1; only fall back once (page 1).
     if (pageMaps.isEmpty && scopedId != null) {
-      final unscoped = await _remote.fetchOrdersFirstPage(salesZoneId: zoneId);
+      final unscoped = await _remote.fetchOrdersFirstPage(
+        salesZoneId: zoneId,
+        statuses: openSummaryStatuses,
+        activeDay: true,
+      );
       pageMaps = unscoped.orders;
       lastPage = unscoped.lastPage;
       effectiveWaiterId = null;
@@ -623,6 +717,8 @@ class SessionRepository {
         lastPage: lastPage,
         waiterId: effectiveWaiterId,
         salesZoneId: zoneId,
+        statuses: openSummaryStatuses,
+        activeDay: true,
         onPagesLoaded: reportPages,
       );
       pageMaps = [...pageMaps, ...extraMaps];

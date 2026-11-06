@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
+
 import '../../core/constants/storage_constants.dart';
 import '../../core/storage/hive_storage.dart';
 import '../../core/network/api_client.dart';
@@ -17,6 +19,18 @@ class SessionRemoteDataSource {
 
   /// Session list + swipe-refresh page size (`GET /api/orders/summary`).
   static const int ordersPageSize = 100;
+
+  /// Backend Ouvertes filters.
+  static const openSummaryStatuses = <String>['pending', 'processing'];
+
+  /// Backend Soldées / autres filters.
+  static const settledSummaryStatuses = <String>[
+    'completed',
+    'closed',
+    'cancelled',
+    'offered',
+    'loss',
+  ];
 
   final ApiClient _client;
 
@@ -96,18 +110,22 @@ class SessionRemoteDataSource {
     return DayStatisticsInfo.fromJson(envelope.data!);
   }
 
-  /// Open unpaid orders ([GET /api/orders/summary], `active_day=false`).
+  /// Open unpaid orders ([GET /api/orders/summary]).
   ///
   /// When [firstPageOnly] is true, returns after page 1 so the session list
   /// can paint without waiting on further pagination.
   Future<List<Map<String, dynamic>>> fetchOrdersList({
     int? waiterId,
     int? salesZoneId,
+    List<String>? statuses,
+    bool activeDay = true,
     bool firstPageOnly = false,
   }) async {
     final first = await fetchOrdersFirstPage(
       waiterId: waiterId,
       salesZoneId: salesZoneId,
+      statuses: statuses,
+      activeDay: activeDay,
     );
     if (firstPageOnly || first.lastPage <= 1) {
       return first.orders;
@@ -117,17 +135,26 @@ class SessionRemoteDataSource {
       lastPage: first.lastPage,
       waiterId: waiterId,
       salesZoneId: salesZoneId,
+      statuses: statuses,
+      activeDay: activeDay,
     );
     return [...first.orders, ...rest];
   }
 
   /// Page 1 only — same cost as a single Postman request.
   Future<({List<Map<String, dynamic>> orders, int lastPage})>
-      fetchOrdersFirstPage({int? waiterId, int? salesZoneId}) {
+      fetchOrdersFirstPage({
+    int? waiterId,
+    int? salesZoneId,
+    List<String>? statuses,
+    bool activeDay = true,
+  }) {
     return fetchOrdersPage(
       page: 1,
       waiterId: waiterId,
       salesZoneId: salesZoneId,
+      statuses: statuses,
+      activeDay: activeDay,
     );
   }
 
@@ -136,12 +163,16 @@ class SessionRemoteDataSource {
     required int page,
     int? waiterId,
     int? salesZoneId,
+    List<String>? statuses,
+    bool activeDay = true,
     int perPage = ordersPageSize,
   }) {
     return _fetchOrdersPage(
       page: page,
       waiterId: waiterId,
       salesZoneId: salesZoneId,
+      statuses: statuses,
+      activeDay: activeDay,
       perPage: perPage,
     );
   }
@@ -154,6 +185,8 @@ class SessionRemoteDataSource {
     required int lastPage,
     int? waiterId,
     int? salesZoneId,
+    List<String>? statuses,
+    bool activeDay = true,
     void Function(int pagesLoaded, int totalPages)? onPagesLoaded,
   }) async {
     if (lastPage <= 1) return const [];
@@ -175,6 +208,8 @@ class SessionRemoteDataSource {
             page: page,
             waiterId: waiterId,
             salesZoneId: salesZoneId,
+            statuses: statuses,
+            activeDay: activeDay,
           ),
         ),
       );
@@ -191,18 +226,20 @@ class SessionRemoteDataSource {
   }
 
   /// `GET /api/orders/summary` — lightweight rows (no item trees).
+  ///
+  /// Backend Ouvertes: `active_day=1`, `status[]=pending&status[]=processing`.
+  /// Soldées: `status[]=completed|closed|cancelled|offered|loss`.
   Future<({List<Map<String, dynamic>> orders, int lastPage})> _fetchOrdersPage({
     required int page,
     int? waiterId,
     int? salesZoneId,
+    List<String>? statuses,
     String? status,
+    bool activeDay = true,
     int perPage = ordersPageSize,
   }) async {
     final queryParameters = <String, dynamic>{
-      // Same as Postman list: do not restrict to the POS "active day".
-      // T25 (pending, created later than the displayed day) is omitted when
-      // `active_day=true`, so it never appears and later pages never load.
-      'active_day': false,
+      'active_day': activeDay ? 1 : 0,
       'per_page': perPage,
       'page': page,
     };
@@ -212,13 +249,17 @@ class SessionRemoteDataSource {
     if (salesZoneId != null && salesZoneId > 0) {
       queryParameters['sales_zone_id'] = salesZoneId;
     }
-    if (status != null && status.isNotEmpty) {
+    if (statuses != null && statuses.isNotEmpty) {
+      // Laravel: status[]=pending&status[]=processing
+      queryParameters['status'] = statuses;
+    } else if (status != null && status.isNotEmpty) {
       queryParameters['status'] = status;
     }
 
     final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.ordersSummary,
       queryParameters: queryParameters,
+      options: Options(listFormat: ListFormat.multiCompatible),
     );
     final envelope = ApiEnvelope<dynamic>.fromJson(
       response.data!,
@@ -300,12 +341,18 @@ class SessionRemoteDataSource {
 
   Future<List<Map<String, dynamic>>> _fetchAllOrdersPages({
     int? waiterId,
+    int? salesZoneId,
+    List<String>? statuses,
     String? status,
+    bool activeDay = true,
   }) async {
     final first = await _fetchOrdersPage(
       page: 1,
       waiterId: waiterId,
+      salesZoneId: salesZoneId,
+      statuses: statuses,
       status: status,
+      activeDay: activeDay,
     );
     final orders = List<Map<String, dynamic>>.from(first.orders);
     if (first.lastPage > 1) {
@@ -324,7 +371,10 @@ class SessionRemoteDataSource {
             (p) => _fetchOrdersPage(
               page: p,
               waiterId: waiterId,
+              salesZoneId: salesZoneId,
+              statuses: statuses,
               status: status,
+              activeDay: activeDay,
             ),
           ),
         );
@@ -336,14 +386,18 @@ class SessionRemoteDataSource {
     return orders;
   }
 
-  /// Completed + paid orders for the statistics list (latest paid first).
+  /// Soldées / autres (`status[]=completed|closed|cancelled|offered|loss`).
+  /// Paid-orders UI then keeps completed + fully paid rows.
   Future<List<Map<String, dynamic>>> fetchPaidOrdersList({
     int? waiterId,
+    int? salesZoneId,
   }) async {
     try {
       final orders = await _fetchAllOrdersPages(
         waiterId: waiterId,
-        status: 'completed',
+        salesZoneId: salesZoneId,
+        statuses: settledSummaryStatuses,
+        activeDay: true,
       );
 
       final paid = orders
@@ -362,10 +416,15 @@ class SessionRemoteDataSource {
         return paid;
       }
     } catch (_) {
-      // Fall through — some backends ignore status=completed.
+      // Fall through — some backends ignore multi-status filters.
     }
 
-    final all = await fetchOrdersList(waiterId: waiterId);
+    final all = await fetchOrdersList(
+      waiterId: waiterId,
+      salesZoneId: salesZoneId,
+      statuses: settledSummaryStatuses,
+      activeDay: true,
+    );
     final paid = all.where(OrderMapper.isActiveDayPaidOrder).toList();
     paid.sort(
       (a, b) => OrderMapper.paidOrderSortMillis(b)

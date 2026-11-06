@@ -198,16 +198,112 @@ class SessionController extends GetxController {
     final reverb = Get.find<ReverbRealtimeService>();
     tablesLockRevision.value = reverb.tablesLockRevision.value;
     _tablesLockWorker = ever<int>(reverb.tablesLockRevision, (rev) {
+      // Mirror only — ActiveOrderCleared already patched caches; do not refetch.
       tablesLockRevision.value = rev;
-      // Lock changed — refresh occupancy caches in bg for the next Skip check.
-      _startOccupancyWarmInBackground();
     });
+    reverb.onActiveOrderClearedUi = ({
+      required int orderId,
+      int? tableId,
+      String? tableNumber,
+    }) {
+      onRemoteActiveOrderCleared(
+        orderId: orderId,
+        tableId: tableId,
+        tableNumber: tableNumber,
+      );
+    };
+  }
+
+  /// Desktop/other device paid or closed the ticket — drop from Ouvertes UI.
+  void onRemoteActiveOrderCleared({
+    required int orderId,
+    int? tableId,
+    String? tableNumber,
+  }) {
+    if (orderId <= 0 &&
+        (tableNumber == null || tableNumber.trim().isEmpty) &&
+        (tableId == null || tableId <= 0)) {
+      return;
+    }
+
+    SessionOrder? matched;
+    for (final order in orders) {
+      if (orderId > 0 && order.id == orderId) {
+        matched = order;
+        break;
+      }
+      if (tableNumber != null &&
+          tableNumber.trim().isNotEmpty &&
+          _tableKeysMatch(order.number, tableNumber)) {
+        matched = order;
+        break;
+      }
+    }
+
+    final label = matched?.number ??
+        (tableNumber != null && tableNumber.trim().isNotEmpty
+            ? OrderMapper.displayKey(
+                orderId: 0,
+                tableNumber:
+                    OrderMapper.parseTableNumberForOpenByNumber(tableNumber),
+                tableLabel: tableNumber,
+              )
+            : null);
+
+    if (matched != null || orderId > 0) {
+      if (label != null && label.isNotEmpty) {
+        _suppressedTableNumbers.add(label);
+      }
+      orders.removeWhere((o) {
+        if (orderId > 0 && o.id == orderId) return true;
+        if (matched != null && o.id == matched.id) return true;
+        if (label != null && _tableKeysMatch(o.number, label)) return true;
+        return false;
+      });
+      orders.refresh();
+      if (label != null) _clearUiStateForOrder(label);
+    }
+
+    // If this device is viewing the cleared ticket, leave the screen.
+    if (Get.currentRoute == AppRoutes.tableDetails &&
+        Get.isRegistered<TableDetailsController>()) {
+      final details = Get.find<TableDetailsController>();
+      final viewingId = details.orderId ?? details.resolvedOrderId;
+      final viewingNumber = details.orderNumber;
+      final sameOrder = orderId > 0 && viewingId != null && viewingId == orderId;
+      final sameTable = label != null &&
+          label.isNotEmpty &&
+          _tableKeysMatch(viewingNumber, label);
+      if (sameOrder || sameTable) {
+        Get.back<void>();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          AppSnackbar.show(
+            'Table libérée',
+            'La commande a été soldée sur un autre appareil.',
+            snackPosition: SnackPosition.BOTTOM,
+            duration: const Duration(seconds: 2),
+            margin: const EdgeInsets.all(16),
+          );
+        });
+      }
+    }
+
+    if (label != null && label.isNotEmpty) {
+      Future<void>.delayed(const Duration(seconds: 2), () {
+        _suppressedTableNumbers.removeWhere(
+          (s) => _tableKeysMatch(s, label),
+        );
+      });
+    }
   }
 
   @override
   void onClose() {
     _tablesLockWorker?.dispose();
     _tablesLockWorker = null;
+    if (Get.isRegistered<ReverbRealtimeService>()) {
+      Get.find<ReverbRealtimeService>().onActiveOrderClearedUi = null;
+    }
     super.onClose();
   }
 
@@ -330,12 +426,14 @@ class SessionController extends GetxController {
     _subscribeActiveFloorChannel();
   }
 
-  /// Docs: subscribe `private-tables.floor.{id}` while on that floor/zone.
+  /// Docs: subscribe `private-tables.floor.{id}` + `private-orders.zone.{id}`.
   void _subscribeActiveFloorChannel() {
-    final floorId = selectedSalesZoneId ?? activeDay.value.salesZoneId;
-    if (floorId == null || floorId <= 0) return;
+    final zoneId = selectedSalesZoneId ?? activeDay.value.salesZoneId;
+    if (zoneId == null || zoneId <= 0) return;
     if (!Get.isRegistered<ReverbRealtimeService>()) return;
-    unawaited(Get.find<ReverbRealtimeService>().subscribeFloor(floorId));
+    final reverb = Get.find<ReverbRealtimeService>();
+    unawaited(reverb.subscribeFloor(zoneId));
+    unawaited(reverb.subscribeOrdersZone(zoneId));
   }
 
   Future<void> _prefetchTables() async {
@@ -506,6 +604,7 @@ class SessionController extends GetxController {
       final rows = await _sessionRepository.getPaidOrders(
         forceRefresh: forceRefresh,
         waiterId: _ordersListWaiterFilter,
+        salesZoneId: selectedSalesZoneId,
       );
       paidOrders.assignAll(rows);
     } on ApiException catch (e) {

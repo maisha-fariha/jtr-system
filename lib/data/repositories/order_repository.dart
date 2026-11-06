@@ -1826,6 +1826,8 @@ class OrderRepository {
       final page = await _sessionRemote.fetchOrdersFirstPage(
         waiterId: scopedWaiter,
         salesZoneId: zoneId,
+        statuses: SessionRemoteDataSource.openSummaryStatuses,
+        activeDay: true,
       );
       if (page.orders.isEmpty) return null;
 

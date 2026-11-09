@@ -1335,11 +1335,187 @@ class OrderMapper {
     return null;
   }
 
-  /// Exactly one course id — the next suite to demand (session screen).
+  /// Suite for Demander la suite: course_number > 1, DB id, requested_at null.
   ///
-  /// Uses the first pending À SUIVRE **with items** in waiter layout order.
-  /// Never falls back to an arbitrary unrequested course when the next
-  /// À SUIVRE is empty (that used to let empty suites fire course 1).
+  /// Course 1 is the current service and is never a suite.
+  static bool isSuiteCourseDemandeEligible(Map<String, dynamic> course) {
+    final number = (course['course_number'] as num?)?.toInt() ?? 0;
+    if (number <= 1) return false;
+    if (_visibleItemCountInCourse(course) <= 0) return false;
+    if (_courseRecordId(course) == null) return false;
+    final requestedAt = course['requested_at'];
+    if (requestedAt != null && requestedAt.toString().trim().isNotEmpty) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Smallest course_number > 1 still waiting for Demander la suite.
+  static int? nextRequestableSuiteCourseNumber(Map<String, dynamic> data) {
+    int? best;
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return null;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        if (!isSuiteCourseDemandeEligible(course)) continue;
+        final n = (course['course_number'] as num?)?.toInt() ?? 0;
+        if (n <= 1) continue;
+        if (best == null || n < best) best = n;
+      }
+    }
+    return best;
+  }
+
+  /// All seat course ids for one suite [courseNumber] (> 1 only).
+  static List<int> extractIdsForSuiteCourseNumber(
+    Map<String, dynamic> data, {
+    required int courseNumber,
+  }) {
+    if (courseNumber <= 1) return const [];
+
+    final ids = <int>{};
+    final seatOrders = data['seat_orders'];
+    if (seatOrders is! List) return const [];
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final number = (course['course_number'] as num?)?.toInt() ?? 0;
+        if (number != courseNumber) continue;
+        if (!isSuiteCourseDemandeEligible(course)) continue;
+        final id = _courseRecordId(course);
+        if (id != null) ids.add(id);
+      }
+    }
+
+    final sorted = ids.toList()..sort();
+    return sorted;
+  }
+
+  /// Next suite only: every seat id for [nextRequestableSuiteCourseNumber].
+  static List<int> extractNextRequestableSuiteCourseIds(
+    Map<String, dynamic> data,
+  ) {
+    final n = nextRequestableSuiteCourseNumber(data);
+    if (n == null) return const [];
+    return extractIdsForSuiteCourseNumber(data, courseNumber: n);
+  }
+
+  /// Sets `requested_at` on matched course ids (local cache after Demande).
+  static void patchRequestedAtOnCourseIds(
+    Map<String, dynamic> detail,
+    List<int> courseIds, {
+    required String requestedAtIso,
+  }) {
+    if (courseIds.isEmpty) return;
+    final idSet = courseIds.toSet();
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final id = _courseRecordId(course);
+        if (id == null || !idSet.contains(id)) continue;
+        course['requested_at'] = requestedAtIso;
+      }
+    }
+  }
+
+  /// True when every [courseIds] entry is an eligible suite (never course 1).
+  static bool courseIdsMatchSuiteDemandePayload(
+    Map<String, dynamic> detail,
+    List<int> courseIds,
+  ) {
+    if (courseIds.isEmpty) return false;
+    final idSet = courseIds.toSet();
+    final matched = <int>{};
+    final seatOrders = detail['seat_orders'];
+    if (seatOrders is! List) return false;
+
+    for (final seat in seatOrders) {
+      if (seat is! Map<String, dynamic>) continue;
+      final courses = seat['courses'];
+      if (courses is! List) continue;
+
+      for (final course in courses) {
+        if (course is! Map<String, dynamic>) continue;
+        final id = _courseRecordId(course);
+        if (id == null || !idSet.contains(id)) continue;
+        if (!isSuiteCourseDemandeEligible(course)) return false;
+        matched.add(id);
+      }
+    }
+
+    return matched.length == idSet.length;
+  }
+
+  /// Whether Demander la suite should be enabled.
+  ///
+  /// Mirrors [extractSingleNextCourseIdForDemande]: prefer open À SUIVRE layout,
+  /// otherwise fall back to eligible course_number > 1 in the detail. Flat
+  /// product layouts (no divider) must still enable when a suite exists.
+  static bool hasNextDemanderSuite(
+    Map<String, dynamic> data, {
+    List<OrderDisplayEntry>? layout,
+  }) {
+    final layoutHints = coalesceLayoutHints(layout);
+    if (layoutHints != null) {
+      var sawEmptyPendingSuivre = false;
+      for (final entry in layoutHints) {
+        if (entry.type != OrderDisplayEntryType.suivreSeparator) continue;
+        final sectionIndex = entry.sectionIndex ?? 0;
+        if (sectionIndex <= 0) continue;
+        if (productEntriesUnderSection(layoutHints, sectionIndex).isEmpty) {
+          sawEmptyPendingSuivre = true;
+          continue;
+        }
+
+        final fromLayout = extractRequestableCourseIdsForSuivreLayout(
+          data,
+          layout: layoutHints,
+          sectionIndex: sectionIndex,
+        );
+        if (fromLayout.isNotEmpty) return true;
+
+        final above = entry.courseNumber ?? sectionIndex;
+        final preferred = above > 0 ? above + 1 : sectionIndex + 1;
+        final targetCourse = resolveWritableSuivreCourseNumber(
+          data,
+          preferredCourseNumber: preferred,
+        );
+        if (extractRequestableCourseIdsForSuivreSection(
+          data,
+          courseNumber: targetCourse,
+        ).isNotEmpty) {
+          return true;
+        }
+      }
+      // Empty À SUIVRE open → keep disabled (same as extract path).
+      if (sawEmptyPendingSuivre) return false;
+    }
+
+    return nextRequestableSuiteCourseNumber(data) != null;
+  }
+
+  /// Next suite course ids for Demander la suite (never course 1).
+  ///
+  /// Uses the first pending À SUIVRE with items when [layout] is set.
+  /// Without layout, uses the smallest eligible course_number > 1.
   static List<int> extractSingleNextCourseIdForDemande(
     Map<String, dynamic> data, {
     List<OrderDisplayEntry>? layout,
@@ -1362,7 +1538,7 @@ class OrderMapper {
           layout: layoutHints,
           sectionIndex: sectionIndex,
         );
-        if (fromLayout.isNotEmpty) return [fromLayout.first];
+        if (fromLayout.isNotEmpty) return fromLayout;
 
         final above = entry.courseNumber ?? sectionIndex;
         final preferred = above > 0 ? above + 1 : sectionIndex + 1;
@@ -1374,15 +1550,13 @@ class OrderMapper {
           data,
           courseNumber: targetCourse,
         );
-        if (fromNumber.isNotEmpty) return [fromNumber.first];
+        if (fromNumber.isNotEmpty) return fromNumber;
       }
       // Do not request a random course when the waiter left an empty À SUIVRE.
       if (sawEmptyPendingSuivre) return const [];
     }
 
-    final fallback = extractRequestableCourseIds(data);
-    if (fallback.isEmpty) return const [];
-    return [fallback.first];
+    return extractNextRequestableSuiteCourseIds(data);
   }
 
   /// Converts À SUIVRE → DEMANDÉE for explicitly demanded suite sections.
@@ -4980,88 +5154,16 @@ class OrderMapper {
   }
 
   static List<int> extractRequestableCourseIds(Map<String, dynamic> data) {
-    int? bestId;
-    var bestNumber = -1;
-
-    final seatOrders = data['seat_orders'];
-    if (seatOrders is! List) return const [];
-
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
-
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
-        if (_visibleItemCountInCourse(course) <= 0) continue;
-        if (_courseWasRequestedToKitchen(course)) continue;
-
-        final status = course['status'] as String?;
-        final courseId = course['id'];
-        final courseIdInt = courseId is int
-            ? courseId
-            : (courseId is num ? courseId.toInt() : null);
-        if (courseIdInt == null) continue;
-
-        if (status == 'to_be_continued' ||
-            status == 'pending' ||
-            status == 'in_progress') {
-          final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
-          if (bestId == null || courseNumber < bestNumber) {
-            bestNumber = courseNumber;
-            bestId = courseIdInt;
-          }
-        }
-      }
-    }
-
-    if (bestId != null) return [bestId];
-
-    bestId = null;
-    bestNumber = -1;
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
-        if (_visibleItemCountInCourse(course) <= 0) continue;
-        if (_courseWasRequestedToKitchen(course)) continue;
-
-        final courseId = course['id'];
-        final courseIdInt = courseId is int
-            ? courseId
-            : (courseId is num ? courseId.toInt() : null);
-        if (courseIdInt == null) continue;
-        final courseNumber = (course['course_number'] as num?)?.toInt() ?? 0;
-        if (bestId == null || courseNumber < bestNumber) {
-          bestNumber = courseNumber;
-          bestId = courseIdInt;
-        }
-      }
-    }
-
-    return bestId != null ? [bestId] : const [];
+    return extractNextRequestableSuiteCourseIds(data);
   }
 
-  /// Course id for demande on a selected À SUIVRE section.
+  /// Course ids for demande on a selected À SUIVRE (all seats, course > 1).
   static List<int> extractRequestableCourseIdsForSuivreSection(
     Map<String, dynamic> data, {
     required int courseNumber,
   }) {
-    final courseId = _resolveRequestableCourseIdForNumber(
-      data,
-      courseNumber: courseNumber,
-      requireKnownStatus: true,
-    );
-    if (courseId != null) return [courseId];
-
-    final fallbackId = _resolveRequestableCourseIdForNumber(
-      data,
-      courseNumber: courseNumber,
-      requireKnownStatus: false,
-    );
-    return fallbackId != null ? [fallbackId] : const [];
+    if (courseNumber <= 1) return const [];
+    return extractIdsForSuiteCourseNumber(data, courseNumber: courseNumber);
   }
 
   /// Highest `course_number` on the order (including empty shells).
@@ -5720,8 +5822,12 @@ class OrderMapper {
     }
 
     final courseNumber = underCourseNumbers.single;
+    if (courseNumber <= 1) return const [];
+
     final course = findCourseInOrderDetail(data, courseNumber);
-    if (course == null || !_courseNeedsKitchenSend(course)) return const [];
+    if (course == null || !isSuiteCourseDemandeEligible(course)) {
+      return const [];
+    }
 
     // Only fire when that course holds solely the suite lines.
     final items = course['items'];
@@ -5734,8 +5840,7 @@ class OrderMapper {
       }
     }
 
-    final courseId = _courseRecordId(course);
-    return courseId != null ? [courseId] : const [];
+    return extractIdsForSuiteCourseNumber(data, courseNumber: courseNumber);
   }
 
   static String? _apiItemProductName(Map<String, dynamic> item) {
@@ -6271,6 +6376,10 @@ class OrderMapper {
       return 'Sélectionnez un À SUIVRE avant de demander.';
     }
 
+    if (courseNumber == 1) {
+      return 'Le premier service n\'est pas une suite à demander.';
+    }
+
     final course = findCourseInOrderDetail(data, courseNumber);
     if (course == null) {
       return 'Service $courseNumber introuvable sur cette commande.';
@@ -6308,46 +6417,6 @@ class OrderMapper {
     }
 
     return 'Aucun service à demander pour cette section.';
-  }
-
-  static int? _resolveRequestableCourseIdForNumber(
-    Map<String, dynamic> data, {
-    required int courseNumber,
-    required bool requireKnownStatus,
-  }) {
-    if (courseNumber <= 0) return null;
-
-    final seatOrders = data['seat_orders'];
-    if (seatOrders is! List) return null;
-
-    for (final seat in seatOrders) {
-      if (seat is! Map<String, dynamic>) continue;
-      final courses = seat['courses'];
-      if (courses is! List) continue;
-
-      for (final course in courses) {
-        if (course is! Map<String, dynamic>) continue;
-        final number = (course['course_number'] as num?)?.toInt();
-        if (number != courseNumber) continue;
-        // Allow re-demande when a shell still has unsent lines.
-        if (!_courseNeedsKitchenSend(course)) continue;
-
-        if (requireKnownStatus && !_courseWasRequestedToKitchen(course)) {
-          final status = course['status'] as String?;
-          if (status != null &&
-              status != 'to_be_continued' &&
-              status != 'pending' &&
-              status != 'in_progress') {
-            continue;
-          }
-        }
-
-        final courseIdInt = _courseRecordId(course);
-        if (courseIdInt != null) return courseIdInt;
-      }
-    }
-
-    return null;
   }
 
   /// Course ids to fire to the kitchen (send / envoyer).

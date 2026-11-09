@@ -1263,8 +1263,10 @@ class _ActionButtons extends GetView<SessionController> {
         return controller.canAccessStatistics;
       case SessionAction.dashboard:
         return controller.canAccessDashboard;
-      case SessionAction.nouvelleCommande:
       case SessionAction.demanderSuite:
+        controller.sessionDemandeSuiteUiRevision.value;
+        return controller.canDemanderSuiteForSelectedRow();
+      case SessionAction.nouvelleCommande:
         return true;
     }
   }
@@ -1283,6 +1285,7 @@ class _ActionButtons extends GetView<SessionController> {
         () {
           // Touch selection so Obx rebuilds with action highlight.
           controller.selectedAction.value;
+          controller.sessionDemandeSuiteUiRevision.value;
 
           return Row(
             children: [

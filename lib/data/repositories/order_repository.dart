@@ -227,6 +227,45 @@ class OrderRepository {
     );
   }
 
+  Future<SessionOrder> _sessionOrderFromSavedDetail(
+    int orderId,
+    Map<String, dynamic> detail, {
+    List<OrderDisplayEntry>? previousDisplayEntries,
+    bool applyKitchenDemande = false,
+  }) async {
+    final layoutHints =
+        OrderMapper.coalesceLayoutHints(previousDisplayEntries);
+    final suivreHints = _resolveSuivreHints(orderId, layoutHints: layoutHints);
+    final order = OrderMapper.fromOrderDetail(
+      detail,
+      previousDisplayEntries: layoutHints,
+      suivreSplitHints: suivreHints.splits,
+      suivreCountHint: suivreHints.count,
+      demandedSectionIndices: suivreHints.demandedSections,
+      applyKitchenDemande: applyKitchenDemande,
+    );
+    await _persistSuivreLayoutHints(orderId, order.displayEntries);
+    return order;
+  }
+
+  /// After request-courses: refresh detail and set requested_at locally if needed.
+  Future<Map<String, dynamic>> _detailAfterSuiteDemande(
+    int orderId,
+    List<int> courseIds,
+  ) async {
+    var detail = await _remote.fetchOrderDetail(orderId);
+    detail = await _enrichDetailMenuSelectionNames(detail);
+    if (courseIds.isNotEmpty) {
+      OrderMapper.patchRequestedAtOnCourseIds(
+        detail,
+        courseIds,
+        requestedAtIso: DateTime.now().toUtc().toIso8601String(),
+      );
+    }
+    await _local.saveOrderDetail(orderId, detail);
+    return detail;
+  }
+
   /// Resolves CHOIX option names from products/list when GET order returns ids only.
   Future<Map<String, dynamic>> _enrichDetailMenuSelectionNames(
     Map<String, dynamic> detail,
@@ -2316,6 +2355,11 @@ class OrderRepository {
           preferred = above > 0 ? above + 1 : demandSectionIndex + 1;
           break;
         }
+        if (preferred <= 1) {
+          throw ApiException(
+            message: 'Aucun service à demander pour cette table.',
+          );
+        }
         return requestCourseForSuivreSection(
           orderId,
           courseNumber: preferred,
@@ -2349,10 +2393,20 @@ class OrderRepository {
       );
     }
 
+    if (!OrderMapper.courseIdsMatchSuiteDemandePayload(detail, courseIds)) {
+      throw ApiException(
+        message:
+            'Aucune suite à demander pour cette commande (service initial uniquement '
+            'ou identifiants indisponibles).',
+      );
+    }
+
     await _remote.requestCourses(orderId, courseIds);
 
-    var order = await getOrderDetail(
+    final refreshed = await _detailAfterSuiteDemande(orderId, courseIds);
+    var order = await _sessionOrderFromSavedDetail(
       orderId,
+      refreshed,
       previousDisplayEntries: layoutHints,
       applyKitchenDemande: true,
     );
@@ -2390,6 +2444,16 @@ class OrderRepository {
     }
 
     final apiLog = StringBuffer('── Demande À SUIVRE course=$courseNumber ──\n');
+
+    if (courseNumber <= 1) {
+      lastKitchenSendLog = apiLog.toString();
+      throw ApiException(
+        message: OrderMapper.describeWhySuivreSectionNotRequestable(
+          const {},
+          courseNumber: courseNumber,
+        ),
+      );
+    }
 
     // Empty À SUIVRE must never fire kitchen (would pick another course).
     if (previousDisplayEntries != null &&
@@ -2578,14 +2642,20 @@ class OrderRepository {
       }
     }
     // Prefer course id from the target course shell / its item.course_id.
-    if (courseIds.isEmpty) {
+    if (courseIds.isEmpty && targetCourseNumber > 1) {
       final shellId = OrderMapper.courseRecordIdForNumber(
         detail,
         targetCourseNumber,
       );
       if (shellId != null && !targetCourseEmpty()) {
-        courseIds = [shellId];
-        apiLog.writeln('shell/item course_id fallback ids=$shellId');
+        final eligible = OrderMapper.extractIdsForSuiteCourseNumber(
+          detail,
+          courseNumber: targetCourseNumber,
+        );
+        if (eligible.contains(shellId)) {
+          courseIds = eligible;
+          apiLog.writeln('shell/item course_id fallback ids=${courseIds.join(',')}');
+        }
       }
     }
     if (courseIds.isEmpty) {
@@ -2611,6 +2681,17 @@ class OrderRepository {
       );
     }
 
+    if (!OrderMapper.courseIdsMatchSuiteDemandePayload(detail, courseIds)) {
+      apiLog.writeln('invalid suite payload — abort');
+      lastKitchenSendLog = apiLog.toString();
+      throw ApiException(
+        message: OrderMapper.describeWhySuivreSectionNotRequestable(
+          detail,
+          courseNumber: targetCourseNumber,
+        ),
+      );
+    }
+
     apiLog.writeln('course_ids=${courseIds.join(',')}');
     await _remote.requestCourses(orderId, courseIds);
     if (_remote.lastApiLog != null) {
@@ -2620,8 +2701,10 @@ class OrderRepository {
 
     // Prefer pre-demande layout for product order, but kitchen mapping must win
     // for À SUIVRE → DEMANDÉE (rebake may fire course N+2 while divider says N).
-    var order = await getOrderDetail(
+    final refreshed = await _detailAfterSuiteDemande(orderId, courseIds);
+    var order = await _sessionOrderFromSavedDetail(
       orderId,
+      refreshed,
       previousDisplayEntries: previousDisplayEntries,
       applyKitchenDemande: true,
     );

@@ -113,7 +113,11 @@ class SessionController extends GetxController {
   /// Mirrors Reverb table-lock revisions so occupancy checks see fresh cache.
   final tablesLockRevision = 0.obs;
 
+  /// Bumps when selection/list changes so Demander la suite enablement refreshes.
+  final sessionDemandeSuiteUiRevision = 0.obs;
+
   Worker? _tablesLockWorker;
+  Worker? _demandeSuiteContextWorker;
 
   /// When deleting an order we optimistically remove it from [orders],
   /// but a subsequent forced refresh may temporarily still return the
@@ -143,6 +147,7 @@ class SessionController extends GetxController {
   void onInit() {
     super.onInit();
     _bindTablesLockRevision();
+    _bindDemandeSuiteUiRefresh();
     final args = Get.arguments;
     final justPreloaded = args is Map && args['preloaded'] == true;
     unawaited(_bootstrapSession(justPreloaded: justPreloaded));
@@ -212,6 +217,43 @@ class SessionController extends GetxController {
         tableNumber: tableNumber,
       );
     };
+  }
+
+  void _bindDemandeSuiteUiRefresh() {
+    _demandeSuiteContextWorker?.dispose();
+    _demandeSuiteContextWorker = everAll([
+      tableUiState,
+      orders,
+    ], (_) {
+      sessionDemandeSuiteUiRevision.value++;
+    });
+  }
+
+  /// Enable Demander la suite only when a real follow-up suite can be demanded.
+  bool canDemanderSuiteForSelectedRow() {
+    final selected = tableUiState.value.selectedRow;
+    if (selected == null || selected.productIndex != null) return false;
+
+    final order = _orderByNumber(selected.orderNumber);
+    if (order == null || order.isLocalOnly) return false;
+
+    final layoutSource = _layoutSourceForSessionDemande(order);
+    final layoutHints = OrderMapper.coalesceLayoutHints(
+      layoutSource.displayEntries,
+    );
+
+    final detail = _orderRepository.cachedOrderDetail(order.id);
+    if (detail != null) {
+      return OrderMapper.hasNextDemanderSuite(
+        detail,
+        layout: layoutHints ?? layoutSource.displayEntries,
+      );
+    }
+
+    // No cached detail yet: only enable if the ticket already shows an open
+    // À SUIVRE with items (API path still refuses course 1).
+    if (layoutHints == null) return false;
+    return OrderMapper.firstPendingSuivreSectionIndex(layoutHints) != null;
   }
 
   /// Desktop/other device paid or closed the ticket — drop from Ouvertes UI.
@@ -299,6 +341,8 @@ class SessionController extends GetxController {
 
   @override
   void onClose() {
+    _demandeSuiteContextWorker?.dispose();
+    _demandeSuiteContextWorker = null;
     _tablesLockWorker?.dispose();
     _tablesLockWorker = null;
     if (Get.isRegistered<ReverbRealtimeService>()) {

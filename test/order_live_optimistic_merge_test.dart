@@ -3055,4 +3055,151 @@ void main() {
 
     expect(OrderMapper.sessionListDetailIsHydrated(order), isTrue);
   });
+
+  test('Demander la suite never sends course 1; next tap is next suite', () {
+    final onlyCourse1 = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'status': 'pending',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'A'},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(OrderMapper.nextRequestableSuiteCourseNumber(onlyCourse1), isNull);
+    expect(OrderMapper.extractNextRequestableSuiteCourseIds(onlyCourse1), isEmpty);
+    expect(
+      OrderMapper.extractSingleNextCourseIdForDemande(onlyCourse1),
+      isEmpty,
+    );
+    expect(OrderMapper.hasNextDemanderSuite(onlyCourse1), isFalse);
+
+    final multi = <String, dynamic>{
+      'id': 1,
+      'seat_orders': [
+        {
+          'seat_number': 1,
+          'courses': [
+            {
+              'id': 10,
+              'course_number': 1,
+              'requested_at': '2025-01-01T10:00:00.000Z',
+              'status': 'sent',
+              'items': [
+                {
+                  'id': 1,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'A'},
+                },
+              ],
+            },
+            {
+              'id': 20,
+              'course_number': 2,
+              'status': 'to_be_continued',
+              'items': [
+                {
+                  'id': 2,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 21, 'name': 'B'},
+                },
+              ],
+            },
+            {
+              'id': 21,
+              'course_number': 3,
+              'status': 'to_be_continued',
+              'items': [
+                {
+                  'id': 3,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 22, 'name': 'C'},
+                },
+              ],
+            },
+          ],
+        },
+        {
+          'seat_number': 2,
+          'courses': [
+            {
+              'id': 11,
+              'course_number': 1,
+              'requested_at': '2025-01-01T10:00:00.000Z',
+              'status': 'sent',
+              'items': [
+                {
+                  'id': 4,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 20, 'name': 'A'},
+                },
+              ],
+            },
+            {
+              'id': 30,
+              'course_number': 2,
+              'status': 'to_be_continued',
+              'items': [
+                {
+                  'id': 5,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 21, 'name': 'B'},
+                },
+              ],
+            },
+            {
+              'id': 31,
+              'course_number': 3,
+              'status': 'to_be_continued',
+              'items': [
+                {
+                  'id': 6,
+                  'qty': 1,
+                  'status': 'active',
+                  'product': {'id': 22, 'name': 'C'},
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(OrderMapper.extractNextRequestableSuiteCourseIds(multi), [20, 30]);
+    expect(OrderMapper.hasNextDemanderSuite(multi), isTrue);
+    // Flat session row (products only) must still enable when suites exist.
+    expect(
+      OrderMapper.hasNextDemanderSuite(
+        multi,
+        layout: [_product(0, 'A', itemId: 1)],
+      ),
+      isTrue,
+    );
+
+    OrderMapper.patchRequestedAtOnCourseIds(
+      multi,
+      [20, 30],
+      requestedAtIso: '2025-01-01T11:00:00.000Z',
+    );
+    expect(OrderMapper.extractNextRequestableSuiteCourseIds(multi), [21, 31]);
+  });
 }

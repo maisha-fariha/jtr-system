@@ -584,12 +584,11 @@ packages:
     source: hosted
     version: "3.0.2"
   local_auth_android:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: local_auth_android
-      sha256: e2ceb84cdecefe1bc0ddd4ac308b0f6525bbfa0a60d0e552082b2970e1fb38c2
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/local_auth_android"
+      relative: true
+    source: path
     version: "2.3.0"
   local_auth_darwin:
     dependency: transitive
@@ -1069,5 +1068,5 @@ packages:
     source: hosted
     version: "0.2.4"
 sdks:
-  dart: ">=3.12.0 <4.0.0"
-  flutter: ">=3.44.0"
+  dart: ">=3.11.4 <4.0.0"
+  flutter: ">=3.41.0"

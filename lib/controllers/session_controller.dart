@@ -1998,7 +1998,7 @@ class SessionController extends GetxController {
     final tables = await _sessionRepository.getTablesList(forceRefresh: true);
     final resolved = OrderMapper.resolveTableForNewOrder(tables, normalized);
     if (resolved == null || resolved.id <= 0 || resolved.tableNumber <= 0) {
-      // "Table introuvable" is decided here from GET /api/tables/list — log
+      // "Table introuvable" is decided here from GET /api/tables/summary — log
       // what the server returned to tell a backend cap from an app bug.
       final numbers = <int>[
         for (final t in tables)
@@ -2006,7 +2006,7 @@ class SessionController extends GetxController {
             int.tryParse('${t['table_number'] ?? t['number']}') ?? 0,
       ]..sort();
       logOrderFlow(
-        '[Table] number="$normalized" NOT in GET /api/tables/list → '
+        '[Table] number="$normalized" NOT in GET /api/tables/summary → '
         'count=${tables.length} '
         'min=${numbers.isEmpty ? '-' : numbers.first} '
         'max=${numbers.isEmpty ? '-' : numbers.last} '
@@ -2276,14 +2276,24 @@ class SessionController extends GetxController {
     ResolvedTable resolved;
     try {
       final found = await _resolveFloorTableByNumber(normalized);
-      if (found == null) {
-        _showSnack(
-          'Table introuvable',
-          'Aucune table avec le numéro $normalized.',
+      if (found != null) {
+        resolved = found;
+      } else {
+        // Not on the floor list (e.g. 128+): same as the POS — the table is
+        // created/opened by number when the order is sent (open-by-number).
+        final parsed = OrderMapper.parseTableNumberForOpenByNumber(normalized);
+        if (parsed == null || parsed < 1) {
+          _showSnack(
+            'Table introuvable',
+            'Aucune table avec le numéro $normalized.',
+          );
+          return;
+        }
+        logOrderFlow(
+          '[Table] $parsed not in list → continue, open-by-number at Send',
         );
-        return;
+        resolved = ResolvedTable(id: 0, tableNumber: parsed);
       }
-      resolved = found;
     } on ApiException catch (e) {
       _showSnack('Erreur', e.message);
       return;
@@ -2346,7 +2356,7 @@ class SessionController extends GetxController {
         unawaited(_createTableAndOpenDetails(
           context: context,
           tableNumber: '${resolved.tableNumber}',
-          tableId: resolved.id,
+          tableId: resolved.id > 0 ? resolved.id : null,
           couverts: couverts,
         ));
       },

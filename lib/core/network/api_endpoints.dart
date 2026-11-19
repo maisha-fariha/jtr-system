@@ -42,7 +42,8 @@ class ApiEndpoints {
   static const openOrders = '/api/days/open-orders';
   static const markOrderPrinted = '/api/orders/mark-printed';
   static const generateReceipt = '/api/receipts/generate';
-  static const tablesList = '/api/tables/list';
+  /// Floor map: tables + `active_order` (replaces the old `/api/tables/list`).
+  static const tablesSummary = '/api/tables/summary';
   static const tables = '/api/tables';
   static const openTableByNumber = '/api/tables/open-by-number';
   static String tableById(int tableId) => '/api/tables/$tableId';

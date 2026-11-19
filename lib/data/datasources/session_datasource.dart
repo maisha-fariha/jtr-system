@@ -455,15 +455,20 @@ class SessionRemoteDataSource {
 
   Future<List<Map<String, dynamic>>> fetchTablesList() async {
     try {
-      return await _fetchTablesListEndpoint();
-    } catch (_) {
+      final tables = await _fetchTablesSummaryEndpoint();
+      logOrderFlow('[Tables] GET ${ApiEndpoints.tablesSummary} count=${tables.length}');
+      return tables;
+    } catch (e) {
+      logOrderFlow(
+        '[Tables] ${ApiEndpoints.tablesSummary} failed ($e) → GET ${ApiEndpoints.tables}',
+      );
       return await _fetchPaginatedTables();
     }
   }
 
-  Future<List<Map<String, dynamic>>> _fetchTablesListEndpoint() async {
+  Future<List<Map<String, dynamic>>> _fetchTablesSummaryEndpoint() async {
     final response =
-        await _client.get<Map<String, dynamic>>(ApiEndpoints.tablesList);
+        await _client.get<Map<String, dynamic>>(ApiEndpoints.tablesSummary);
     final envelope = ApiEnvelope<dynamic>.fromJson(
       response.data!,
       (json) => json,

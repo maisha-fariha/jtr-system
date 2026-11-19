@@ -864,7 +864,7 @@ class OrderMapper {
     String? targetTableNumber,
   }) {
     final buffer = StringBuffer(
-      'Tables for POST /api/orders (${tables.length} rows from GET /api/tables/list):',
+      'Tables for POST /api/orders (${tables.length} rows from GET /api/tables/summary):',
     );
 
     final sorted = List<Map<String, dynamic>>.from(tables);

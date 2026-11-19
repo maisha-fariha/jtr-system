@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/login_controller.dart';
+import '../core/app_flavor.dart';
+import '../core/config/api_config.dart';
 import '../controllers/theme_controller.dart';
 import '../utils/app_navigation.dart';
 import '../utils/app_theme.dart';
@@ -86,6 +88,29 @@ class LoginPage extends StatelessWidget {
                   children: [
                     JtrResponsive.getResponsiveSpacing(context, 40),
                     const ThemedAssetImage.logo(),
+                    if (AppFlavorConfig.isRapport)
+                      Obx(() {
+                        // Re-read after a restaurant switch.
+                        c.isSwitchingRestaurant.value;
+                        final schema = ApiConfig.tenantSchema.trim();
+                        if (schema.isEmpty) return const SizedBox.shrink();
+                        return Padding(
+                          padding: EdgeInsets.only(
+                            top: JtrResponsive.getResponsiveHeight(context, 12),
+                          ),
+                          child: Text(
+                            schema,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppTheme.primary,
+                              fontSize:
+                                  JtrResponsive.getResponsiveFontSize(context, 15),
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.8,
+                            ),
+                          ),
+                        );
+                      }),
                     if (c.showRestaurantSwitcher) ...[
                       JtrResponsive.getResponsiveSpacing(context, 48),
                       _AddRestaurantButton(controller: c),
@@ -129,6 +154,28 @@ class LoginPage extends StatelessWidget {
                     _PasswordField(controller: c),
                     const Spacer(),
                     _LoginButton(controller: c),
+                    Obx(
+                      () => c.biometricReady.value
+                          ? Padding(
+                              padding: EdgeInsets.only(
+                                top: JtrResponsive.getResponsiveHeight(
+                                  context,
+                                  12,
+                                ),
+                              ),
+                              child: TextButton.icon(
+                                onPressed: c.isLoading.value
+                                    ? null
+                                    : c.loginWithBiometrics,
+                                icon: const Icon(Icons.fingerprint, size: 28),
+                                label: const Text('Connexion par empreinte'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppTheme.primary,
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                     const Spacer(flex: 2),
                     const AppFooter(),
                     JtrResponsive.getResponsiveSpacing(context, 24),

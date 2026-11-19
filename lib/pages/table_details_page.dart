@@ -301,8 +301,8 @@ class _OrderSummaryState extends State<_OrderSummary> {
     bool canModify,
   ) {
     final rows = <Widget>[];
-    final entries = OrderMapper.withoutEmptyDemandeSeparators(
-      order.displayEntries,
+    final entries = controller.entriesForSelectedSeat(
+      OrderMapper.withoutEmptyDemandeSeparators(order.displayEntries),
     );
     final orderOffered = !canModify;
     var index = 0;
@@ -395,6 +395,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
 
       return Column(
         children: [
+          if (!stockMode) const _SeatTabsBar(),
           Padding(
             padding: JtrResponsive.getResponsivePadding(
               context,
@@ -862,6 +863,12 @@ class _ProductLine extends GetView<TableDetailsController> {
                   !orderOffered,
               onPressed: () => controller.offerProduct(productIndex),
             ),
+            if (controller.hasMultipleSeats)
+              _ProductSlidableAction(
+                icon: Icons.swap_horiz,
+                enabled: canModify && controller.canMoveLineToSeat(productIndex),
+                onPressed: () => _showMoveSeatSheet(context, productIndex),
+              ),
             _ProductSlidableAction(
               icon: Icons.remove,
               enabled: canDeleteLine,
@@ -935,6 +942,42 @@ class _ProductLine extends GetView<TableDetailsController> {
                               ),
                           ],
                         ),
+                        if (product.isStillMenuMissing) ...[
+                          JtrResponsive.getResponsiveSpacing(context, 2),
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: canModify
+                                ? () => controller
+                                    .openPendingMenuChoices(productIndex)
+                                : null,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.pending_actions_outlined,
+                                  size: JtrResponsive.getResponsiveSize(
+                                    context,
+                                    13,
+                                  ),
+                                  color: Colors.orange.shade700,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Choix en attente',
+                                  style: TextStyle(
+                                    fontSize:
+                                        JtrResponsive.getResponsiveFontSize(
+                                      context,
+                                      11,
+                                    ),
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.orange.shade700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         if (hasMenuItems && isMenuExpanded)
                           for (final menuItem in product.menuItems) ...[
                             JtrResponsive.getResponsiveSpacing(context, 2),
@@ -2099,4 +2142,92 @@ List<BoxShadow>? _menuGridItemShadow(bool isSelected) {
       offset: const Offset(0, -1),
     ),
   ];
+}
+
+
+/// "SIÈGE n" tabs + add-seat button above the ticket.
+class _SeatTabsBar extends StatelessWidget {
+  const _SeatTabsBar();
+
+  TableDetailsController get controller => Get.find<TableDetailsController>();
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+      controller.orderUiRevision.value;
+      controller.extraSeats.length;
+      final selected = controller.selectedSeat.value;
+      final seats = controller.seatNumbers;
+      return Padding(
+        padding: JtrResponsive.getResponsivePadding(
+          context,
+          left: 20,
+          right: 20,
+          top: 8,
+        ),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final seat in seats) ...[
+                ChoiceChip(
+                  label: Text('Siège $seat'),
+                  selected: seat == selected,
+                  onSelected: (_) => controller.selectSeat(seat),
+                  selectedColor: AppTheme.primary.withValues(alpha: 0.15),
+                  labelStyle: TextStyle(
+                    fontWeight: seat == selected
+                        ? FontWeight.w700
+                        : FontWeight.w500,
+                    color: seat == selected
+                        ? AppTheme.primary
+                        : AppTheme.darkText,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              ActionChip(
+                avatar: const Icon(Icons.add, size: 18),
+                label: const Text('Siège'),
+                onPressed: controller.addSeat,
+              ),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+}
+
+/// Pick the seat an unsent line moves to.
+void _showMoveSeatSheet(BuildContext context, int lineIndex) {
+  final controller = Get.find<TableDetailsController>();
+  final current = controller.order?.products[lineIndex].seatNumber;
+  showModalBottomSheet<void>(
+    context: context,
+    builder: (sheetContext) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text(
+              'Déplacer vers le siège',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          for (final seat in controller.seatNumbers)
+            if (seat != current)
+              ListTile(
+                leading: const Icon(Icons.event_seat_outlined),
+                title: Text('Siège $seat'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  controller.moveLineToSeat(lineIndex, seat);
+                },
+              ),
+        ],
+      ),
+    ),
+  );
 }

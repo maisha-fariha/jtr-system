@@ -6,6 +6,8 @@ class OrderProduct {
     this.message,
     this.menuItems = const [],
     this.isOffered = false,
+    this.isStillMenuMissing = false,
+    this.seatNumber = 1,
   });
 
   final String quantity;
@@ -14,6 +16,12 @@ class OrderProduct {
   final String? message;
   final List<String> menuItems;
   final bool isOffered;
+
+  /// "Choix en attente": optional menu choices can still be added.
+  final bool isStillMenuMissing;
+
+  /// Seat (`seat_orders[].seat_number`) this line belongs to.
+  final int seatNumber;
 
   bool get hasMenuItems => menuItems.isNotEmpty;
 
@@ -24,6 +32,8 @@ class OrderProduct {
     String? message,
     List<String>? menuItems,
     bool? isOffered,
+    bool? isStillMenuMissing,
+    int? seatNumber,
     bool clearMessage = false,
   }) {
     return OrderProduct(
@@ -33,6 +43,8 @@ class OrderProduct {
       message: clearMessage ? null : (message ?? this.message),
       menuItems: menuItems ?? this.menuItems,
       isOffered: isOffered ?? this.isOffered,
+      isStillMenuMissing: isStillMenuMissing ?? this.isStillMenuMissing,
+      seatNumber: seatNumber ?? this.seatNumber,
     );
   }
 }

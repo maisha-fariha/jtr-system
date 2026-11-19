@@ -19,6 +19,7 @@ import '../models/order_product.dart';
 import '../models/order_display_entry.dart';
 import '../models/session_order.dart';
 import '../models/menu_active_selection.dart';
+import '../models/menu_item.dart';
 import '../models/menu_selection_submit_result.dart';
 import '../routes/app_pages.dart';
 import '../utils/api_log.dart';
@@ -537,6 +538,466 @@ class TableDetailsController extends GetxController {
     );
   }
 
+
+
+  // ── Seat tabs ────────────────────────────────────────────────────────────
+
+  /// Seat that receives new items (`seat_orders[].seat_number`).
+  final selectedSeat = 1.obs;
+
+  /// Seats added in the UI that have no item yet (the API drops empty seats,
+  /// so they are created with their first item).
+  final extraSeats = <int>{}.obs;
+
+  List<int> get seatNumbers {
+    final seats = <int>{1, ...extraSeats};
+    for (final product in order?.products ?? const <OrderProduct>[]) {
+      if (product.seatNumber > 0) seats.add(product.seatNumber);
+    }
+    return seats.toList()..sort();
+  }
+
+  bool get hasMultipleSeats => seatNumbers.length > 1;
+
+  bool seatHasItems(int seat) {
+    for (final product in order?.products ?? const <OrderProduct>[]) {
+      if (product.seatNumber == seat) return true;
+    }
+    return false;
+  }
+
+  /// New items follow the selected seat only once a second seat exists, so
+  /// single-seat tickets behave exactly as before.
+  /// Menu choices / pending flag / seat changed on a line (same totals).
+  bool _lineMenuOrSeatDiffer(SessionOrder a, SessionOrder b) {
+    for (var i = 0; i < a.products.length && i < b.products.length; i++) {
+      final left = a.products[i];
+      final right = b.products[i];
+      if (left.seatNumber != right.seatNumber ||
+          left.isStillMenuMissing != right.isStillMenuMissing ||
+          left.menuItems.length != right.menuItems.length) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _applySeatPreference() {
+    if (!seatNumbers.contains(selectedSeat.value)) selectedSeat.value = 1;
+    OrderMapper.preferredSeatNumber =
+        hasMultipleSeats ? selectedSeat.value : null;
+  }
+
+  void selectSeat(int seat) {
+    if (!seatNumbers.contains(seat)) return;
+    selectedSeat.value = seat;
+    _applySeatPreference();
+    orderUiRevision.value++;
+  }
+
+  /// "Add seat": next `seat_number`, starting at Course 1. Allowed only when
+  /// the previous seat already holds at least one item.
+  void addSeat() {
+    if (_blockIfOrderOffered()) return;
+    final seats = seatNumbers;
+    final last = seats.last;
+    if (!seatHasItems(last)) {
+      AppSnackbar.show(
+        'Siège vide',
+        'Ajoutez d\'abord un article au siège $last avant d\'ajouter un siège.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 3),
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+    final next = last + 1;
+    extraSeats.add(next);
+    selectedSeat.value = next;
+    _applySeatPreference();
+    orderUiRevision.value++;
+  }
+
+  /// Rows of the selected seat only (dividers kept where they frame its lines).
+  List<OrderDisplayEntry> entriesForSelectedSeat(
+    List<OrderDisplayEntry> entries,
+  ) {
+    if (!hasMultipleSeats) return entries;
+    final seat = selectedSeat.value;
+    final result = <OrderDisplayEntry>[];
+    for (var i = 0; i < entries.length; i++) {
+      final entry = entries[i];
+      if (entry.isSectionDivider) {
+        var ownProducts = 0;
+        var anyProducts = 0;
+        var isLastDivider = true;
+        for (var j = i + 1; j < entries.length; j++) {
+          final next = entries[j];
+          if (next.isSectionDivider) {
+            isLastDivider = false;
+            break;
+          }
+          if (next.type == OrderDisplayEntryType.product) {
+            anyProducts++;
+            if ((next.product?.seatNumber ?? 1) == seat) ownProducts++;
+          }
+        }
+        if (ownProducts > 0 || (isLastDivider && anyProducts == 0)) {
+          result.add(entry);
+        }
+        continue;
+      }
+      if (entry.type == OrderDisplayEntryType.product &&
+          (entry.product?.seatNumber ?? 1) != seat) {
+        continue;
+      }
+      result.add(entry);
+    }
+    return result;
+  }
+
+  /// Only unsent lines can change seat.
+  bool canMoveLineToSeat(int lineIndex) =>
+      hasMultipleSeats && !_orderOfferedCached && !_isSentKitchenLine(lineIndex);
+
+  /// Index of the local draft behind an unsynced line (same product, in order).
+  int? _draftIndexForLine(SessionOrder current, int lineIndex, int productId) {
+    var ordinal = 0;
+    for (final e in current.displayEntries) {
+      if (e.type != OrderDisplayEntryType.product) continue;
+      if ((e.itemId ?? 0) > 0) continue;
+      final idx = e.lineIndex;
+      if (idx == null || idx >= lineIndex) continue;
+      final other = e.product ?? current.products[idx];
+      if (catalogProductByName(other.name)?.id == productId) ordinal++;
+    }
+    var seen = 0;
+    for (var d = 0; d < _localDraftLines.length; d++) {
+      if (_localDraftLines[d].productId != productId) continue;
+      if (seen == ordinal) return d;
+      seen++;
+    }
+    return null;
+  }
+
+  /// Latest course already used on [seat] (1 for an empty seat).
+  int _latestCourseForSeat(int seat) {
+    var latest = 0;
+    for (final e in order?.displayEntries ?? const <OrderDisplayEntry>[]) {
+      if (e.type != OrderDisplayEntryType.product) continue;
+      if ((e.product?.seatNumber ?? 1) != seat) continue;
+      final course = e.courseNumber ?? 1;
+      if (course > latest) latest = course;
+    }
+    return latest > 0 ? latest : 1;
+  }
+
+  /// Move an unsent line to [seat] (courses restart per seat).
+  void moveLineToSeat(int lineIndex, int seat) {
+    if (_blockIfOrderOffered()) return;
+    final current = order;
+    if (current == null ||
+        lineIndex < 0 ||
+        lineIndex >= current.products.length ||
+        !seatNumbers.contains(seat)) {
+      return;
+    }
+    final line = current.products[lineIndex];
+    if (line.seatNumber == seat) return;
+    if (!canMoveLineToSeat(lineIndex)) {
+      AppSnackbar.show(
+        'Déplacement impossible',
+        'Un article déjà envoyé ne peut pas changer de siège.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 3),
+        margin: const EdgeInsets.all(16),
+      );
+      return;
+    }
+
+    final catalog = catalogProductByName(line.name);
+    final draftIndex = catalog == null
+        ? null
+        : _draftIndexForLine(current, lineIndex, catalog.id);
+    if (draftIndex == null) {
+      AppSnackbar.show('Erreur', 'Article introuvable pour le déplacement.');
+      return;
+    }
+
+    _localDraftLines[draftIndex] = _localDraftLines[draftIndex].copyWith(
+      seatNumber: seat,
+      courseNumber: _latestCourseForSeat(seat),
+    );
+    final predicted = OrderMapper.predictAfterSeatChangeAtIndex(
+      current: current,
+      lineIndex: lineIndex,
+      seatNumber: seat,
+    );
+    _syncOrderInSession(
+      predicted,
+      orderNumber,
+      displayEntriesOverride: predicted.displayEntries,
+    );
+    orderUiRevision.value++;
+  }
+
+  /// "Choix en attente": reopen a composed line's menu and add missing choices.
+  ///
+  /// Choices already on the server (sent) are locked — only additions are
+  /// allowed. The full `menu_selections` list is re-sent (backend replace-sync)
+  /// with a recalculated `is_still_menu_missing`.
+  Future<void> openPendingMenuChoices(int lineIndex) async {
+    if (_blockIfOrderOffered()) return;
+    final current = order;
+    if (current == null ||
+        lineIndex < 0 ||
+        lineIndex >= current.products.length) {
+      return;
+    }
+    final line = current.products[lineIndex];
+
+    OrderDisplayEntry? entry;
+    for (final e in current.displayEntries) {
+      if (e.type == OrderDisplayEntryType.product && e.lineIndex == lineIndex) {
+        entry = e;
+        break;
+      }
+    }
+
+    final catalog = catalogProductByName(line.name);
+    final serverOrderId = resolvedOrderId;
+    final serverBacked = (entry?.itemId ?? 0) > 0 &&
+        serverOrderId != null &&
+        serverOrderId > 0 &&
+        !current.isLocalOnly;
+
+    int? productId = catalog?.id;
+    var existing = <Map<String, dynamic>>[];
+    int? draftIndex;
+
+    if (serverBacked) {
+      try {
+        final detail = await _orderRepository.readOrderDetailMap(serverOrderId);
+        final item = OrderMapper.visibleLineItemAtIndex(detail, lineIndex);
+        if (item == null) {
+          AppSnackbar.show('Erreur', 'Article introuvable sur la commande.');
+          return;
+        }
+        final product = item['product'];
+        final serverProductId = product is Map
+            ? (product['id'] as num?)?.toInt()
+            : (item['product_id'] as num?)?.toInt();
+        if (serverProductId == null ||
+            (productId != null && serverProductId != productId)) {
+          AppSnackbar.show(
+            'Erreur',
+            'La commande a changé. Réessayez dans un instant.',
+          );
+          return;
+        }
+        productId = serverProductId;
+        final raw = item['menu_selections'];
+        existing = raw is List
+            ? raw.whereType<Map>().map(Map<String, dynamic>.from).toList()
+            : <Map<String, dynamic>>[];
+      } on ApiException catch (e) {
+        AppSnackbar.show('Erreur', e.message);
+        return;
+      } catch (_) {
+        AppSnackbar.show('Erreur', 'Impossible de charger les choix du menu.');
+        return;
+      }
+    } else {
+      if (productId == null) {
+        AppSnackbar.show('Erreur', 'Menu introuvable pour cet article.');
+        return;
+      }
+      draftIndex = _draftIndexForLine(current, lineIndex, productId);
+      if (draftIndex == null) {
+        AppSnackbar.show('Erreur', 'Choix du menu introuvables pour cet article.');
+        return;
+      }
+      existing = List<Map<String, dynamic>>.from(
+        _localDraftLines[draftIndex].menuSelections,
+      );
+    }
+
+    CatalogProductModel menuProduct = catalog != null && catalog.id == productId
+        ? catalog
+        : products.firstWhere(
+            (p) => p.id == productId,
+            orElse: () => CatalogProductModel(
+              id: productId!,
+              name: line.name,
+              price: '0',
+              categoryId: 0,
+              categoryName: '',
+              isComposed: true,
+              isActive: true,
+            ),
+          );
+    try {
+      if (menuProduct.menuCategories.isEmpty) {
+        menuProduct = await _catalogRepository.resolveProductWithMenuCategories(
+          productId,
+        );
+      }
+    } catch (_) {
+      AppSnackbar.show('Erreur', 'Impossible de charger le menu.');
+      return;
+    }
+    if (menuProduct.menuCategories.isEmpty) {
+      AppSnackbar.show('Erreur', 'Ce menu n\'a pas de catégories configurées.');
+      return;
+    }
+
+    final preset = MenuMapper.presetFromProduct(menuProduct, badgeNumber: 1);
+    String keyOf(Object? categoryId, Object? productId) =>
+        '${(categoryId as num?)?.toInt()}_${(productId as num?)?.toInt()}';
+
+    final existingKeys = {
+      for (final s in existing)
+        keyOf(s['menu_category_id'], s['selected_product_id']),
+    };
+    final initial = <int, List<MenuItem>>{};
+    final presetKeys = <String>{};
+    for (final category in preset.categories) {
+      for (final item in category.items) {
+        final key = keyOf(item.menuCategoryId, item.productId);
+        presetKeys.add(key);
+        if (existingKeys.contains(key)) {
+          initial.putIfAbsent(category.number, () => <MenuItem>[]).add(item);
+        }
+      }
+    }
+
+    final result = await Get.toNamed(
+      AppRoutes.menu,
+      arguments: {
+        'table': orderNumber,
+        'presetMenu': preset,
+        'choiceNumber': 1,
+        'returnToSelection': true,
+        'initialSelections': initial,
+        // Sent choices stay: only additions are allowed.
+        if (serverBacked) 'lockedSelections': initial,
+      },
+    );
+    if (result is! MenuActiveSelection) return;
+
+    for (final category in result.menu.categories) {
+      if (category.items.isEmpty) continue;
+      final count = result.selectedItemsByCourse[category.number]?.length ?? 0;
+      if (!category.allowsSelectionCount(count)) {
+        final min = category.effectiveMin;
+        final max = category.effectiveMax;
+        final range = max == null
+            ? 'au moins $min'
+            : (min == max ? '$min' : '$min–$max');
+        AppSnackbar.show(
+          'Sélection incomplète',
+          'Choisissez $range article(s) pour ${category.label}.',
+        );
+        return;
+      }
+    }
+
+    final chosen = result.allSelectedItems;
+    final chosenKeys = {
+      for (final i in chosen) keyOf(i.menuCategoryId, i.productId),
+    };
+    final kept = [
+      for (final s in existing)
+        if (!presetKeys.contains(
+              keyOf(s['menu_category_id'], s['selected_product_id']),
+            ) ||
+            chosenKeys.contains(
+              keyOf(s['menu_category_id'], s['selected_product_id']),
+            ))
+          s,
+    ];
+    final added = MenuMapper.menuSelectionsFromItems(
+      chosen.where(
+        (i) => !existingKeys.contains(keyOf(i.menuCategoryId, i.productId)),
+      ),
+    );
+    if (added.isEmpty && kept.length == existing.length) return;
+
+    final finalSelections = [...kept, ...added];
+    double supplementOf(List<Map<String, dynamic>> list) => list.fold<double>(
+          0,
+          (sum, s) => sum + MenuMapper.selectionSupplement(preset, s),
+        );
+    final deltaPerUnit = supplementOf(finalSelections) - supplementOf(existing);
+    final stillMissing = MenuMapper.hasPendingChoices(preset, finalSelections);
+    final qty = int.tryParse(line.quantity) ?? 1;
+
+    final labels = serverBacked
+        ? [...line.menuItems, ...OrderMapper.menuSelectionLabelsFromMaps(added)]
+        : OrderMapper.menuSelectionLabelsFromMaps(finalSelections);
+
+    _prepareForNewAdd();
+    final snapshot = OrderOptimisticSync.deepSnapshot(current);
+    final predicted = OrderMapper.predictAfterMenuChoicesAtIndex(
+      current: current,
+      lineIndex: lineIndex,
+      menuItems: labels,
+      deltaTotal: deltaPerUnit * (qty < 1 ? 1 : qty),
+      isStillMenuMissing: stillMissing,
+    );
+    _syncOrderInSession(
+      predicted,
+      orderNumber,
+      displayEntriesOverride: predicted.displayEntries,
+    );
+    orderUiRevision.value++;
+
+    if (!serverBacked) {
+      final d = draftIndex!;
+      _localDraftLines[d] = _localDraftLines[d].copyWith(
+        menuSelections: finalSelections,
+        unitPrice: _localDraftLines[d].unitPrice + deltaPerUnit,
+        isStillMenuMissing: stillMissing,
+      );
+      return;
+    }
+
+    final id = serverOrderId;
+    _optimisticSync.enqueue(
+      syncKey: _optimisticSyncKey,
+      snapshot: snapshot,
+      apply: (updated) {
+        if (updated.id > 0) orderId = updated.id;
+        _syncOrderInSession(updated, orderNumber);
+      },
+      sync: () async {
+        final updated =
+            await _orderRepository.updateOrderLineMenuSelectionsAtIndex(
+          orderId: id,
+          lineIndex: lineIndex,
+          expectedProductId: productId!,
+          menuSelections: finalSelections,
+          supplementDeltaPerUnit: deltaPerUnit,
+          isStillMenuMissing: stillMissing,
+        );
+        if (updated.id > 0) orderId = updated.id;
+        return updated;
+      },
+      recover: (snap) async {
+        try {
+          return await _orderRepository.getOrderDetail(
+            id,
+            previousDisplayEntries: snap.displayEntries,
+          );
+        } catch (_) {
+          return snap;
+        }
+      },
+      onError: (error) =>
+          _showOptimisticMutationError('ajouter les choix du menu', error),
+    );
+  }
+
   Future<void> _saveOrderLineComment({
     required int lineIndex,
     required String comment,
@@ -668,6 +1129,7 @@ class TableDetailsController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    OrderMapper.preferredSeatNumber = null;
     final args = Get.arguments;
     orderNumber = (args is Map ? args['orderNumber'] as String? : null) ?? '';
     final rawId = args is Map ? args['orderId'] : null;
@@ -1160,12 +1622,14 @@ class TableDetailsController extends GetxController {
       layoutHints: layoutHints,
       comment: submit.comment,
       selectedSuivreSectionIndex: effectiveSuivreSection,
+      isStillMenuMissing: submit.isStillMenuMissing,
     );
     _trackLocalDraftAddComposed(
       product: product,
       menuSelections: submit.menuSelections,
       quantity: submit.quantity < 1 ? 1 : submit.quantity,
       comment: submit.comment,
+      isStillMenuMissing: submit.isStillMenuMissing,
     );
     stockVisual.consumeLocally(
       product.id,
@@ -1183,6 +1647,7 @@ class TableDetailsController extends GetxController {
         layoutHints: layoutHints,
         comment: submit.comment,
         selectedSuivreSectionIndex: effectiveSuivreSection,
+        isStillMenuMissing: submit.isStillMenuMissing,
       ),
     );
   }
@@ -3274,6 +3739,7 @@ class TableDetailsController extends GetxController {
     List<OrderDisplayEntry>? layoutHints,
     String comment = '',
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) {
     _prepareForNewAdd();
     var current = _rawSessionOrder ?? order;
@@ -3315,6 +3781,7 @@ class TableDetailsController extends GetxController {
       suivreSplitHints: suivreSplits,
       layoutHints: hints,
       selectedSuivreSectionIndex: suivreTarget,
+      isStillMenuMissing: isStillMenuMissing,
     );
     _syncOrderInSession(
       predicted,
@@ -3339,6 +3806,7 @@ class TableDetailsController extends GetxController {
     List<OrderDisplayEntry>? layoutHints,
     String comment = '',
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) async {
     final snapshot = rollbackSnapshot ??
         _rawSessionOrder ??
@@ -3376,6 +3844,7 @@ class TableDetailsController extends GetxController {
             menuSelections: menuSelections,
             quantity: qty,
             numberOfGuests: int.tryParse(snapshot.couverts),
+            isStillMenuMissing: isStillMenuMissing,
           );
           if (epochAtEnqueue != _ticketMutationEpoch ||
               _shouldAbortBackgroundAdd()) {
@@ -3400,6 +3869,7 @@ class TableDetailsController extends GetxController {
           tableNumber: orderNumber,
           waiterId: _orderWaiterIdForWrite,
           expectEmptyShell: snapshot.products.isEmpty,
+          isStillMenuMissing: isStillMenuMissing,
         );
         if (epochAtEnqueue != _ticketMutationEpoch ||
             _shouldAbortBackgroundAdd()) {
@@ -3594,6 +4064,7 @@ class TableDetailsController extends GetxController {
             OrderMapper.layoutHasProductsUnderPendingSuivre(
               synced.displayEntries) &&
         !_liveItemIdsDiffer(existing, synced) &&
+        !_lineMenuOrSeatDiffer(existing, synced) &&
         !OrderMapper.orderLineMessagesDiffer(existing, synced)) {
       _reconcileCatalogSelection(source: synced);
       return;
@@ -3621,6 +4092,7 @@ class TableDetailsController extends GetxController {
     );
     _refreshKitchenSentFlag(synced);
     _reconcileCatalogSelection(source: synced);
+    _applySeatPreference();
 
     final now = DateTime.now();
     final shouldBumpRevision = !throttleUiRevision ||
@@ -4240,6 +4712,7 @@ class TableDetailsController extends GetxController {
 
   @override
   void onClose() {
+    OrderMapper.preferredSeatNumber = null;
     _discardPendingSimpleAdds();
     stockVisual.dispose();
     super.onClose();
@@ -4479,6 +4952,10 @@ class TableDetailsController extends GetxController {
   }
 
   int _resolveDraftCourseNumber() {
+    // Seat tabs: courses restart at 1 on every seat.
+    if (hasMultipleSeats && (selectedSuivreSection.value ?? 0) <= 0) {
+      return _latestCourseForSeat(selectedSeat.value);
+    }
     final layout = order?.displayEntries ?? const [];
     return OrderMapper.resolveAppendCourseNumberFromLayout(
           layout,
@@ -4507,6 +4984,7 @@ class TableDetailsController extends GetxController {
         unitPrice: _resolveSimpleAddUnitPrice(product, enteredUnitPrice),
         enteredPrice: _enteredPriceFor(product, enteredUnitPrice),
         courseNumber: _resolveDraftCourseNumber(),
+        seatNumber: selectedSeat.value,
       ),
     );
   }
@@ -4535,6 +5013,7 @@ class TableDetailsController extends GetxController {
     required List<Map<String, dynamic>> menuSelections,
     int quantity = 1,
     String comment = '',
+    bool isStillMenuMissing = false,
   }) {
     final supplement = MenuMapper.menuSelectionsSupplement(menuSelections);
     _localDraftLines.add(
@@ -4545,6 +5024,8 @@ class TableDetailsController extends GetxController {
         menuSelections: menuSelections,
         comment: comment,
         courseNumber: _resolveDraftCourseNumber(),
+        seatNumber: selectedSeat.value,
+        isStillMenuMissing: isStillMenuMissing,
       ),
     );
   }
@@ -4671,12 +5152,17 @@ class TableDetailsController extends GetxController {
           unitPrice: resolvedUnit,
           enteredPrice: enteredPrice,
           qty: qty,
-          courseNumber: course > 0 ? course : 1,
+          // Seat tabs: courses are tracked per seat on the draft itself.
+          courseNumber: (hasMultipleSeats && tracked != null)
+              ? tracked.courseNumber
+              : (course > 0 ? course : 1),
+          seatNumber: line.seatNumber,
           menuSelections: tracked?.menuSelections ?? const [],
           comment: line.message?.trim().isNotEmpty == true
               ? line.message!.trim()
               : (tracked?.comment ?? ''),
           isOffered: line.isOffered || (tracked?.isOffered ?? false),
+          isStillMenuMissing: tracked?.isStillMenuMissing ?? false,
         ),
       );
     }

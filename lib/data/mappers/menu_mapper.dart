@@ -97,6 +97,43 @@ class MenuMapper {
     return categories;
   }
 
+  /// "Choix en attente": true while any CHOIX can still take more picks.
+  static bool hasPendingChoices(
+    PresetMenu menu,
+    List<Map<String, dynamic>> selections,
+  ) {
+    for (final category in menu.categories) {
+      if (category.items.isEmpty) continue;
+      final max = category.effectiveMax;
+      if (max == null) continue;
+      final categoryId = category.items.first.menuCategoryId;
+      final count = selections
+          .where((s) => (s['menu_category_id'] as num?)?.toInt() == categoryId)
+          .length;
+      if (count < max) return true;
+    }
+    return false;
+  }
+
+  /// Supplement of one selection, preferring the live catalog price.
+  static double selectionSupplement(
+    PresetMenu menu,
+    Map<String, dynamic> selection,
+  ) {
+    final categoryId = (selection['menu_category_id'] as num?)?.toInt();
+    final productId = (selection['selected_product_id'] as num?)?.toInt();
+    for (final category in menu.categories) {
+      for (final item in category.items) {
+        if (item.menuCategoryId == categoryId && item.productId == productId) {
+          return item.supplement ?? item.priceValue;
+        }
+      }
+    }
+    final raw = selection['price'];
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw?.toString().replaceAll(',', '.') ?? '') ?? 0;
+  }
+
   static List<Map<String, dynamic>> menuSelectionsFromItems(
     Iterable<MenuItem> items,
   ) {

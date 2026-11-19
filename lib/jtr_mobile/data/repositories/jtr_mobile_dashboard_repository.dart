@@ -68,6 +68,14 @@ class JtrMobileDashboardRepository {
     return JtrMobileDashboardMapper.mapFamilies(payload);
   }
 
+  /// Revenue and sales per server (`GET /api/dashboard/waiter-performance`).
+  Future<List<JtrWaiterSales>> fetchWaiterSales({
+    required JtrMobileDashboardFilters filters,
+  }) async {
+    final payload = await _remote.fetchWaiterPerformance(filters);
+    return JtrMobileDashboardMapper.mapWaiterSales(payload);
+  }
+
   Future<List<JtrGapCategoryDetail>> fetchGapCategories({
     required JtrMobileDashboardFilters filters,
     int limit = 20,

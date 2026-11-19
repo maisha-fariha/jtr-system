@@ -319,6 +319,64 @@ class JtrMobileDashboardMapper {
     }).toList();
   }
 
+  /// Maps `waiter-performance` (list of waiters, tolerant to the envelope key).
+  static List<JtrWaiterSales> mapWaiterSales(Map<String, dynamic> payload) {
+    List<Map<String, dynamic>> rows = const [];
+    for (final key in const ['waiters', 'waiter_performance', 'items', 'rows', 'data']) {
+      final value = payload[key];
+      if (value is List) {
+        rows = value.whereType<Map>().map(Map<String, dynamic>.from).toList();
+        break;
+      }
+    }
+    if (rows.isEmpty) {
+      for (final value in payload.values) {
+        if (value is List && value.isNotEmpty && value.first is Map) {
+          rows = value.whereType<Map>().map(Map<String, dynamic>.from).toList();
+          break;
+        }
+      }
+    }
+    if (rows.isEmpty) return const [];
+
+    String nameOf(Map<String, dynamic> raw) {
+      final waiter = raw['waiter'];
+      final candidates = [
+        raw['waiter_name'],
+        raw['name'],
+        raw['full_name'],
+        if (waiter is Map) waiter['name'],
+        if (waiter is Map) waiter['full_name'],
+      ];
+      for (final c in candidates) {
+        final text = c?.toString().trim();
+        if (text != null && text.isNotEmpty) return text;
+      }
+      final first = raw['first_name']?.toString().trim() ?? '';
+      final last = raw['last_name']?.toString().trim() ?? '';
+      final joined = '$first $last'.trim();
+      return joined.isEmpty ? '—' : joined;
+    }
+
+    final total = rows.fold<double>(0, (sum, r) => sum + _dbl(r['chiffre_affaires']));
+    final palette = JtrMobileTheme.categoryPalette;
+    final sales = rows.asMap().entries.map((entry) {
+      final raw = entry.value;
+      final revenue = _dbl(raw['chiffre_affaires']);
+      return JtrWaiterSales(
+        name: nameOf(raw),
+        revenue: revenue,
+        collected: _dbl(raw['total_encaissement']),
+        orderCount: _dbl(raw['order_count']).round(),
+        covers: _dbl(raw['covers']).round(),
+        percent: total > 0 ? (revenue / total) * 100 : 0,
+        color: palette[entry.key % palette.length],
+      );
+    }).toList()
+      ..sort((a, b) => b.revenue.compareTo(a.revenue));
+    return sales;
+  }
+
   static List<JtrZoneRevenue> _zones(List<Map<String, dynamic>> zones) {
     if (zones.isEmpty) return const [];
     final palette = JtrMobileTheme.categoryPalette;

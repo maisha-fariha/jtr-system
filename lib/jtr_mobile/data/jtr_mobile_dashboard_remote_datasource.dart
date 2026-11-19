@@ -85,6 +85,20 @@ class JtrMobileDashboardRemoteDataSource {
     );
   }
 
+  /// Per-waiter revenue and performance (period + optional waiter/zone).
+  Future<Map<String, dynamic>> fetchWaiterPerformance(
+    JtrMobileDashboardFilters filters, {
+    int limit = 50,
+  }) async {
+    final params = filters.toQueryParams();
+    params['limit'] = limit;
+    _logRequest(ApiEndpoints.dashboardWaiterPerformance, params);
+    return _getMap(
+      ApiEndpoints.dashboardWaiterPerformance,
+      queryParameters: params,
+    );
+  }
+
   Future<Map<String, dynamic>> fetchEventList(
     JtrMobileDashboardFilters filters, {
     required String type,

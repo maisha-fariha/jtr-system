@@ -39,7 +39,13 @@ class OrderMapper {
   static String normalizeTableKey(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return trimmed;
-    return trimmed.replaceFirst(RegExp(r'^T'), '');
+    final withoutPrefix = trimmed.replaceFirst(RegExp(r'^T'), '');
+    // "015" and "15" are the same table; keep a lone "0" intact.
+    if (RegExp(r'^0+\d+$').hasMatch(withoutPrefix)) {
+      final stripped = withoutPrefix.replaceFirst(RegExp(r'^0+(?=\d)'), '');
+      return stripped;
+    }
+    return withoutPrefix;
   }
 
   /// Resolves the waiter user id on an order or table-session payload.
@@ -1044,11 +1050,12 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
+      final seatNo = (seat['seat_number'] as num?)?.toInt();
       final courses = _sortedCoursesList(seat['courses']);
 
       for (final course in courses) {
         for (final item in _visibleItemsInStableAddOrder(course['items'])) {
-          products.add(orderProductFromItem(item));
+          products.add(orderProductFromItem(item, seatNumber: seatNo));
         }
       }
     }
@@ -1961,6 +1968,7 @@ class OrderMapper {
 
     for (final seat in seatOrders) {
       if (seat is! Map<String, dynamic>) continue;
+      final seatNo = (seat['seat_number'] as num?)?.toInt();
       final coursesRaw = seat['courses'];
       if (coursesRaw is! List || coursesRaw.isEmpty) continue;
 
@@ -2012,7 +2020,7 @@ class OrderMapper {
         for (final item in visibleItems) {
           entries.add(
             OrderDisplayEntry.product(
-              product: orderProductFromItem(item),
+              product: orderProductFromItem(item, seatNumber: seatNo),
               lineIndex: lineIndex++,
               sectionIndex: activeSection,
               courseNumber: courseNumber,
@@ -4415,6 +4423,7 @@ class OrderMapper {
       status: 'to_be_continued',
       comment: '',
       forCreate: true,
+      courseNumber: 1,
     );
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
@@ -4523,6 +4532,7 @@ class OrderMapper {
       isStillMenuMissing: isStillMenuMissing,
       forCreate: true,
       enteredPrice: enteredPrice,
+      courseNumber: 1,
     );
 
     final payload = <String, dynamic>{
@@ -4595,34 +4605,47 @@ class OrderMapper {
     }
 
     const defaultSeat = 1;
-    final byCourse = <int, List<LocalDraftLine>>{};
+    // seat → course → lines (a single seat yields the same tree as before).
+    final bySeat = <int, Map<int, List<LocalDraftLine>>>{};
     for (final line in lines) {
+      final seatNo = line.seatNumber > 0 ? line.seatNumber : defaultSeat;
       final courseNumber = line.courseNumber > 0 ? line.courseNumber : 1;
-      byCourse.putIfAbsent(courseNumber, () => []).add(line);
+      bySeat
+          .putIfAbsent(seatNo, () => <int, List<LocalDraftLine>>{})
+          .putIfAbsent(courseNumber, () => [])
+          .add(line);
     }
 
-    final courseNumbers = byCourse.keys.toList()..sort();
-    final courses = [
-      for (final courseNumber in courseNumbers)
+    final seatNumbers = bySeat.keys.toList()..sort();
+    final seatOrders = [
+      for (final seatNo in seatNumbers)
         {
-          'id': 0,
-          'course_number': courseNumber,
-          'seat_number': defaultSeat,
-          'items': [
-            for (final line in byCourse[courseNumber]!)
-              _buildNewItemPayload(
-                seatNumber: line.seatNumber > 0 ? line.seatNumber : defaultSeat,
-                courseId: 0,
-                productId: line.productId,
-                qty: line.qty,
-                subTotal: line.isOffered ? 0 : line.unitPrice * line.qty,
-                status: 'to_be_continued',
-                comment: line.comment,
-                menuSelections: line.menuSelections,
-                forCreate: true,
-                isOffer: line.isOffered,
-                enteredPrice: line.enteredPrice,
-              ),
+          'seat_number': seatNo,
+          'courses': [
+            for (final courseNumber in (bySeat[seatNo]!.keys.toList()..sort()))
+              {
+                'id': 0,
+                'course_number': courseNumber,
+                'seat_number': seatNo,
+                'items': [
+                  for (final line in bySeat[seatNo]![courseNumber]!)
+                    _buildNewItemPayload(
+                      seatNumber: seatNo,
+                      courseId: 0,
+                      productId: line.productId,
+                      qty: line.qty,
+                      subTotal: line.isOffered ? 0 : line.unitPrice * line.qty,
+                      status: 'to_be_continued',
+                      comment: line.comment,
+                      menuSelections: line.menuSelections,
+                      isStillMenuMissing: line.isStillMenuMissing,
+                      forCreate: true,
+                      isOffer: line.isOffered,
+                      enteredPrice: line.enteredPrice,
+                      courseNumber: courseNumber,
+                    ),
+                ],
+              },
           ],
         },
     ];
@@ -4630,12 +4653,7 @@ class OrderMapper {
     final payload = <String, dynamic>{
       'waiter_id': waiterId,
       'number_of_guests': numberOfGuests,
-      'seat_orders': [
-        {
-          'seat_number': defaultSeat,
-          'courses': courses,
-        },
-      ],
+      'seat_orders': seatOrders,
     };
     if (tableId != null && tableId > 0) {
       payload['table_id'] = tableId;
@@ -4665,15 +4683,24 @@ class OrderMapper {
   }) {
     final keepIds = productItemIds(layoutHints);
     final toCancel = <int>{...extraCancelItemIds};
-    final seatNumber = resolveDefaultSeatNumber(serverDetail);
-    for (final row in _visibleItemsWithCourseNumbers(
-      serverDetail,
-      seatNumber: seatNumber,
-    )) {
-      final id = (row.item['id'] as num?)?.toInt() ?? 0;
-      if (id <= 0) continue;
-      if (!keepIds.contains(id)) {
-        toCancel.add(id);
+    final seatNumbers = <int>{resolveDefaultSeatNumber(serverDetail)};
+    final serverSeats = serverDetail['seat_orders'];
+    if (serverSeats is List) {
+      for (final seat in serverSeats) {
+        final n = seat is Map ? (seat['seat_number'] as num?)?.toInt() : null;
+        if (n != null) seatNumbers.add(n);
+      }
+    }
+    for (final seatNumber in seatNumbers) {
+      for (final row in _visibleItemsWithCourseNumbers(
+        serverDetail,
+        seatNumber: seatNumber,
+      )) {
+        final id = (row.item['id'] as num?)?.toInt() ?? 0;
+        if (id <= 0) continue;
+        if (!keepIds.contains(id)) {
+          toCancel.add(id);
+        }
       }
     }
     return toCancel;
@@ -4757,13 +4784,15 @@ class OrderMapper {
         if (entry.type == OrderDisplayEntryType.product) entry,
     ];
 
-    final seatNumber = resolveDefaultSeatNumber(working);
+    final defaultSeatNumber = firstSeatNumber(working);
+    int seatFor(LocalDraftLine draft) =>
+        draft.seatNumber > 1 ? draft.seatNumber : defaultSeatNumber;
 
     for (final draft in lines) {
       final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
       _ensureCourseShellExists(
         working,
-        seatNumber: seatNumber,
+        seatNumber: seatFor(draft),
         courseNumber: courseNumber,
       );
     }
@@ -4798,6 +4827,7 @@ class OrderMapper {
       }
 
       final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      final seatNumber = seatFor(draft);
       final course = findCourseInOrderDetail(working, courseNumber);
       final courseId = course == null ? 0 : (_courseRecordId(course) ?? 0);
       final itemStatus = _resolveAppendItemStatus(
@@ -4820,7 +4850,7 @@ class OrderMapper {
           status: itemStatus,
           comment: draft.comment,
           menuSelections: draft.menuSelections,
-          isStillMenuMissing: false,
+          isStillMenuMissing: draft.isStillMenuMissing,
           forCreate: false,
           isOffer: draft.isOffered,
           enteredPrice: draft.enteredPrice,
@@ -4831,6 +4861,7 @@ class OrderMapper {
     for (var i = productEntries.length; i < lines.length; i++) {
       final draft = lines[i];
       final courseNumber = draft.courseNumber > 0 ? draft.courseNumber : 1;
+      final seatNumber = seatFor(draft);
       _ensureCourseShellExists(
         working,
         seatNumber: seatNumber,
@@ -4856,7 +4887,7 @@ class OrderMapper {
           ),
           comment: draft.comment,
           menuSelections: draft.menuSelections,
-          isStillMenuMissing: false,
+          isStillMenuMissing: draft.isStillMenuMissing,
           forCreate: false,
           isOffer: draft.isOffered,
           enteredPrice: draft.enteredPrice,
@@ -6991,7 +7022,18 @@ class OrderMapper {
   }
 
   /// Default seat for adding items (first seat in order, else 1).
+  /// Seat tabs: seat new items are added to. `null` → first seat (default).
+  static int? preferredSeatNumber;
+
   static int resolveDefaultSeatNumber(Map<String, dynamic> detail) {
+    final preferred = preferredSeatNumber;
+    if (preferred != null && preferred > 0) return preferred;
+    return firstSeatNumber(detail);
+  }
+
+  /// Number of the first seat on the order (1 when none) — ignores the
+  /// seat-tab preference.
+  static int firstSeatNumber(Map<String, dynamic> detail) {
     final seatOrders = detail['seat_orders'];
     if (seatOrders is List && seatOrders.isNotEmpty) {
       final first = seatOrders.first;
@@ -8040,6 +8082,52 @@ class OrderMapper {
     return buildOrderUpdatePayload(orderDetail);
   }
 
+  /// Copy of the visible line item at [lineIndex] (UI index), or null.
+  static Map<String, dynamic>? visibleLineItemAtIndex(
+    Map<String, dynamic> orderDetail,
+    int lineIndex,
+  ) {
+    Map<String, dynamic>? found;
+    _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
+      found = _deepCopyOrderMap(item);
+    });
+    return found;
+  }
+
+  /// Replaces the full `menu_selections` of one line (backend replace-sync),
+  /// shifts `sub_total` by [supplementDeltaPerUnit] and sets the pending flag.
+  static Map<String, dynamic> updateLineMenuSelectionsAtIndex({
+    required Map<String, dynamic> orderDetail,
+    required int lineIndex,
+    required int expectedProductId,
+    required List<Map<String, dynamic>> menuSelections,
+    required double supplementDeltaPerUnit,
+    required bool isStillMenuMissing,
+  }) {
+    // Mutates [orderDetail] in place — caller should pass a deep copy.
+    final applied = _mutateVisibleLineAtIndex(orderDetail, lineIndex, (item) {
+      if (_itemProductId(item) != expectedProductId) {
+        throw ApiException(
+          message: 'La ligne a changé. Rouvrez le menu et réessayez.',
+        );
+      }
+      item['menu_selections'] = _menuSelectionsWithDisplayNames(menuSelections);
+      item['is_still_menu_missing'] = isStillMenuMissing;
+      if (!_isOfferedLineItem(item)) {
+        final qty = (item['qty'] as num?)?.toInt() ?? 1;
+        final current = _parseMoney(item['sub_total']);
+        final next = current + supplementDeltaPerUnit * (qty < 1 ? 1 : qty);
+        item['sub_total'] = double.parse(next.toStringAsFixed(2));
+      }
+    });
+    if (!applied) {
+      throw ApiException(
+        message: 'Article introuvable sur la commande.',
+      );
+    }
+    return buildOrderUpdatePayload(orderDetail);
+  }
+
   static bool _mutateVisibleLineAtIndex(
     Map<String, dynamic> orderDetail,
     int lineIndex,
@@ -8877,6 +8965,7 @@ class OrderMapper {
     List<int> suivreSplitHints = const [],
     List<OrderDisplayEntry>? layoutHints,
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
@@ -8904,7 +8993,7 @@ class OrderMapper {
       status: itemStatus,
       comment: comment,
       menuSelections: menuSelections,
-      isStillMenuMissing: false,
+      isStillMenuMissing: isStillMenuMissing,
       forCreate: false,
     );
 
@@ -8934,6 +9023,9 @@ class OrderMapper {
     required int courseNumber,
     required Map<String, dynamic> newItem,
   }) {
+    // Backend: every item carries both `seat_number` and `course_number`.
+    newItem['seat_number'] ??= seatNumber;
+    newItem['course_number'] = courseNumber;
     final seatOrders = detail['seat_orders'];
     if (seatOrders is! List || seatOrders.isEmpty) {
       detail['seat_orders'] = [
@@ -9344,7 +9436,10 @@ class OrderMapper {
     return result;
   }
 
-  static OrderProduct orderProductFromItem(Map<String, dynamic> item) {
+  static OrderProduct orderProductFromItem(
+    Map<String, dynamic> item, {
+    int? seatNumber,
+  }) {
     final product = item['product'];
     final name = product is Map<String, dynamic>
         ? (product['name'] as String? ?? 'Article')
@@ -9366,6 +9461,8 @@ class OrderMapper {
       message: message,
       menuItems: menuSelectionLabelsFromItem(item),
       isOffered: isOffer,
+      isStillMenuMissing: item['is_still_menu_missing'] == true,
+      seatNumber: seatNumber ?? (item['seat_number'] as num?)?.toInt() ?? 1,
     );
   }
 
@@ -9457,6 +9554,7 @@ class OrderMapper {
     String? uid,
     bool isOffer = false,
     double? enteredPrice,
+    int? courseNumber,
   }) {
     final sanitizedMenus = _menuSelectionsWithDisplayNames(menuSelections);
     final effectiveSubTotal = isOffer ? 0.0 : subTotal;
@@ -9474,6 +9572,10 @@ class OrderMapper {
       'is_loss': false,
       'menu_selections': sanitizedMenus,
       'is_still_menu_missing': isStillMenuMissing,
+      // Backend expects the array on every item (message groups: see API).
+      'item_messages': <Map<String, dynamic>>[],
+      if (courseNumber != null && courseNumber > 0)
+        'course_number': courseNumber,
       // Stable sort key before the API assigns a real timestamp/id.
       'created_at': DateTime.now().toUtc().toIso8601String(),
     };
@@ -9583,6 +9685,7 @@ class OrderMapper {
     List<int> suivreSplitHints = const [],
     List<OrderDisplayEntry>? layoutHints,
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) {
     final effectiveLayout = layoutHints ?? current.displayEntries;
     final workingCurrent = ensureSessionDisplayHydrated(
@@ -9604,6 +9707,7 @@ class OrderMapper {
         qty: qty,
         menuItems: menuSelectionLabelsFromMaps(menuSelections),
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+        isStillMenuMissing: isStillMenuMissing,
       );
     }
 
@@ -9621,6 +9725,7 @@ class OrderMapper {
         suivreSplitHints: suivreSplitHints,
         layoutHints: effectiveLayout,
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+        isStillMenuMissing: isStillMenuMissing,
       );
       return fromOrderDetail(
         simulated,
@@ -9637,6 +9742,7 @@ class OrderMapper {
       qty: qty,
       menuItems: menuSelectionLabelsFromMaps(menuSelections),
       selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+      isStillMenuMissing: isStillMenuMissing,
     );
   }
 
@@ -9657,6 +9763,86 @@ class OrderMapper {
       lineIndex,
       delta,
     );
+  }
+
+  /// Optimistic "Choix en attente" update of one line (labels, price, flag).
+  static SessionOrder predictAfterMenuChoicesAtIndex({
+    required SessionOrder current,
+    required int lineIndex,
+    required List<String> menuItems,
+    required double deltaTotal,
+    required bool isStillMenuMissing,
+  }) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return current;
+
+    OrderProduct update(OrderProduct p) {
+      var price = p.price;
+      if (!p.isOffered && deltaTotal != 0) {
+        final parsed = double.tryParse(
+          p.price.replaceAll('€', '').replaceAll(' ', '').replaceAll(',', '.'),
+        );
+        if (parsed != null) {
+          price = formatPrice((parsed + deltaTotal).toStringAsFixed(2));
+        }
+      }
+      return p.copyWith(
+        menuItems: menuItems,
+        price: price,
+        isStillMenuMissing: isStillMenuMissing,
+      );
+    }
+
+    final products = List<OrderProduct>.from(current.products);
+    products[lineIndex] = update(products[lineIndex]);
+
+    final entries = [
+      for (final entry in current.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == lineIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: update(entry.product!),
+            lineIndex: lineIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+
+    return current.copyWith(
+      products: products,
+      displayEntries: entries,
+      total: _sumFormattedPrices(products),
+    );
+  }
+
+  /// Optimistic move of one line to another seat (seat tabs).
+  static SessionOrder predictAfterSeatChangeAtIndex({
+    required SessionOrder current,
+    required int lineIndex,
+    required int seatNumber,
+  }) {
+    if (lineIndex < 0 || lineIndex >= current.products.length) return current;
+    final products = List<OrderProduct>.from(current.products);
+    products[lineIndex] = products[lineIndex].copyWith(seatNumber: seatNumber);
+    final entries = [
+      for (final entry in current.displayEntries)
+        if (entry.type == OrderDisplayEntryType.product &&
+            entry.lineIndex == lineIndex &&
+            entry.product != null)
+          OrderDisplayEntry.product(
+            product: entry.product!.copyWith(seatNumber: seatNumber),
+            lineIndex: lineIndex,
+            sectionIndex: entry.sectionIndex ?? 0,
+            courseNumber: entry.courseNumber,
+            itemId: entry.itemId,
+          )
+        else
+          entry,
+    ];
+    return current.copyWith(products: products, displayEntries: entries);
   }
 
   static SessionOrder predictAfterSetLineQuantityAtIndex({
@@ -9746,6 +9932,7 @@ class OrderMapper {
     List<int> suivreSplitHints = const [],
     List<OrderDisplayEntry>? layoutHints,
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) {
     final working = Map<String, dynamic>.from(orderDetail);
     final seatNumber = resolveDefaultSeatNumber(working);
@@ -9773,7 +9960,7 @@ class OrderMapper {
       status: itemStatus,
       comment: comment,
       menuSelections: menuSelections,
-      isStillMenuMissing: false,
+      isStillMenuMissing: isStillMenuMissing,
       forCreate: false,
     );
     if (productName.isNotEmpty) {
@@ -9864,6 +10051,7 @@ class OrderMapper {
     int qty = 1,
     List<String> menuItems = const [],
     int? selectedSuivreSectionIndex,
+    bool isStillMenuMissing = false,
   }) {
     final products = List<OrderProduct>.from(current.products);
     final newProduct = OrderProduct(
@@ -9871,6 +10059,8 @@ class OrderMapper {
       name: productName,
       price: formatPrice((unitPrice * qty).toStringAsFixed(2)),
       menuItems: menuItems,
+      isStillMenuMissing: isStillMenuMissing,
+      seatNumber: preferredSeatNumber ?? 1,
     );
     products.add(newProduct);
     final lineIndex = products.length - 1;

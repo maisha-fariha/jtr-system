@@ -22,6 +22,10 @@ class ApiEndpoints {
   static const dashboardProductFamilySummary =
       '/api/dashboard/product-family-summary';
   static const dashboardEventList = '/api/dashboard/event-list';
+
+  /// Revenue / sales per waiter (`chiffre_affaires`, `total_encaissement`…).
+  static const dashboardWaiterPerformance =
+      '/api/dashboard/waiter-performance';
   static const dashboardEventListExport = '/api/dashboard/event-list/export';
 
   /// JTR Rapport / POS read-only AI chat (requires `access-pos-chat`).

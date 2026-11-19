@@ -2079,6 +2079,7 @@ class OrderRepository {
     int quantity = 1,
     String comment = '',
     int? numberOfGuests,
+    bool isStillMenuMissing = false,
   }) async {
     if (!await _connectivity.isOnline) {
       throw ApiException(
@@ -2123,6 +2124,7 @@ class OrderRepository {
       qty: qty,
       comment: comment,
       menuSelections: menuSelections,
+      isStillMenuMissing: isStillMenuMissing,
     );
 
     final created = _resolveWriteResponse(
@@ -3482,6 +3484,7 @@ class OrderRepository {
     String? tableNumber,
     int? waiterId,
     bool expectEmptyShell = false,
+    bool isStillMenuMissing = false,
   }) async {
     final apiLog = StringBuffer();
     lastAddItemLog = null;
@@ -3516,6 +3519,7 @@ class OrderRepository {
             comment: comment,
             layoutHints: layoutHints,
             apiLog: apiLog,
+            isStillMenuMissing: isStillMenuMissing,
           );
           lastAddItemLog = apiLog.toString();
           return revived;
@@ -3532,6 +3536,7 @@ class OrderRepository {
             tableNumber: tableNumber,
             waiterId: waiterId,
             apiLog: apiLog,
+            isStillMenuMissing: isStillMenuMissing,
           );
         }
       }
@@ -3569,6 +3574,7 @@ class OrderRepository {
         suivreSplitHints: suivreHints.splits,
         layoutHints: layoutHints,
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
+        isStillMenuMissing: isStillMenuMissing,
       );
 
       final updated = await _putOrderUpdate(
@@ -3601,6 +3607,7 @@ class OrderRepository {
             tableNumber: tableNumber,
             waiterId: waiterId,
             apiLog: apiLog,
+            isStillMenuMissing: isStillMenuMissing,
           );
         }
       } catch (_) {}
@@ -3624,6 +3631,7 @@ class OrderRepository {
     required StringBuffer apiLog,
     int quantity = 1,
     List<OrderDisplayEntry>? layoutHints,
+    bool isStillMenuMissing = false,
   }) async {
     final cleaned = OrderMapper.withAllCourseItemsCleared(detail);
     final working = OrderMapper.asOpenEmptyOrderShell(cleaned);
@@ -3660,6 +3668,7 @@ class OrderRepository {
         suivreSectionCount: suivreHints.count,
         suivreSplitHints: suivreHints.splits,
         layoutHints: layoutHints,
+        isStillMenuMissing: isStillMenuMissing,
       ),
     );
     payload['status'] = 'open';
@@ -3694,6 +3703,7 @@ class OrderRepository {
     int quantity = 1,
     String? tableNumber,
     int? waiterId,
+    bool isStillMenuMissing = false,
   }) async {
     final resolvedTable = tableNumber ??
         OrderMapper.displayKey(
@@ -3727,6 +3737,7 @@ class OrderRepository {
         quantity: quantity < 1 ? 1 : quantity,
         comment: comment,
         numberOfGuests: guests,
+        isStillMenuMissing: isStillMenuMissing,
       );
       apiLog.writeln('── New order id=${created.id} ──');
       if (created.id > 0 && created.id != oldOrderId) {
@@ -3752,6 +3763,7 @@ class OrderRepository {
           quantity: quantity < 1 ? 1 : quantity,
           comment: comment,
           apiLog: apiLog,
+          isStillMenuMissing: isStillMenuMissing,
         );
         if (activeId != oldOrderId) {
           unawaited(_retireDeadOrderShell(oldOrderId, apiLog: apiLog));
@@ -5401,6 +5413,35 @@ class OrderRepository {
       mutate: (detail) => OrderMapper.applyOfferAtLineIndex(
         orderDetail: detail,
         lineIndex: lineIndex,
+      ),
+    );
+  }
+
+  /// Raw order detail (Hive first, then API) — used to read a line's choices.
+  Future<Map<String, dynamic>> readOrderDetailMap(int orderId) async {
+    return _local.readOrderDetail(orderId) ??
+        await _remote.fetchOrderDetail(orderId);
+  }
+
+  /// "Choix en attente": send the full updated `menu_selections` for one line.
+  Future<SessionOrder> updateOrderLineMenuSelectionsAtIndex({
+    required int orderId,
+    required int lineIndex,
+    required int expectedProductId,
+    required List<Map<String, dynamic>> menuSelections,
+    required double supplementDeltaPerUnit,
+    required bool isStillMenuMissing,
+  }) async {
+    return _mutateOrderLine(
+      orderId: orderId,
+      logTitle: 'Choix menu article',
+      mutate: (detail) => OrderMapper.updateLineMenuSelectionsAtIndex(
+        orderDetail: detail,
+        lineIndex: lineIndex,
+        expectedProductId: expectedProductId,
+        menuSelections: menuSelections,
+        supplementDeltaPerUnit: supplementDeltaPerUnit,
+        isStillMenuMissing: isStillMenuMissing,
       ),
     );
   }

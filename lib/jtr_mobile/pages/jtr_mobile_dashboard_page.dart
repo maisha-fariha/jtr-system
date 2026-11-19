@@ -160,6 +160,21 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                               )
                               .toList(),
                         ),
+                        if (controller.waiterSales.isNotEmpty)
+                          JtrMobileProgressBarsCard(
+                            title: "Chiffre d'affaires par serveur",
+                            rows: controller.waiterSales
+                                .map(
+                                  (w) => JtrMobileProgressBarRow(
+                                    name: '${w.name} · ${w.orderCount} cmd · '
+                                        '${w.covers} couv.',
+                                    amount: w.revenue,
+                                    percent: w.percent,
+                                    color: w.color,
+                                  ),
+                                )
+                                .toList(),
+                          ),
                         const JtrMobileSectionLabel(text: 'Activité'),
                         JtrMobileActivityTiles(activity: data.activity),
                         const JtrMobileSectionLabel(

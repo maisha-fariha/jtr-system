@@ -8,6 +8,7 @@ class MenuSelectionSubmitResult {
     required this.menuSelections,
     this.quantity = 1,
     this.comment = '',
+    this.isStillMenuMissing = false,
   });
 
   final int productId;
@@ -18,4 +19,7 @@ class MenuSelectionSubmitResult {
   /// How many menus to insert on the order (from quantity dialog).
   final int quantity;
   final String comment;
+
+  /// "Choix en attente": optional slots remain below their max.
+  final bool isStillMenuMissing;
 }

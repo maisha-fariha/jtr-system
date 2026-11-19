@@ -31,6 +31,8 @@
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Importer l'image QR d'activation depuis le dashboard JTR.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Se connecter rapidement avec Face ID.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scanner le QR d'activation du poste Windows (caisse).</string>
 	<key>NSLocalNetworkUsageDescription</key>

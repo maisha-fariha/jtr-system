@@ -461,7 +461,20 @@ class MenuSelectionController extends GetxController {
         menuSelections: menuSelections,
         quantity: quantity,
         comment: comment,
+        isStillMenuMissing: _hasPendingChoices(selection),
       ),
     );
+  }
+
+  /// True while any CHOIX can still accept more picks (below its max).
+  bool _hasPendingChoices(MenuActiveSelection selection) {
+    for (final category in selection.menu.categories) {
+      if (category.items.isEmpty) continue;
+      final max = category.effectiveMax;
+      if (max == null) continue;
+      final count = selection.selectedItemsByCourse[category.number]?.length ?? 0;
+      if (count < max) return true;
+    }
+    return false;
   }
 }

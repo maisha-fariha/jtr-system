@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 import '../controllers/session_controller.dart';
 import '../core/app_flavor.dart';
 import '../core/config/api_config.dart';
+import '../core/auth/biometric_login_service.dart';
 import '../core/network/api_client.dart';
 import '../core/network/api_exception.dart';
 import '../core/storage/device_secure_storage.dart';
@@ -48,6 +49,11 @@ class LoginController extends GetxController {
   final selectedRestaurantId = RxnString();
   final isSwitchingRestaurant = false.obs;
 
+  final _biometric = BiometricLoginService();
+
+  /// Fingerprint login is enabled and usable on this device.
+  final biometricReady = false.obs;
+
   late final UserIdentifiantFieldController identifiantFieldController;
 
   bool get showRestaurantSwitcher => AppFlavorConfig.isRapport;
@@ -66,6 +72,7 @@ class LoginController extends GetxController {
 
   @override
   void onInit() {
+    unawaited(refreshBiometricState());
     super.onInit();
     identifiantFieldController = UserIdentifiantFieldController(
       textController: identifiantController,
@@ -286,6 +293,58 @@ class LoginController extends GetxController {
     super.onClose();
   }
 
+  Future<void> refreshBiometricState() async {
+    try {
+      biometricReady.value =
+          await _biometric.isAvailable && await _biometric.isEnabled;
+    } catch (_) {
+      biometricReady.value = false;
+    }
+  }
+
+  /// Fingerprint button: unlock saved credentials, then run the normal login.
+  Future<void> loginWithBiometrics() async {
+    if (isLoading.value) return;
+    final creds = await _biometric.authenticate();
+    if (creds == null) {
+      _showLoginError(
+        'Empreinte non reconnue',
+        'Authentification annulée ou échouée.',
+      );
+      return;
+    }
+    final match = users.firstWhereOrNull((u) => u.id == creds.userId);
+    if (match == null) {
+      _showLoginError(
+        'Utilisateur introuvable',
+        'Reconnectez-vous avec votre mot de passe.',
+      );
+      return;
+    }
+    selectedUser.value = match;
+    passwordController.text = creds.passcode;
+    await login(offerBiometrics: false);
+  }
+
+  Future<void> _offerBiometricEnrollment(String userId, String passcode) async {
+    try {
+      if (!await _biometric.isAvailable) return;
+      if (await _biometric.enabledUserId() == userId) return;
+      var accepted = false;
+      await AppConfirmDialog.show(
+        title: 'Empreinte digitale',
+        message: 'Activer la connexion par empreinte pour ce compte ?',
+        onConfirm: () => accepted = true,
+      );
+      if (accepted) {
+        await _biometric.enable(userId: userId, passcode: passcode);
+        biometricReady.value = true;
+      }
+    } catch (_) {
+      // Biometrics are optional — never block login.
+    }
+  }
+
   void selectUser(UserSuggestion user) {
     selectedUser.value = user;
   }
@@ -294,7 +353,7 @@ class LoginController extends GetxController {
     obscurePassword.value = !obscurePassword.value;
   }
 
-  Future<void> login() async {
+  Future<void> login({bool offerBiometrics = true}) async {
     if (isLoading.value) return;
 
     final user = selectedUser.value ?? _resolveUserFromText();
@@ -362,6 +421,9 @@ class LoginController extends GetxController {
       }
       if (Get.isRegistered<ReverbRealtimeService>()) {
         unawaited(Get.find<ReverbRealtimeService>().start());
+      }
+      if (offerBiometrics) {
+        await _offerBiometricEnrollment(user.id, passcode);
       }
       if (AppFlavorConfig.isRapport) {
         Get.offAllNamed(AppRoutes.jtrMobileDashboard);

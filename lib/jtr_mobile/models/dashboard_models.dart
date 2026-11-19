@@ -146,3 +146,29 @@ class JtrDashboardData {
   final DateTime periodFrom;
   final DateTime periodTo;
 }
+
+
+/// One server's sales line from `GET /api/dashboard/waiter-performance`.
+class JtrWaiterSales {
+  const JtrWaiterSales({
+    required this.name,
+    required this.revenue,
+    required this.collected,
+    required this.orderCount,
+    required this.covers,
+    required this.percent,
+    required this.color,
+  });
+
+  final String name;
+
+  /// `chiffre_affaires` — sales / revenue.
+  final double revenue;
+
+  /// `total_encaissement` — total collected.
+  final double collected;
+  final int orderCount;
+  final int covers;
+  final double percent;
+  final Color color;
+}

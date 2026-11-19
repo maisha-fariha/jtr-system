@@ -24,6 +24,7 @@ class JtrMobileDashboardController extends GetxController {
   final data = Rxn<JtrDashboardData>();
   final productFamilies = <JtrProductFamily>[].obs;
   final gapCategories = <JtrGapCategoryDetail>[].obs;
+  final waiterSales = <JtrWaiterSales>[].obs;
 
   final chatOpen = false.obs;
   final periodOpen = false.obs;
@@ -59,6 +60,7 @@ class JtrMobileDashboardController extends GetxController {
       _filters = await _repository.resolveDefaultFilters();
       if (isClosed) return;
       data.value = await _repository.fetchDashboard(filters: _filters!);
+      unawaited(_loadWaiterSales(_filters!));
     } on ApiException catch (e) {
       if (isClosed) return;
       _showError(e.message);
@@ -129,6 +131,7 @@ class JtrMobileDashboardController extends GetxController {
       data.value = await _repository.fetchDashboard(filters: filters);
       if (isClosed) return;
       _filters = filters;
+      unawaited(_loadWaiterSales(filters));
     } on ApiException catch (e) {
       if (isClosed) return;
       _showError(e.message);
@@ -182,6 +185,18 @@ class JtrMobileDashboardController extends GetxController {
       _showError("Impossible de charger le détail de l'écart.");
     } finally {
       if (!isClosed) isGapLoading.value = false;
+    }
+  }
+
+  /// Non-blocking: a failure here must never break the main dashboard.
+  Future<void> _loadWaiterSales(JtrMobileDashboardFilters filters) async {
+    try {
+      final sales = await _repository.fetchWaiterSales(filters: filters);
+      if (isClosed) return;
+      waiterSales.assignAll(sales);
+    } catch (_) {
+      if (isClosed) return;
+      waiterSales.clear();
     }
   }
 

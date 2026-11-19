@@ -13,6 +13,9 @@ class OrderMenuController extends GetxController {
   final collapsedCategories = <int>{}.obs;
 
   bool returnToSelection = false;
+
+  /// Choices already sent to the kitchen — can be added to, never removed.
+  final _locked = <String>{};
   PresetMenu? presetMenu;
   int choiceNumber = 1;
 
@@ -39,6 +42,7 @@ class OrderMenuController extends GetxController {
 
     // GetX can reuse the controller instance across route opens.
     _selected.clear();
+    _locked.clear();
     collapsedCategories.clear();
 
     currentTable.value = (args['table'] as String?) ?? '';
@@ -61,6 +65,18 @@ class OrderMenuController extends GetxController {
         if (value is List) {
           for (final v in value) {
             if (v is MenuItem) _selected[_key(v)] = true;
+          }
+        }
+      }
+    }
+
+    final lockedSelections = args['lockedSelections'];
+    if (lockedSelections is Map) {
+      for (final entry in lockedSelections.entries) {
+        final value = entry.value;
+        if (value is List) {
+          for (final v in value) {
+            if (v is MenuItem) _locked.add(_key(v));
           }
         }
       }
@@ -93,6 +109,16 @@ class OrderMenuController extends GetxController {
     final isOn = _selected[key] == true;
 
     if (isOn) {
+      if (_locked.contains(key)) {
+        AppSnackbar.show(
+          'Choix verrouillé',
+          'Ce choix a déjà été envoyé en cuisine : il ne peut plus être retiré.',
+          snackPosition: SnackPosition.BOTTOM,
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 2),
+        );
+        return;
+      }
       _selected.remove(key);
       return;
     }

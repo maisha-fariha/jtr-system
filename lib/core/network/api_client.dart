@@ -213,6 +213,17 @@ class ApiClient extends GetxService {
       }
     }
 
+    // Permission guide: a 403 without a server message must still read as a
+    // clear "permission denied".
+    if (response?.statusCode == 403) {
+      return ApiException(
+        message:
+            'Permission refusée : vous n\'avez pas le droit d\'effectuer cette action.',
+        statusCode: 403,
+        responseBody: body,
+      );
+    }
+
     switch (error.type) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.receiveTimeout:

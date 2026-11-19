@@ -1998,6 +1998,21 @@ class SessionController extends GetxController {
     final tables = await _sessionRepository.getTablesList(forceRefresh: true);
     final resolved = OrderMapper.resolveTableForNewOrder(tables, normalized);
     if (resolved == null || resolved.id <= 0 || resolved.tableNumber <= 0) {
+      // "Table introuvable" is decided here from GET /api/tables/list — log
+      // what the server returned to tell a backend cap from an app bug.
+      final numbers = <int>[
+        for (final t in tables)
+          if ((t['table_number'] ?? t['number']) != null)
+            int.tryParse('${t['table_number'] ?? t['number']}') ?? 0,
+      ]..sort();
+      logOrderFlow(
+        '[Table] number="$normalized" NOT in GET /api/tables/list → '
+        'count=${tables.length} '
+        'min=${numbers.isEmpty ? '-' : numbers.first} '
+        'max=${numbers.isEmpty ? '-' : numbers.last} '
+        '(client does not cap the list; a max of 128 means the server '
+        'returned only 128 tables)',
+      );
       return null;
     }
     return resolved;

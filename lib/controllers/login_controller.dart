@@ -73,6 +73,8 @@ class LoginController extends GetxController {
   @override
   void onInit() {
     unawaited(refreshBiometricState());
+    // Fingerprint button follows the selected user.
+    ever<UserSuggestion?>(selectedUser, (_) => unawaited(refreshBiometricState()));
     super.onInit();
     identifiantFieldController = UserIdentifiantFieldController(
       textController: identifiantController,
@@ -295,41 +297,44 @@ class LoginController extends GetxController {
 
   Future<void> refreshBiometricState() async {
     try {
-      biometricReady.value =
-          await _biometric.isAvailable && await _biometric.isEnabled;
+      final user = selectedUser.value;
+      biometricReady.value = user != null &&
+          await _biometric.isAvailable &&
+          await _biometric.isEnabledFor(user.id);
     } catch (_) {
       biometricReady.value = false;
     }
   }
 
-  /// Fingerprint button: unlock saved credentials, then run the normal login.
+  /// Fingerprint button: unlock the selected user's saved login, then run the
+  /// normal login.
   Future<void> loginWithBiometrics() async {
     if (isLoading.value) return;
-    final creds = await _biometric.authenticate();
-    if (creds == null) {
+    final user = selectedUser.value;
+    if (user == null) {
+      _showLoginError('Identifiant requis', 'Sélectionnez votre identifiant.');
+      return;
+    }
+    final passcode = await _biometric.authenticate(user.id);
+    if (passcode == null) {
       _showLoginError(
         'Empreinte non reconnue',
         'Authentification annulée ou échouée.',
       );
       return;
     }
-    final match = users.firstWhereOrNull((u) => u.id == creds.userId);
-    if (match == null) {
-      _showLoginError(
-        'Utilisateur introuvable',
-        'Reconnectez-vous avec votre mot de passe.',
-      );
-      return;
-    }
-    selectedUser.value = match;
-    passwordController.text = creds.passcode;
-    await login(offerBiometrics: false);
+    passwordController.text = passcode;
+    await login(offerBiometrics: false, fromBiometric: true);
   }
 
   Future<void> _offerBiometricEnrollment(String userId, String passcode) async {
     try {
       if (!await _biometric.isAvailable) return;
-      if (await _biometric.enabledUserId() == userId) return;
+      if (await _biometric.isEnabledFor(userId)) {
+        // Already enabled: keep the saved password current (e.g. it changed).
+        await _biometric.enable(userId: userId, passcode: passcode);
+        return;
+      }
       var accepted = false;
       await AppConfirmDialog.show(
         title: 'Empreinte digitale',
@@ -337,8 +342,10 @@ class LoginController extends GetxController {
         onConfirm: () => accepted = true,
       );
       if (accepted) {
+        // Confirm with an existing system fingerprint before saving.
+        if (!await _biometric.verify()) return;
         await _biometric.enable(userId: userId, passcode: passcode);
-        biometricReady.value = true;
+        await refreshBiometricState();
       }
     } catch (_) {
       // Biometrics are optional — never block login.
@@ -353,7 +360,10 @@ class LoginController extends GetxController {
     obscurePassword.value = !obscurePassword.value;
   }
 
-  Future<void> login({bool offerBiometrics = true}) async {
+  Future<void> login({
+    bool offerBiometrics = true,
+    bool fromBiometric = false,
+  }) async {
     if (isLoading.value) return;
 
     final user = selectedUser.value ?? _resolveUserFromText();
@@ -438,6 +448,15 @@ class LoginController extends GetxController {
         } catch (_) {}
         _showLoginError(deactivated.title, deactivated.message);
         return;
+      }
+      // A saved fingerprint login the server now refuses is stale (password
+      // changed): drop it so the waiter signs in with the password again.
+      if (fromBiometric &&
+          (error.statusCode == 401 ||
+              error.statusCode == 422 ||
+              error.isUnauthenticated)) {
+        await _biometric.disable(user.id);
+        await refreshBiometricState();
       }
       _showLoginError('Connexion échouée', error.message);
     } finally {

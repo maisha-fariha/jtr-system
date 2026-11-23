@@ -328,6 +328,18 @@ class JtrMobileDashboardMapper {
         rows = value.whereType<Map>().map(Map<String, dynamic>.from).toList();
         break;
       }
+      // Keyed object: {"12": {...}, "15": {...}}
+      if (value is Map && value.isNotEmpty && value.values.every((v) => v is Map)) {
+        rows = value.entries
+            .map((e) => <String, dynamic>{
+                  if ((e.value as Map)['waiter_id'] == null &&
+                      (e.value as Map)['id'] == null)
+                    'waiter_id': e.key,
+                  ...Map<String, dynamic>.from(e.value as Map),
+                })
+            .toList();
+        break;
+      }
     }
     if (rows.isEmpty) {
       for (final value in payload.values) {
@@ -363,7 +375,12 @@ class JtrMobileDashboardMapper {
     final sales = rows.asMap().entries.map((entry) {
       final raw = entry.value;
       final revenue = _dbl(raw['chiffre_affaires']);
+      final waiterMap = raw['waiter'];
+      final rawId = raw['waiter_id'] ??
+          raw['id'] ??
+          (waiterMap is Map ? waiterMap['id'] : null);
       return JtrWaiterSales(
+        id: rawId == null ? null : int.tryParse(rawId.toString()),
         name: nameOf(raw),
         revenue: revenue,
         collected: _dbl(raw['total_encaissement']),

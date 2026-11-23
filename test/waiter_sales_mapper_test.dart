@@ -30,4 +30,18 @@ void main() {
   test('empty payload gives no rows', () {
     expect(JtrMobileDashboardMapper.mapWaiterSales({}), isEmpty);
   });
+
+  test('reads ids and keyed waiters object; keys are unique per waiter', () {
+    final sales = JtrMobileDashboardMapper.mapWaiterSales({
+      'totals': {'chiffre_affaires': 300},
+      'waiters': {
+        '7': {'name': 'Ali', 'chiffre_affaires': 100},
+        '9': {'waiter_name': 'Sara', 'chiffre_affaires': 200, 'id': 9},
+      },
+    });
+    expect(sales.map((w) => w.name), ['Sara', 'Ali']);
+    expect(sales.map((w) => w.key).toSet().length, 2);
+    expect(sales.first.id, 9);
+    expect(sales.last.id, 7);
+  });
 }

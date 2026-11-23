@@ -26,6 +26,18 @@ class JtrMobileDashboardController extends GetxController {
   final gapCategories = <JtrGapCategoryDetail>[].obs;
   final waiterSales = <JtrWaiterSales>[].obs;
 
+  /// Server chosen in the filter dropdown (`JtrWaiterSales.key`); null = all.
+  final selectedWaiterKey = RxnString();
+
+  /// Rows shown in the card: all servers, or only the selected one.
+  List<JtrWaiterSales> get visibleWaiterSales {
+    final key = selectedWaiterKey.value;
+    if (key == null) return waiterSales;
+    return waiterSales.where((w) => w.key == key).toList();
+  }
+
+  void selectWaiter(String? key) => selectedWaiterKey.value = key;
+
   final chatOpen = false.obs;
   final periodOpen = false.obs;
   final isLoading = false.obs;
@@ -194,7 +206,13 @@ class JtrMobileDashboardController extends GetxController {
       final sales = await _repository.fetchWaiterSales(filters: filters);
       if (isClosed) return;
       waiterSales.assignAll(sales);
-    } catch (_) {
+      final key = selectedWaiterKey.value;
+      if (key != null && !sales.any((w) => w.key == key)) {
+        selectedWaiterKey.value = null;
+      }
+    } catch (e) {
+      // ignore: avoid_print
+      print('[Dashboard] waiter-performance failed: $e');
       if (isClosed) return;
       waiterSales.clear();
     }

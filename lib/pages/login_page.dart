@@ -98,15 +98,56 @@ class LoginPage extends StatelessWidget {
                           padding: EdgeInsets.only(
                             top: JtrResponsive.getResponsiveHeight(context, 12),
                           ),
-                          child: Text(
-                            schema,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: AppTheme.primary,
-                              fontSize:
-                                  JtrResponsive.getResponsiveFontSize(context, 15),
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.8,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal:
+                                  JtrResponsive.getResponsiveWidth(context, 18),
+                              vertical:
+                                  JtrResponsive.getResponsiveHeight(context, 8),
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(
+                                JtrResponsive.getResponsiveRadius(context, 24),
+                              ),
+                              border: Border.all(
+                                color: AppTheme.primary.withValues(alpha: 0.6),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.storefront_rounded,
+                                  color: AppTheme.primary,
+                                  size: JtrResponsive.getResponsiveSize(
+                                    context,
+                                    20,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width:
+                                      JtrResponsive.getResponsiveWidth(context, 8),
+                                ),
+                                Flexible(
+                                  child: Text(
+                                    schema.toUpperCase(),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: AppTheme.primary,
+                                      fontSize:
+                                          JtrResponsive.getResponsiveFontSize(
+                                        context,
+                                        20,
+                                      ),
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 1.6,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         );

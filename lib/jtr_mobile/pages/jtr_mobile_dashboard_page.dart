@@ -160,21 +160,36 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
                               )
                               .toList(),
                         ),
-                        if (controller.waiterSales.isNotEmpty)
-                          JtrMobileProgressBarsCard(
-                            title: "Chiffre d'affaires par serveur",
-                            rows: controller.waiterSales
-                                .map(
-                                  (w) => JtrMobileProgressBarRow(
-                                    name: '${w.name} · ${w.orderCount} cmd · '
-                                        '${w.covers} couv.',
-                                    amount: w.revenue,
-                                    percent: w.percent,
-                                    color: w.color,
-                                  ),
-                                )
-                                .toList(),
-                          ),
+                        // Own Obx: this sits inside a LayoutBuilder, which the
+                        // page-level Obx does not track.
+                        Obx(() {
+                          final all = controller.waiterSales;
+                          if (all.isEmpty) return const SizedBox.shrink();
+                          final selected = controller.selectedWaiterKey.value;
+                          final visible = selected == null
+                              ? all.toList()
+                              : all.where((w) => w.key == selected).toList();
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _WaiterFilter(controller: controller),
+                              JtrMobileProgressBarsCard(
+                                title: "Chiffre d'affaires par serveur",
+                                rows: visible
+                                    .map(
+                                      (w) => JtrMobileProgressBarRow(
+                                        name: '${w.name} · ${w.orderCount} cmd · '
+                                            '${w.covers} couv.',
+                                        amount: w.revenue,
+                                        percent: w.percent,
+                                        color: w.color,
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
+                          );
+                        }),
                         const JtrMobileSectionLabel(text: 'Activité'),
                         JtrMobileActivityTiles(activity: data.activity),
                         const JtrMobileSectionLabel(
@@ -244,5 +259,58 @@ class JtrMobileDashboardPage extends GetView<JtrMobileDashboardController> {
       },
       child: body,
     );
+  }
+}
+
+/// Dropdown to show all servers or just one in the per-server card.
+class _WaiterFilter extends StatelessWidget {
+  const _WaiterFilter({required this.controller});
+
+  final JtrMobileDashboardController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Obx(() {
+    final selected = controller.selectedWaiterKey.value;
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(
+        bottom: JtrResponsive.getResponsiveHeight(context, 8),
+      ),
+      padding: JtrResponsive.getResponsivePadding(context, horizontal: 12),
+      decoration: BoxDecoration(
+        color: JtrMobileTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(JtrMobileTheme.tileRadius),
+        border: Border.all(color: JtrMobileTheme.border),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          value: selected,
+          isExpanded: true,
+          dropdownColor: JtrMobileTheme.surfaceCard,
+          icon: Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: JtrMobileTheme.textSecondary,
+          ),
+          style: TextStyle(
+            fontSize: JtrResponsive.getResponsiveFontSize(context, 13),
+            color: JtrMobileTheme.textPrimary,
+          ),
+          onChanged: controller.selectWaiter,
+          items: [
+            const DropdownMenuItem<String?>(
+              value: null,
+              child: Text('Tous les serveurs'),
+            ),
+            for (final w in controller.waiterSales)
+              DropdownMenuItem<String?>(
+                value: w.key,
+                child: Text(w.name, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+        ),
+      ),
+    );
+    });
   }
 }

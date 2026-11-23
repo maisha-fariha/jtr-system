@@ -151,6 +151,7 @@ class JtrDashboardData {
 /// One server's sales line from `GET /api/dashboard/waiter-performance`.
 class JtrWaiterSales {
   const JtrWaiterSales({
+    this.id,
     required this.name,
     required this.revenue,
     required this.collected,
@@ -160,7 +161,12 @@ class JtrWaiterSales {
     required this.color,
   });
 
+  /// Waiter id from the API when present (`waiter_id` / `id`).
+  final int? id;
   final String name;
+
+  /// Stable key for the filter dropdown (id when known, else the name).
+  String get key => id?.toString() ?? name;
 
   /// `chiffre_affaires` — sales / revenue.
   final double revenue;

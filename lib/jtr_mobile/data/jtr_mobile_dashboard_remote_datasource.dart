@@ -93,10 +93,26 @@ class JtrMobileDashboardRemoteDataSource {
     final params = filters.toQueryParams();
     params['limit'] = limit;
     _logRequest(ApiEndpoints.dashboardWaiterPerformance, params);
-    return _getMap(
+    final response = await _client.get<Map<String, dynamic>>(
       ApiEndpoints.dashboardWaiterPerformance,
       queryParameters: params,
+      options: _freshOptions(),
     );
+    final raw = _unwrapRaw(response.data);
+    if (raw is Map) {
+      final w = raw['waiters'];
+      final first = w is List && w.isNotEmpty
+          ? w.first
+          : (w is Map && w.isNotEmpty ? w.values.first : null);
+      // ignore: avoid_print
+      print('[Dashboard] waiter-performance waiters: type=${w.runtimeType} '
+          'count=${w is List ? w.length : (w is Map ? w.length : 0)} '
+          'firstRow=$first');
+    }
+    // The rows may come as the data itself (a list) or inside a map.
+    if (raw is List) return {'waiters': raw};
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return const {};
   }
 
   Future<Map<String, dynamic>> fetchEventList(

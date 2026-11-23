@@ -9708,6 +9708,7 @@ class OrderMapper {
         menuItems: menuSelectionLabelsFromMaps(menuSelections),
         selectedSuivreSectionIndex: selectedSuivreSectionIndex,
         isStillMenuMissing: isStillMenuMissing,
+        comment: comment,
       );
     }
 
@@ -9743,6 +9744,7 @@ class OrderMapper {
       menuItems: menuSelectionLabelsFromMaps(menuSelections),
       selectedSuivreSectionIndex: selectedSuivreSectionIndex,
       isStillMenuMissing: isStillMenuMissing,
+      comment: comment,
     );
   }
 
@@ -10052,13 +10054,16 @@ class OrderMapper {
     List<String> menuItems = const [],
     int? selectedSuivreSectionIndex,
     bool isStillMenuMissing = false,
+    String comment = '',
   }) {
     final products = List<OrderProduct>.from(current.products);
+    final trimmedComment = comment.trim();
     final newProduct = OrderProduct(
       quantity: '$qty',
       name: productName,
       price: formatPrice((unitPrice * qty).toStringAsFixed(2)),
       menuItems: menuItems,
+      message: trimmedComment.isEmpty ? null : trimmedComment,
       isStillMenuMissing: isStillMenuMissing,
       seatNumber: preferredSeatNumber ?? 1,
     );

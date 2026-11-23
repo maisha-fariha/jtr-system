@@ -52,7 +52,11 @@ class UserIdentifiantFieldController extends ChangeNotifier {
 
   void _filterUsers() {
     final query = textController.text.trim().toLowerCase();
-    if (query.isEmpty) {
+    // Empty, or the field already holds a chosen user's full name: show every
+    // user so another one can be picked without clearing the field first.
+    final isChosenName =
+        _users.any((user) => user.name.trim().toLowerCase() == query);
+    if (query.isEmpty || isChosenName) {
       _filteredUsers = List.of(_users);
     } else {
       _filteredUsers = _users
